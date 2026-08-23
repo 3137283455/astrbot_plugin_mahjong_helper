@@ -204,16 +204,6 @@ def _tool_error(message: str) -> str:
     )
 
 
-def _tool_result(status: str, message: str) -> str:
-    """Return a compact structured tool outcome for the LLM."""
-
-    return json.dumps(
-        {"status": status, "message": message},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
 def _llm_candidate_result(snapshot: SearchSnapshot) -> str:
     """Serialize only the selection evidence the model needs for one choice."""
 
@@ -386,8 +376,7 @@ class DeliverMediaTool(FunctionTool):
                 "仅在 find_in_bilibili 成功后调用，只能用其返回的 search_id 和 position 完成交付并结束本轮。"
                 "交付媒体类型由 find_in_bilibili 的 delivery 和插件配置决定，本工具不再接收 delivery。"
                 "直接交付（let_user_choose=false）：自动发送；视频请求固定发第一个候选，精确 AV/BV 多分 P 时展示候选。"
-                "本工具会返回明确的交付结果（已发送/已展示候选/错误），不要重复调用同一 search_id。"
-                "成功时不要复述发送过程；失败时由你用自然语言向用户转述错误，不要输出 JSON。"
+                "成功后本工具不返回内容，AstrBot 会直接结束本轮；失败时返回 error，由你用自然语言向用户转述，不要输出 JSON。"
                 "下载音频或让用户挑（let_user_choose=true）：展示候选，用户回“序号”发视频、“序号 音频”播放、“序号 音频下载”下载音频文件；"
                 "下载音频必须让用户选。不得编造 search_id/序号，不输出过程、解释或确认文字。"
             ),
@@ -738,11 +727,12 @@ class ListenMusicPlugin(Star):
         *,
         note: object | None = None,
         let_user_choose: bool = False,
-    ) -> str:
+    ) -> str | None:
         """Terminally deliver one candidate from the active LLM search snapshot.
 
         The media type was fixed by ``find_in_bilibili`` and the plugin
-        settings; this method only validates the lease and executes it.
+        settings. A successful delivery returns ``None`` so AstrBot ends the
+        agent loop without asking the model for another chat message.
         """
         session_id = event.unified_msg_origin
         settings = getattr(self, "_settings", None) or PluginSettings()
@@ -788,7 +778,7 @@ class ListenMusicPlugin(Star):
                 await event.send(
                     event.plain_result(self._format_selection_results(snapshot))
                 )
-                return _tool_result("choose", "已展示候选列表，等待用户选择。")
+                return None
             if not self._consume_llm_search(session_id, lease):
                 raise _StaleLlmDelivery("search lease was replaced before delivery")
             if _selection_requires_download(candidate, delivery_action):
@@ -801,10 +791,7 @@ class ListenMusicPlugin(Star):
                 action=delivery_action,
                 preface=_delivery_preface(candidate, delivery_action, note),
             )
-            return _tool_result(
-                "delivered",
-                f"已发送《{candidate.display_title}》（{_delivery_mode_label(delivery_action)}）。",
-            )
+            return None
         except _StaleLlmDelivery as exc:
             # The originating user request has already moved on.  Do not leak
             # an internal lease race as a confusing chat message.
@@ -1480,16 +1467,6 @@ def _action_for_delivery_key(
     if settings.preferred_audio_form == "file":
         return _DeliveryMode.DOWNLOAD
     return _DeliveryMode.VOICE
-
-
-def _delivery_mode_label(action: _DeliveryMode) -> str:
-    """Return the one user/LLM-visible noun for an already-prepared delivery."""
-
-    return {
-        _DeliveryMode.VOICE: "音频",
-        _DeliveryMode.VIDEO: "视频",
-        _DeliveryMode.DOWNLOAD: "音频文件",
-    }[action]
 
 
 def _requires_user_page_choice(snapshot: SearchSnapshot) -> bool:

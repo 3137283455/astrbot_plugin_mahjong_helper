@@ -599,7 +599,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             note="愿你接下来的路一路生花",
         )
 
-        self.assertEqual(json.loads(tool_result)["status"], "delivered")
+        self.assertIsNone(tool_result)
         self.assertEqual(plugin._llm_searches, {})
         self.assertEqual(
             search.calls,
@@ -696,13 +696,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
 
-        self.assertEqual(
-            json.loads(result),
-            {
-                "status": "delivered",
-                "message": "已发送《温奕心 - 一路生花》（音频文件）。",
-            },
-        )
+        self.assertIsNone(result)
         self.assertIs(delivery.selected, candidate)
         self.assertIs(delivery.limits, listen_main.DOWNLOAD_MEDIA_LIMITS)
         self.assertEqual(
@@ -800,7 +794,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             let_user_choose=False,
         )
 
-        self.assertEqual(json.loads(result)["status"], "choose")
+        self.assertIsNone(result)
         self.assertIn("Bilibili 搜索结果", event.sent[0][1])
         self.assertIn("chat-a", plugin._selection_waits)
         await plugin._cancel_selection_wait("chat-a")
@@ -1088,7 +1082,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             let_user_choose=True,
         )
 
-        self.assertEqual(json.loads(result)["status"], "choose")
+        self.assertIsNone(result)
         self.assertIn("Bilibili 搜索结果", event.sent[0][1])
         self.assertIn("1. 候选 1 (3:00)", event.sent[0][1])
         self.assertIn("10. 候选 10 (3:00)", event.sent[0][1])
@@ -1126,7 +1120,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             let_user_choose=False,
         )
 
-        self.assertEqual(json.loads(result)["status"], "choose")
+        self.assertIsNone(result)
         self.assertIn("Bilibili 搜索结果", event.sent[0][1])
         self.assertIn("音频下载：回复“序号 音频下载”", event.sent[0][1])
         self.assertIn("chat-a", plugin._selection_waits)

@@ -29,7 +29,7 @@
 
 - 改配置：同步 `_conf_schema.json`、`PluginSettings` 与测试，保证默认值等于当前行为。
 - 改搜索/过滤：补候选去重、顺序、分 P、精确视频不回退的正反例。
-- 改 LLM 协作：覆盖候选范围验证、`auto/video/audio/download` 解析、`delivered/choose/error`、下载强制用户确认。
+- 改 LLM 协作：覆盖候选范围验证、`auto/video/audio/download` 解析、成功后返回 `None` 终止循环、下载强制用户确认。
 - 改交付：覆盖平台回退、准备失败、取消、发送失败、文件清理、插件停止。
 - 改账号/WebUI：覆盖管理员身份、会话归属、SSE 脱敏、Cookie 文件权限。
 
