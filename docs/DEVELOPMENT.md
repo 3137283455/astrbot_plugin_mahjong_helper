@@ -1,50 +1,35 @@
-# 开发维护指南
+# 开发维护
 
-`astrbot_plugin_bili_player` 是 AstrBot 4.26+ 的独立插件；展示名为“bili播放器”。展示名、Python 包名、数据目录和 WebUI 路由前缀承担不同职责，不要为了改显示名而改变技术标识。
+## 阅读顺序
 
-## 修改前的阅读顺序
+`README.md` → `ARCHITECTURE.md` → 对应 `tests/` → 实现。
 
-1. 阅读根目录 `README.md`，确认用户可见行为与运行前提。
-2. 阅读 [ARCHITECTURE.md](ARCHITECTURE.md)，确认架构、行为契约和安全边界。
-3. 先读对应测试，再读实现文件。测试是当前行为最精确的可执行说明。
-4. 需要外部设计或 AstrBot 接入参考时，阅读 [REFERENCES.md](REFERENCES.md)，并仅参考其中指定的范围。
+## 模块地图
 
-## 模块定位
-
-| 问题 | 首先看 | 通常只应修改 |
+| 问题 | 先读 | 通常只改 |
 | --- | --- | --- |
-| 候选是否可交付、页身份会不会偷换 | `tests/test_matcher.py` | `core/matcher.py` |
-| 搜索、受限候选快照与选中候选交付 | `tests/test_services.py`、`tests/test_selection.py` | `core/services.py`、`core/selection.py` |
-| Bilibili WBI、视频页、DASH | `tests/test_bilibili.py` | `core/bilibili.py` |
-| 下载、封装和单次临时文件 | `tests/test_media.py` | `core/media.py` |
-| 命令、LLM、消息、WebUI 路由 | `tests/test_main.py` | `main.py` |
-| Cookie、二维码与管理员权限 | `tests/test_accounts.py` | `core/accounts.py`、`main.py` |
+| 候选可交付性、页身份 | `tests/test_matcher.py` | `core/matcher.py` |
+| 搜索、快照、交付编排 | `tests/test_services.py`、`tests/test_selection.py` | `core/services.py`、`core/selection.py` |
+| WBI、详情、DASH、二维码 | `tests/test_bilibili.py` | `core/bilibili.py` |
+| 下载、封装、临时文件 | `tests/test_media.py` | `core/media.py` |
+| 命令、LLM、消息、WebUI | `tests/test_main.py` | `main.py` |
+| Cookie、账号、权限 | `tests/test_accounts.py` | `core/accounts.py`、`main.py` |
 
-## 核心约束
+## 硬约束
 
-- Bilibili 是唯一的曲库、解析和播放源；不引入网易云、YouTube、跨源兜底、平台注册表或 `BaseSource`。
-- 平台搜索只使用清理后的用户关键词，绝不自动追加“原版”或其他版本词。结构化条件的首轮结果不足十条时，最多再以仅歌名补一次候选；自由文本命令不猜测词语边界。
-- Live、翻唱、AI、DJ、Remix、伴奏、变速、片段、剪辑和 `MV` 都是 LLM 与用户判断版本的标题证据，不能成为本地过滤、加分或重排规则；Bilibili 分类同样不参与候选处理。
-- LLM 负责理解对话、整理歌曲条件，并在直听时从插件返回的最多十条受限候选中按歌名匹配、歌手佐证、版本一致性与合理时长综合判断；没有可信候选时不交付。版本标签是语义证据而非硬过滤条件。Bilibili 负责召回；插件只做具体分 P 身份、可交付时长、去重和快照验证，不以本地数值评分重排候选。
-- 候选身份必须是具体 `bvid:cid`。选定后失败就失败，不能静默切换视频、分 P 或歌曲。
-- 直接点播采用两步受限协作：先取得隐藏候选，再由 LLM 选择，最后由终止型交付工具发送一条简短前言和视频或语音。明确要听/播放时交付音频，明确要看或未明确时交付视频；平台不适配时二者用文件兜底。交付成功后必须停止该轮 LLM 输出，不能追加解释、检索过程或确认文本。
-- 显式搜索（`搜索歌曲`/`搜索视频`）只走用户选择路径：插件展示最多十个“标题 + 时长”候选，不显示 UP 主；用户回复“序号”发视频、“序号 音频”播放音频、“序号 音频下载”下载音频文件。音频下载不能由 LLM 自动挑选版本，`deliver_media` 收到 download 意图时必须强制进入用户选择路径，即使模型没有设置 `let_user_choose`。
-- `MediaLimits` 是按交付动作定义的唯一媒体资源边界：语音最多 15 分钟、25 MiB，一次获取中的全部备用 CDN 共用 180 秒；视频最多 150 MiB、不限时长，共用 900 秒；音频下载不限时长、最多 100 MiB，共用 900 秒。直听（audio）搜索使用语音时长上限；download 意图、精确 AV/BV 和显式搜索保留长候选，音频超过 15 分钟时显示“音频仅可下载”。不要在调用点散落新的大小、时长或超时常量。
-- 用户对“音频仅可下载”项回复“序号 音频”时，只提示其回复“序号”发视频或“序号 音频下载”下载音频，并保留原 `SessionWaiter` 到其自然结束；这不是新状态，也不能要求用户重新搜索。
-- 隐式与显式候选都必须绑定当前会话和短期快照。LLM 只能从本次隐藏候选中选择，不能提交链接、`bvid`、`cid` 或编造的候选标识；用户选择同样只能从当前显式列表取回。
-- 用户原文中的 AV/BV 或普通 Bilibili 视频链接只可作为详情查询入口。服务端返回的 canonical `bvid` 与具体 `cid` 必须重新写入快照；失效引用不能回退关键词搜索。精确视频的多 P 仍由用户选择，不能默认第一 P；快照用 `by_video_reference` 标记该来源。
-- 候选数量固定为十条。账号页只管理 Bilibili 登录与运行健康状态；将来确需调整此类策略，应走 AstrBot 标准插件配置，不能在账号页增加设置或自建持久化配置。
-- 媒体必须在语音或文件发送完成后通过 `release()` 立即删除；账号 Cookie 不能进入聊天、LLM 工具结果、日志或 WebUI 响应。
-- 终止型交付成功后返回紧凑的结构化结果（delivered/choose/error）。不要把工具执行过程泄漏为聊天文本，也不要用 `stop_event()` 模拟工具终止。
-- 人工选歌真正等待满 90 秒时应发送一条本次搜索已结束的提示；同一会话的新非选择消息、新搜索或替换操作必须静默使旧候选状态失效，不能干扰下一轮对话。
+- 单源 Bilibili；候选身份固定为 `bvid:cid`，失败不换歌、不换 P。
+- 本地不评分、不过滤版本标签；LLM 只从受限候选集中选择。
+- `MediaLimits` 是唯一资源边界来源，不在调用点散落常量。
+- 下载音频必须用户确认；精确 AV/BV 多分 P 必须用户选择。
+- 媒体发送后必须 `release()`；Cookie 不得进入聊天、日志、LLM 或 WebUI。
+- 不为了少量重复引入跨层框架或音源抽象。
 
-## 修改原则
+## 修改前检查
 
-- 只改所属层；不要为了少量重复引入跨层框架或过早抽象。
-- 改查询清理、补召回、分页判定或可交付性守卫前先写正反例。特别关注受限候选数量、首轮顺序、跨查询去重、候选身份不变、精确视频不回退和不确定分页的拒绝。
-- 改 LLM 候选交互时，测试模型只能选择本次受限集合，直接点播成功后返回 delivered/choose/error 结构化结果且无尾随文本，音频下载始终进入用户选择路径（包括模型未设置 `let_user_choose` 时的强制路径）。
-- 改交付路径或资源边界时检查语音、视频与音频下载各自的时长、大小和请求超时，及平台不适配时的文件兜底、媒体准备失败、前言发送失败、取消、发送失败、临时文件删除和插件停止。
-- 改账号或 WebUI 时检查管理员身份、二维码会话归属、SSE 脱敏和 Cookie 文件权限。
+- 改搜索/过滤：补候选去重、顺序、分 P、精确视频不回退的正反例。
+- 改 LLM 协作：覆盖候选范围验证、`delivered/choose/error`、下载强制用户确认。
+- 改交付：覆盖平台回退、准备失败、取消、发送失败、文件清理、插件停止。
+- 改账号/WebUI：覆盖管理员身份、会话归属、SSE 脱敏、Cookie 文件权限。
 
 ## 验证
 
@@ -55,4 +40,4 @@ ruff format --check .
 ruff check .
 ```
 
-涉及实际 AstrBot 适配器、二维码 SSE、Bilibili 流或 ffmpeg 封装的改动，还必须在 AstrBot `>=4.26,<5` 中手工验收。
+涉及真实 AstrBot 适配器、二维码 SSE、Bilibili 流或 ffmpeg 的改动，仍需在 AstrBot `>=4.26,<5` 手工验收。
