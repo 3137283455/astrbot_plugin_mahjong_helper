@@ -205,6 +205,7 @@ _install_astrbot_doubles()
 listen_main = importlib.import_module("astrbot_plugin_bili_player.main")
 core_settings = importlib.import_module("astrbot_plugin_bili_player.core.settings")
 AudioFormPreference = core_settings.AudioFormPreference
+DeliveryReply = core_settings.DeliveryReply
 MediaPreference = core_settings.MediaPreference
 
 
@@ -607,6 +608,55 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             [listen_main.MessageChain([("record", Path("/tmp/fixture.m4a"))])],
         )
         self.assertEqual(released, [media])
+
+    async def test_llm_reply_mode_returns_status_after_media_only(self) -> None:
+        candidate = _Candidate("BV1fixture:1", "晴天")
+        snapshot = _Snapshot((candidate,))
+        media = types.SimpleNamespace(
+            path=Path("/tmp/fixture.mp4"), filename="fixture.mp4"
+        )
+        result = types.SimpleNamespace(candidate=candidate, media=media)
+
+        class FakeDelivery:
+            async def deliver_video(self, _candidate, *, limits):
+                return result
+
+        class FakeMedia:
+            async def release(self, _media):
+                pass
+
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        _configure_selection_waits(plugin)
+        plugin._settings = listen_main.PluginSettings(delivery_reply=DeliveryReply.LLM)
+        plugin._search = types.SimpleNamespace(snapshot=lambda **_kwargs: snapshot)
+        plugin._delivery = FakeDelivery()
+        plugin._media = FakeMedia()
+        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="video")
+        event = _SendingEvent("chat-a")
+
+        result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
+
+        payload = json.loads(result)
+        self.assertEqual(payload["status"], "delivered")
+        self.assertIn("不要复述歌名", payload["message"])
+        self.assertEqual(
+            event.sent,
+            [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
+        )
+
+    def test_deliver_tool_description_follows_reply_mode(self) -> None:
+        silent = listen_main.PluginSettings()
+        llm_reply = listen_main.PluginSettings(delivery_reply=DeliveryReply.LLM)
+
+        silent_tool = listen_main.DeliverMediaTool(
+            types.SimpleNamespace(_settings=silent)
+        )
+        llm_tool = listen_main.DeliverMediaTool(
+            types.SimpleNamespace(_settings=llm_reply)
+        )
+
+        self.assertIn("不返回内容", silent_tool.description)
+        self.assertIn("一句简短自然的收尾", llm_tool.description)
 
     async def test_llm_auto_delivery_defaults_to_video(self) -> None:
         candidate = _Candidate("BV1fixture:1", "温奕心 - 一路生花")

@@ -3,16 +3,46 @@
     "description": "用户没有明确说“看视频/听音频”时的默认媒体类型",
     "type": "string",
     "default": "video_first",
-    "options": ["video_first", "audio_first", "video_only", "audio_only"],
-    "labels": ["默认视频，可发送音频", "默认音频，可发送视频", "仅视频", "仅音频"],
+    "options": [
+      "video_first",
+      "audio_first",
+      "video_only",
+      "audio_only"
+    ],
+    "labels": [
+      "默认视频，可发送音频",
+      "默认音频，可发送视频",
+      "仅视频",
+      "仅音频"
+    ],
     "hint": "默认值只影响未明确媒体类型的请求；“仅视频/仅音频”会拒绝相反类型的显式请求。"
   },
   "audio_form_priority": {
     "description": "音频未指定“直接播放/下载”时的优先形式",
     "type": "string",
     "default": "voice_first",
-    "options": ["voice_first", "file_first"],
-    "labels": ["优先语音，超限或平台不支持时发文件", "直接发音频文件"],
+    "options": [
+      "voice_first",
+      "file_first"
+    ],
+    "labels": [
+      "优先语音，超限或平台不支持时发文件",
+      "直接发音频文件"
+    ],
     "hint": "语音最长 15 分钟、25 MiB；文件最长不限、100 MiB。"
+  },
+  "delivery_reply": {
+    "description": "直接点播成功后是否让 LLM 补一句自然收尾",
+    "type": "string",
+    "default": "none",
+    "options": [
+      "none",
+      "llm"
+    ],
+    "labels": [
+      "不回复，只发媒体",
+      "让 LLM 自然收尾一句"
+    ],
+    "hint": "llm 模式会让工具返回状态并继续 Agent Loop；LLM 被要求只回一句，不复述歌名或发送过程。"
   }
 }

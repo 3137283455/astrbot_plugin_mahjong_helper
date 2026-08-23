@@ -55,7 +55,7 @@ from .core.media import (
 )
 from .core.models import BilibiliCandidate, SearchSnapshot
 from .core.selection import SearchSnapshotStore
-from .core.settings import PluginSettings
+from .core.settings import DeliveryReply, PluginSettings
 from .core.services import (
     SEARCH_LIMIT,
     DeliveryError,
@@ -183,6 +183,19 @@ def _tool_error(message: str) -> str:
 
     return json.dumps(
         {"status": "error", "message": message},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _llm_followup_result() -> str:
+    """Ask the LLM for exactly one closing line after media was delivered."""
+
+    return json.dumps(
+        {
+            "status": "delivered",
+            "message": "媒体已发送。请只回复一句简短自然的收尾，不要复述歌名或发送过程。",
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -355,14 +368,25 @@ class DeliverMediaTool(FunctionTool):
     """Deliver a chosen candidate, automatically or via a user-owned pick."""
 
     def __init__(self, plugin: "ListenMusicPlugin") -> None:
+        settings = getattr(plugin, "_settings", None) or PluginSettings()
+        if settings.llm_reply_enabled:
+            reply_rule = (
+                "直接交付成功后本工具返回 delivered 状态；你只能回复一句简短自然的收尾，"
+                "不得复述歌名、媒体类型或发送过程。失败时返回 error，由你转述，不要输出 JSON。"
+            )
+        else:
+            reply_rule = (
+                "直接交付成功后本工具不返回内容，AstrBot 会直接结束本轮；"
+                "失败时返回 error，由你用自然语言向用户转述，不要输出 JSON。"
+            )
         super().__init__(
             name="deliver_media",
             description=(
                 "仅在 find_in_bilibili 成功后调用，只能用其返回的 search_id 和 position 完成交付并结束本轮。"
                 "交付媒体类型由 find_in_bilibili 的 delivery 和插件配置决定，本工具不再接收 delivery。"
                 "直接交付（let_user_choose=false）：自动发送；视频请求固定发第一个候选，精确 AV/BV 多分 P 时展示候选。"
-                "成功后本工具不返回内容，AstrBot 会直接结束本轮；失败时返回 error，由你用自然语言向用户转述，不要输出 JSON。"
-                "下载音频或让用户挑（let_user_choose=true）：展示候选，用户回“序号”发视频、“序号 音频”播放、“序号 音频下载”下载音频文件；"
+                + reply_rule
+                + "下载音频或让用户挑（let_user_choose=true）：展示候选，用户回“序号”发视频、“序号 音频”播放、“序号 音频下载”下载音频文件；"
                 "下载音频必须让用户选。不得编造 search_id/序号，不输出过程、解释或确认文字。"
             ),
             parameters={
@@ -783,6 +807,8 @@ class ListenMusicPlugin(Star):
                 candidate=candidate,
                 action=delivery_action,
             )
+            if settings.delivery_reply is DeliveryReply.LLM:
+                return _llm_followup_result()
             # None is the only AstrBot signal for "already sent; end loop".
             # All failure paths above return an error string instead.
             return None

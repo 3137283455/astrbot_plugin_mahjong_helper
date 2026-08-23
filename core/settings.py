@@ -27,6 +27,13 @@ class AudioFormPreference(str, Enum):
     FILE_FIRST = "file_first"
 
 
+class DeliveryReply(str, Enum):
+    """Whether a successful direct delivery asks the LLM for one closing line."""
+
+    NONE = "none"
+    LLM = "llm"
+
+
 @dataclass(frozen=True, slots=True)
 class PluginSettings:
     """The complete user-visible behavior surface of the plugin.
@@ -37,6 +44,7 @@ class PluginSettings:
 
     media_preference: MediaPreference = MediaPreference.VIDEO_FIRST
     audio_form_preference: AudioFormPreference = AudioFormPreference.VOICE_FIRST
+    delivery_reply: DeliveryReply = DeliveryReply.NONE
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any] | None) -> "PluginSettings":
@@ -52,6 +60,11 @@ class PluginSettings:
                 AudioFormPreference,
                 config.get("audio_form_priority"),
                 AudioFormPreference.VOICE_FIRST,
+            ),
+            delivery_reply=_enum_value(
+                DeliveryReply,
+                config.get("delivery_reply"),
+                DeliveryReply.NONE,
             ),
         )
 
@@ -79,6 +92,10 @@ class PluginSettings:
             else "file"
         )
 
+    @property
+    def llm_reply_enabled(self) -> bool:
+        return self.delivery_reply is DeliveryReply.LLM
+
 
 def _enum_value(enum_type: Any, value: object, default: Any) -> Any:
     if isinstance(value, enum_type):
@@ -94,6 +111,7 @@ def _enum_value(enum_type: Any, value: object, default: Any) -> Any:
 
 __all__ = [
     "AudioFormPreference",
+    "DeliveryReply",
     "MediaPreference",
     "PluginSettings",
 ]

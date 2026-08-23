@@ -12,6 +12,7 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 from core.settings import (
     AudioFormPreference,
+    DeliveryReply,
     MediaPreference,
     PluginSettings,
 )
@@ -29,12 +30,15 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertTrue(settings.audio_allowed)
         self.assertEqual(settings.default_media, "video")
         self.assertEqual(settings.preferred_audio_form, "voice")
+        self.assertEqual(settings.delivery_reply, DeliveryReply.NONE)
+        self.assertFalse(settings.llm_reply_enabled)
 
     def test_mapping_values_are_parsed(self) -> None:
         settings = PluginSettings.from_mapping(
             {
                 "media_priority": "audio_only",
                 "audio_form_priority": "file_first",
+                "delivery_reply": "llm",
             }
         )
 
@@ -44,6 +48,8 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertTrue(settings.audio_allowed)
         self.assertEqual(settings.default_media, "audio")
         self.assertEqual(settings.preferred_audio_form, "file")
+        self.assertEqual(settings.delivery_reply, DeliveryReply.LLM)
+        self.assertTrue(settings.llm_reply_enabled)
 
     def test_invalid_values_fall_back_to_defaults(self) -> None:
         settings = PluginSettings.from_mapping(
@@ -71,6 +77,11 @@ class PluginSettingsTests(unittest.TestCase):
         )
         self.assertEqual(schema["media_priority"]["default"], "video_first")
         self.assertEqual(schema["audio_form_priority"]["default"], "voice_first")
+        self.assertEqual(
+            schema["delivery_reply"]["options"],
+            [item.value for item in DeliveryReply],
+        )
+        self.assertEqual(schema["delivery_reply"]["default"], "none")
 
 
 if __name__ == "__main__":
