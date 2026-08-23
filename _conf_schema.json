@@ -44,5 +44,72 @@
       "让 LLM 自然收尾一句"
     ],
     "hint": "llm 模式会让工具返回状态并继续 Agent Loop；LLM 被要求只回一句，不复述歌名或发送过程。"
+  },
+  "limits": {
+    "description": "交付体积与时长边界",
+    "type": "object",
+    "hint": "0 分钟表示不限时长；建议保持默认值，过大文件可能超过平台适配器限制。",
+    "items": {
+      "voice_duration_minutes": {
+        "description": "语音最长分钟数",
+        "type": "int",
+        "default": 15,
+        "slider": {
+          "min": 1,
+          "max": 60,
+          "step": 1
+        }
+      },
+      "voice_size_mb": {
+        "description": "语音最大 MiB",
+        "type": "int",
+        "default": 25,
+        "slider": {
+          "min": 1,
+          "max": 100,
+          "step": 1
+        }
+      },
+      "video_duration_minutes": {
+        "description": "视频最长分钟数（0 不限）",
+        "type": "int",
+        "default": 0,
+        "slider": {
+          "min": 0,
+          "max": 600,
+          "step": 5
+        }
+      },
+      "video_size_mb": {
+        "description": "视频最大 MiB",
+        "type": "int",
+        "default": 150,
+        "slider": {
+          "min": 1,
+          "max": 500,
+          "step": 5
+        }
+      },
+      "download_duration_minutes": {
+        "description": "音频文件最长分钟数（0 不限）",
+        "type": "int",
+        "default": 0,
+        "slider": {
+          "min": 0,
+          "max": 600,
+          "step": 5
+        }
+      },
+      "download_size_mb": {
+        "description": "音频文件最大 MiB",
+        "type": "int",
+        "default": 100,
+        "slider": {
+          "min": 1,
+          "max": 500,
+          "step": 5
+        }
+      }
+    }
   }
 }

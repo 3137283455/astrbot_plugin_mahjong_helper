@@ -35,7 +35,9 @@ LLM 只在搜索阶段表达媒体意图，交付阶段不得改写：
 | `audio` | 明确要听音频，按 `audio_form_priority` 选择语音或文件 |
 | `download` | 下载音频，必须展示候选由用户确认 |
 
-`media_priority`：`video_first` / `audio_first` 决定 `auto` 的默认值；`video_only` / `audio_only` 额外拒绝相反类型的显式请求。`delivery_reply` 决定交付成功后是否恢复 LLM 收尾：`none` 返回 `None` 终止循环，`llm` 返回 delivered 状态让模型只补一句。安全预算仍固定，配置不开放时长、体积、并发。
+`media_priority`：`video_first` / `audio_first` 决定 `auto` 的默认值；`video_only` / `audio_only` 额外拒绝相反类型的显式请求。`delivery_reply` 决定交付成功后是否恢复 LLM 收尾：`none` 返回 `None` 终止循环，`llm` 返回 delivered 状态让模型只补一句。
+
+`limits` 只开放时长与体积，且在配置面板限定安全范围；时长 0 表示不限。网络超时、HTTP 连接、媒体并发等底层预算仍固定。
 
 ## 候选身份
 

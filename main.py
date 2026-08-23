@@ -45,9 +45,6 @@ from .core.bilibili import (
     parse_bilibili_video_refs,
 )
 from .core.media import (
-    DOWNLOAD_MEDIA_LIMITS,
-    VIDEO_MEDIA_LIMITS,
-    VOICE_MEDIA_LIMITS,
     FfmpegUnavailableError,
     MediaError,
     MediaLimits,
@@ -55,7 +52,7 @@ from .core.media import (
 )
 from .core.models import BilibiliCandidate, SearchSnapshot
 from .core.selection import SearchSnapshotStore
-from .core.settings import DeliveryReply, PluginSettings
+from .core.settings import DeliveryReply, PluginLimits, PluginSettings
 from .core.services import (
     SEARCH_LIMIT,
     DeliveryError,
@@ -117,14 +114,14 @@ class _DeliveryMode(str, Enum):
     VIDEO = "video"
 
 
-def _media_limits_for(action: _DeliveryMode) -> MediaLimits:
-    """Keep user-visible delivery intent aligned with one media budget."""
+def _media_limits_for(action: _DeliveryMode, limits: PluginLimits) -> MediaLimits:
+    """Keep user-visible delivery intent aligned with one configured budget."""
 
     if action is _DeliveryMode.DOWNLOAD:
-        return DOWNLOAD_MEDIA_LIMITS
+        return limits.download
     if action is _DeliveryMode.VIDEO:
-        return VIDEO_MEDIA_LIMITS
-    return VOICE_MEDIA_LIMITS
+        return limits.video
+    return limits.voice
 
 
 @dataclass(frozen=True, slots=True)
@@ -798,7 +795,9 @@ class ListenMusicPlugin(Star):
                 return None
             if not self._consume_llm_search(session_id, lease):
                 raise _StaleLlmDelivery("search lease was replaced before delivery")
-            if _selection_requires_download(candidate, delivery_action):
+            if _selection_requires_download(
+                candidate, delivery_action, settings.limits.voice
+            ):
                 # Voice messages cannot carry such a long track; deliver the
                 # audio file instead so the listen request still completes.
                 delivery_action = _DeliveryMode.DOWNLOAD
@@ -981,15 +980,16 @@ class ListenMusicPlugin(Star):
             if candidate is None:
                 await reply.send(reply.plain_result("搜索结果已过期，请重新搜索。"))
                 return
-            if _selection_requires_download(candidate, action):
+            if _selection_requires_download(candidate, action, settings.limits.voice):
+                voice_minutes = (settings.limits.voice.max_duration_ms or 0) // 60_000
                 if settings.video_allowed:
                     hint = (
-                        f"第 {position} 首音频超过 15 分钟，无法直接播放；"
+                        f"第 {position} 首音频超过 {voice_minutes} 分钟，无法直接播放；"
                         f"请回复“{position}”发视频，或回复“{position} 音频下载”下载音频文件。"
                     )
                 else:
                     hint = (
-                        f"第 {position} 首音频超过 15 分钟，无法直接播放；"
+                        f"第 {position} 首音频超过 {voice_minutes} 分钟，无法直接播放；"
                         f"请回复“{position} 音频下载”下载音频文件。"
                     )
                 await reply.send(reply.plain_result(hint))
@@ -1123,15 +1123,11 @@ class ListenMusicPlugin(Star):
         """Prepare the transport matching the selected action."""
 
         delivery = self._require_delivery()
+        settings = getattr(self, "_settings", None) or PluginSettings()
+        limits = _media_limits_for(action, settings.limits)
         if action is _DeliveryMode.VIDEO:
-            return await delivery.deliver_video(
-                candidate,
-                limits=_media_limits_for(action),
-            )
-        return await delivery.deliver(
-            candidate,
-            limits=_media_limits_for(action),
-        )
+            return await delivery.deliver_video(candidate, limits=limits)
+        return await delivery.deliver(candidate, limits=limits)
 
     async def _send_delivery(
         self,
@@ -1377,6 +1373,7 @@ class ListenMusicPlugin(Star):
             audio_enabled=settings.audio_allowed,
             default_audio_form=settings.preferred_audio_form,
             fuzzy_query=bool(getattr(snapshot, "fuzzy_query", False)),
+            voice_max_duration_ms=settings.limits.voice.max_duration_ms,
         )
 
 
@@ -1518,13 +1515,14 @@ def _selection_mode_from_word(word: str) -> _DeliveryMode:
 def _selection_requires_download(
     candidate: BilibiliCandidate,
     action: _DeliveryMode,
+    voice_limit: MediaLimits,
 ) -> bool:
     """Keep a long manual candidate available for its immediate file retry."""
 
     return bool(
         action is _DeliveryMode.VOICE
-        and VOICE_MEDIA_LIMITS.max_duration_ms is not None
-        and candidate.duration_ms > VOICE_MEDIA_LIMITS.max_duration_ms
+        and voice_limit.max_duration_ms is not None
+        and candidate.duration_ms > voice_limit.max_duration_ms
     )
 
 

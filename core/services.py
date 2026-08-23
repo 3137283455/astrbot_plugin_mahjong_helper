@@ -290,7 +290,7 @@ class DeliveryService:
         """Materialize one selected page within its delivery-mode limits."""
 
         if _duration_exceeds_limit(candidate.duration_ms, limits):
-            raise DeliveryError(_delivery_duration_error(limits))
+            raise DeliveryError(_delivery_duration_error(limits, "歌曲"))
         if not self._media.ffmpeg_available:
             raise FfmpegUnavailableError("宿主机未安装 ffmpeg，暂时无法听歌或下载歌曲")
         try:
@@ -322,6 +322,8 @@ class DeliveryService:
     ) -> DeliveryResult:
         """Materialize one selected page as a playable local MP4."""
 
+        if _duration_exceeds_limit(candidate.duration_ms, limits):
+            raise DeliveryError(_delivery_duration_error(limits, "视频"))
         if not self._media.ffmpeg_available:
             raise FfmpegUnavailableError("宿主机未安装 ffmpeg，暂时无法播放视频")
         try:
@@ -351,6 +353,7 @@ def format_search_results(
     audio_enabled: bool = True,
     default_audio_form: str = "voice",
     fuzzy_query: bool = False,
+    voice_max_duration_ms: int | None = None,
 ) -> str:
     """Produce the user-visible catalogue for one configured action surface."""
 
@@ -361,12 +364,18 @@ def format_search_results(
         ]
     else:
         lines = [f"Bilibili 搜索结果：{snapshot.query}"]
+    voice_limit = (
+        VOICE_MEDIA_LIMITS.max_duration_ms
+        if voice_max_duration_ms is None
+        else voice_max_duration_ms
+    )
     for position, candidate in enumerate(snapshot.candidates, start=1):
         download_only = (
             "，音频仅可下载"
             if audio_enabled
             and default_audio_form == "voice"
-            and _duration_exceeds_limit(candidate.duration_ms, VOICE_MEDIA_LIMITS)
+            and voice_limit is not None
+            and candidate.duration_ms > voice_limit
             else ""
         )
         lines.append(
@@ -538,14 +547,14 @@ def _duration_exceeds_limit(
     )
 
 
-def _delivery_duration_error(limits: MediaLimits) -> str:
-    """Describe the only duration limit users can encounter: voice delivery."""
+def _delivery_duration_error(limits: MediaLimits, subject: str) -> str:
+    """Describe a configured duration boundary before any network work starts."""
 
     assert limits.max_duration_ms is not None
     minutes = limits.max_duration_ms // 60_000
-    if limits.max_duration_ms == VOICE_MEDIA_LIMITS.max_duration_ms:
+    if subject == "歌曲" and limits == VOICE_MEDIA_LIMITS:
         return f"歌曲时长超过 {minutes} 分钟，请回复“序号 音频下载”下载音频文件"
-    return f"歌曲时长超过 {minutes} 分钟，无法发送"
+    return f"{subject}时长超过 {minutes} 分钟，无法发送"
 
 
 def _positive_int(value: Any) -> int:

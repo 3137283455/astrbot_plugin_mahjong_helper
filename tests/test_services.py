@@ -12,8 +12,10 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 from core.media import (
     DOWNLOAD_MEDIA_LIMITS,
+    VIDEO_MEDIA_LIMITS,
     VOICE_MEDIA_LIMITS,
     MediaError,
+    MediaLimits,
 )
 from core.bilibili import BilibiliVideoRef
 from core.models import LocalMedia, ResolvedAudio
@@ -624,6 +626,22 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bilibili.resolve_calls, [("BV2", 1)])
         self.assertEqual(len(media.prepared), 1)
         self.assertEqual(media.limits, [VOICE_MEDIA_LIMITS])
+
+    async def test_video_duration_limit_rejects_before_resolving_streams(self) -> None:
+        search, delivery, bilibili, _ = await self._workflow(
+            (video("BVlong", pages=(Page(1, "长视频", 60 * 60 * 1000),)),)
+        )
+        snapshot = await search.search(session_id="chat-a", query="长视频")
+        candidate = snapshot.candidates[0]
+        limits = MediaLimits(
+            max_bytes=VIDEO_MEDIA_LIMITS.max_bytes,
+            max_duration_ms=30 * 60 * 1000,
+            download_timeout_seconds=VIDEO_MEDIA_LIMITS.download_timeout_seconds,
+        )
+
+        with self.assertRaisesRegex(DeliveryError, "视频时长超过 30 分钟"):
+            await delivery.deliver_video(candidate, limits=limits)
+        self.assertEqual(bilibili.resolve_calls, [])
 
     async def test_long_audio_requires_download_limits_for_delivery(self) -> None:
         search, delivery, bilibili, media = await self._workflow(

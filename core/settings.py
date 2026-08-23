@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
+
+from .media import (
+    DOWNLOAD_MEDIA_LIMITS,
+    VIDEO_MEDIA_LIMITS,
+    VOICE_MEDIA_LIMITS,
+    MediaLimits,
+)
 
 
 class MediaPreference(str, Enum):
@@ -35,6 +42,62 @@ class DeliveryReply(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class PluginLimits:
+    """Configured delivery budgets with the same shape as ``MediaLimits``."""
+
+    voice: MediaLimits = VOICE_MEDIA_LIMITS
+    video: MediaLimits = VIDEO_MEDIA_LIMITS
+    download: MediaLimits = DOWNLOAD_MEDIA_LIMITS
+
+    @classmethod
+    def from_mapping(cls, config: Mapping[str, Any] | None) -> "PluginLimits":
+        if config is None:
+            return cls()
+        voice_duration_minutes = _bounded_int(
+            config.get("voice_duration_minutes"), 15, 1, 60
+        )
+        voice_size_mb = _bounded_int(config.get("voice_size_mb"), 25, 1, 100)
+        video_duration_minutes = _bounded_int(
+            config.get("video_duration_minutes"), 0, 0, 600
+        )
+        video_size_mb = _bounded_int(config.get("video_size_mb"), 150, 1, 500)
+        download_duration_minutes = _bounded_int(
+            config.get("download_duration_minutes"), 0, 0, 600
+        )
+        download_size_mb = _bounded_int(config.get("download_size_mb"), 100, 1, 500)
+
+        return cls(
+            voice=MediaLimits(
+                max_bytes=voice_size_mb * 1024 * 1024,
+                max_duration_ms=(
+                    voice_duration_minutes * 60 * 1000
+                    if voice_duration_minutes > 0
+                    else None
+                ),
+                download_timeout_seconds=VOICE_MEDIA_LIMITS.download_timeout_seconds,
+            ),
+            video=MediaLimits(
+                max_bytes=video_size_mb * 1024 * 1024,
+                max_duration_ms=(
+                    video_duration_minutes * 60 * 1000
+                    if video_duration_minutes > 0
+                    else None
+                ),
+                download_timeout_seconds=VIDEO_MEDIA_LIMITS.download_timeout_seconds,
+            ),
+            download=MediaLimits(
+                max_bytes=download_size_mb * 1024 * 1024,
+                max_duration_ms=(
+                    download_duration_minutes * 60 * 1000
+                    if download_duration_minutes > 0
+                    else None
+                ),
+                download_timeout_seconds=DOWNLOAD_MEDIA_LIMITS.download_timeout_seconds,
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PluginSettings:
     """The complete user-visible behavior surface of the plugin.
 
@@ -45,6 +108,7 @@ class PluginSettings:
     media_preference: MediaPreference = MediaPreference.VIDEO_FIRST
     audio_form_preference: AudioFormPreference = AudioFormPreference.VOICE_FIRST
     delivery_reply: DeliveryReply = DeliveryReply.NONE
+    limits: PluginLimits = field(default_factory=PluginLimits)
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any] | None) -> "PluginSettings":
@@ -65,6 +129,9 @@ class PluginSettings:
                 DeliveryReply,
                 config.get("delivery_reply"),
                 DeliveryReply.NONE,
+            ),
+            limits=PluginLimits.from_mapping(
+                config.get("limits") if isinstance(config, Mapping) else None
             ),
         )
 
@@ -97,6 +164,14 @@ class PluginSettings:
         return self.delivery_reply is DeliveryReply.LLM
 
 
+def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
 def _enum_value(enum_type: Any, value: object, default: Any) -> Any:
     if isinstance(value, enum_type):
         return value
@@ -113,5 +188,6 @@ __all__ = [
     "AudioFormPreference",
     "DeliveryReply",
     "MediaPreference",
+    "PluginLimits",
     "PluginSettings",
 ]

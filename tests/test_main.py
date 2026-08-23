@@ -203,7 +203,11 @@ def _install_astrbot_doubles() -> None:
 ensure_aiohttp()
 _install_astrbot_doubles()
 listen_main = importlib.import_module("astrbot_plugin_bili_player.main")
+core_media = importlib.import_module("astrbot_plugin_bili_player.core.media")
 core_settings = importlib.import_module("astrbot_plugin_bili_player.core.settings")
+DOWNLOAD_MEDIA_LIMITS = core_media.DOWNLOAD_MEDIA_LIMITS
+VIDEO_MEDIA_LIMITS = core_media.VIDEO_MEDIA_LIMITS
+VOICE_MEDIA_LIMITS = core_media.VOICE_MEDIA_LIMITS
 AudioFormPreference = core_settings.AudioFormPreference
 DeliveryReply = core_settings.DeliveryReply
 MediaPreference = core_settings.MediaPreference
@@ -602,7 +606,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             [{"search_id": "fixture-search", "session_id": "chat-a"}],
         )
         self.assertIs(delivery.selected, candidate)
-        self.assertIs(delivery.limits, listen_main.VOICE_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, VOICE_MEDIA_LIMITS)
         self.assertEqual(
             event.sent,
             [listen_main.MessageChain([("record", Path("/tmp/fixture.m4a"))])],
@@ -695,7 +699,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
 
         self.assertIs(delivery.selected, candidate)
-        self.assertIs(delivery.limits, listen_main.VIDEO_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, VIDEO_MEDIA_LIMITS)
         self.assertEqual(
             event.sent,
             [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
@@ -740,7 +744,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertIs(delivery.selected, candidate)
-        self.assertIs(delivery.limits, listen_main.DOWNLOAD_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, DOWNLOAD_MEDIA_LIMITS)
         self.assertEqual(len(event.sent), 1)
         self.assertIsInstance(event.sent[0][0], listen_main.File)
         self.assertEqual(
@@ -1021,6 +1025,27 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaisesRegex(ValueError, "未开启音频"):
             listen_main._resolve_delivery_key("audio", video_only)
+
+    def test_configured_voice_duration_changes_file_fallback_threshold(self) -> None:
+        voice_limit = core_settings.PluginLimits.from_mapping(
+            {"voice_duration_minutes": 1}
+        ).voice
+        candidate = _Candidate("BV1fixture:1", "两分钟")
+        candidate.duration_ms = 2 * 60_000
+
+        self.assertTrue(
+            listen_main._selection_requires_download(
+                candidate, listen_main._DeliveryMode.VOICE, voice_limit
+            )
+        )
+
+        snapshot = _Snapshot((candidate,))
+        rendered = listen_main.format_search_results(
+            snapshot,
+            default_audio_form="voice",
+            voice_max_duration_ms=voice_limit.max_duration_ms,
+        )
+        self.assertIn("音频仅可下载", rendered)
 
     def test_audio_only_selection_uses_configured_default_action(self) -> None:
         voice_only = listen_main.PluginSettings(
@@ -1400,7 +1425,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             [{"search_id": "fixture-search", "session_id": "chat-a"}],
         )
         self.assertIs(delivery.selected, candidate)
-        self.assertIs(delivery.limits, listen_main.DOWNLOAD_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, DOWNLOAD_MEDIA_LIMITS)
         self.assertTrue(controller.stopped)
         component = reply.sent[0][0]
         self.assertEqual(component.kwargs["name"], "fixture.m4a")

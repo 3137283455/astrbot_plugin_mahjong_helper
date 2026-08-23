@@ -14,6 +14,7 @@ from core.settings import (
     AudioFormPreference,
     DeliveryReply,
     MediaPreference,
+    PluginLimits,
     PluginSettings,
 )
 
@@ -32,6 +33,7 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertEqual(settings.preferred_audio_form, "voice")
         self.assertEqual(settings.delivery_reply, DeliveryReply.NONE)
         self.assertFalse(settings.llm_reply_enabled)
+        self.assertEqual(settings.limits, PluginLimits())
 
     def test_mapping_values_are_parsed(self) -> None:
         settings = PluginSettings.from_mapping(
@@ -50,6 +52,25 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertEqual(settings.preferred_audio_form, "file")
         self.assertEqual(settings.delivery_reply, DeliveryReply.LLM)
         self.assertTrue(settings.llm_reply_enabled)
+
+    def test_custom_limits_are_bounded_and_converted(self) -> None:
+        limits = PluginLimits.from_mapping(
+            {
+                "voice_duration_minutes": 1,
+                "voice_size_mb": 5,
+                "video_duration_minutes": 30,
+                "video_size_mb": 50,
+                "download_duration_minutes": 0,
+                "download_size_mb": 200,
+            }
+        )
+
+        self.assertEqual(limits.voice.max_duration_ms, 60_000)
+        self.assertEqual(limits.voice.max_bytes, 5 * 1024 * 1024)
+        self.assertEqual(limits.video.max_duration_ms, 30 * 60_000)
+        self.assertEqual(limits.video.max_bytes, 50 * 1024 * 1024)
+        self.assertIsNone(limits.download.max_duration_ms)
+        self.assertEqual(limits.download.max_bytes, 200 * 1024 * 1024)
 
     def test_invalid_values_fall_back_to_defaults(self) -> None:
         settings = PluginSettings.from_mapping(
@@ -82,6 +103,10 @@ class PluginSettingsTests(unittest.TestCase):
             [item.value for item in DeliveryReply],
         )
         self.assertEqual(schema["delivery_reply"]["default"], "none")
+        self.assertEqual(schema["limits"]["items"]["voice_size_mb"]["default"], 25)
+        self.assertEqual(
+            schema["limits"]["items"]["video_duration_minutes"]["default"], 0
+        )
 
 
 if __name__ == "__main__":
