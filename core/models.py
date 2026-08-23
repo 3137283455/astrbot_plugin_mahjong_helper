@@ -114,6 +114,67 @@ class ResolvedAudio:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedVideo:
+    """Resolved DASH video stream plus the optional companion audio stream.
+
+    Bilibili DASH keeps video and audio in separate streams, so a full video
+    page resolves to two URLs.  A progressive MP4 page carries both in a single
+    file, in which case ``audio_url`` stays ``None`` and ``needs_remux`` is
+    false.  The ``headers`` must be sent when a downstream downloader fetches
+    either URL.
+    """
+
+    video_url: str
+    video_backup_urls: tuple[str, ...] | Sequence[str] = ()
+    audio_url: str | None = None
+    audio_backup_urls: tuple[str, ...] | Sequence[str] = ()
+    headers: Mapping[str, str] = field(default_factory=dict)
+    mime_type: str | None = None
+    duration_ms: int | None = None
+    needs_remux: bool = False
+
+    def __post_init__(self) -> None:
+        video_url = self.video_url.strip()
+        if not video_url:
+            raise ValueError("video_url must not be blank")
+        if self.duration_ms is not None and self.duration_ms < 0:
+            raise ValueError("duration_ms must not be negative")
+
+        headers = MappingProxyType(
+            {
+                str(name): str(value)
+                for name, value in self.headers.items()
+                if str(name).strip()
+            }
+        )
+
+        def _unique_urls(*values: object) -> tuple[str, ...]:
+            seen: set[str] = set()
+            urls: list[str] = []
+            for item in values:
+                candidate = str(item).strip()
+                if candidate and candidate not in seen:
+                    seen.add(candidate)
+                    urls.append(candidate)
+            return tuple(urls)
+
+        video_backup_urls = _unique_urls(*self.video_backup_urls)
+        audio_backup_urls = _unique_urls(*self.audio_backup_urls)
+
+        object.__setattr__(self, "video_url", video_url)
+        object.__setattr__(self, "headers", headers)
+        object.__setattr__(self, "video_backup_urls", video_backup_urls)
+        object.__setattr__(self, "audio_backup_urls", audio_backup_urls)
+        object.__setattr__(
+            self, "audio_url", self.audio_url.strip() if self.audio_url else None
+        )
+        object.__setattr__(
+            self, "mime_type", self.mime_type.strip() if self.mime_type else None
+        )
+        object.__setattr__(self, "needs_remux", bool(self.needs_remux))
+
+
+@dataclass(frozen=True, slots=True)
 class LocalMedia:
     """A downloaded temporary file ready for a chat adapter to send."""
 
@@ -154,6 +215,7 @@ class SearchSnapshot:
     candidates: tuple[BilibiliCandidate, ...]
     created_at: float
     expires_at: float
+    by_video_reference: bool = False
 
     def __post_init__(self) -> None:
         search_id = self.search_id.strip()
@@ -180,6 +242,7 @@ class SearchSnapshot:
         object.__setattr__(self, "session_id", session_id)
         object.__setattr__(self, "query", query)
         object.__setattr__(self, "candidates", candidates)
+        object.__setattr__(self, "by_video_reference", bool(self.by_video_reference))
 
     def candidate(self, candidate_id: str) -> BilibiliCandidate | None:
         """Return a candidate only when its opaque ID is in this result."""

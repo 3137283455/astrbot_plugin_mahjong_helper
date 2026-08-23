@@ -23,6 +23,7 @@ from .media import (
     MediaLimits,
     MediaStore,
     MediaTooLargeError,
+    VIDEO_MEDIA_LIMITS,
     VOICE_MEDIA_LIMITS,
 )
 from .models import BilibiliCandidate, LocalMedia, SearchSnapshot
@@ -78,6 +79,8 @@ class _BilibiliClient(Protocol):
 
     async def resolve_audio(self, bvid: str, cid: int) -> Any: ...
 
+    async def resolve_video(self, bvid: str, cid: int) -> Any: ...
+
 
 class SearchService:
     """Search Bilibili videos, expand pages, then retain deliverable results."""
@@ -110,9 +113,10 @@ class SearchService:
         pages within multi-page videos and can provide one narrower recall
         pass when the complete query returns fewer than ten results.
 
-        ``video_ref`` is an exact video-level reference parsed from user input.
-        It bypasses keyword recall but still expands to page-level candidates,
-        so a download can never skip the normal snapshot and user selection.
+        ``video_ref`` is an exact AV/BV reference parsed from the request. It
+        bypasses keyword recall entirely: Bilibili's search endpoint does not
+        reliably rank a bare BV id first, so an exact id must never go through
+        keyword search.
         """
 
         if not session_id.strip():
@@ -135,11 +139,12 @@ class SearchService:
                 max_duration_ms=max_duration_ms,
             )
             if not candidates:
-                raise MusicSearchError("指定的 Bilibili 视频没有可播放的音频")
+                raise MusicSearchError("指定的 Bilibili 视频没有可播放的内容")
         return self._snapshots.create(
             session_id=session_id,
             query=requested_query,
             candidates=candidates,
+            by_video_reference=video_ref is not None,
         )
 
     async def _filtered_candidates(
@@ -243,7 +248,7 @@ class SearchService:
         *,
         max_duration_ms: int | None,
     ) -> tuple[BilibiliCandidate, ...]:
-        """Resolve one user-provided video reference without keyword fallback."""
+        """Resolve one user-provided AV/BV without keyword fallback."""
 
         try:
             if video_ref.bvid is not None:
@@ -307,6 +312,35 @@ class DeliveryService:
             raise DeliveryError("Bilibili 未返回可播放音频") from exc
         return DeliveryResult(candidate=candidate, media=media)
 
+    async def deliver_video(
+        self,
+        candidate: BilibiliCandidate,
+        *,
+        limits: MediaLimits = VIDEO_MEDIA_LIMITS,
+    ) -> DeliveryResult:
+        """Materialize one selected page as a playable local MP4."""
+
+        if not self._media.ffmpeg_available:
+            raise FfmpegUnavailableError("宿主机未安装 ffmpeg，暂时无法播放视频")
+        try:
+            video = await self._bilibili.resolve_video(candidate.bvid, candidate.cid)
+            media = await self._media.prepare_video(
+                video,
+                filename_stem=_display_stem(candidate),
+                limits=limits,
+            )
+        except FfmpegUnavailableError:
+            raise
+        except DeliveryError:
+            raise
+        except MediaTooLargeError as exc:
+            raise DeliveryError(str(exc)) from exc
+        except MediaError as exc:
+            raise DeliveryError("Bilibili 视频下载失败") from exc
+        except Exception as exc:
+            raise DeliveryError("Bilibili 未返回可播放视频") from exc
+        return DeliveryResult(candidate=candidate, media=media)
+
 
 def format_search_results(snapshot: SearchSnapshot) -> str:
     """Produce the only user-visible catalogue rendering used by command flow."""
@@ -314,7 +348,7 @@ def format_search_results(snapshot: SearchSnapshot) -> str:
     lines = [f"Bilibili 搜索结果：{snapshot.query}"]
     for position, candidate in enumerate(snapshot.candidates, start=1):
         download_only = (
-            "，仅可下载"
+            "，音频仅可下载"
             if _duration_exceeds_limit(candidate.duration_ms, VOICE_MEDIA_LIMITS)
             else ""
         )
@@ -324,8 +358,9 @@ def format_search_results(snapshot: SearchSnapshot) -> str:
         )
     lines.extend(
         (
-            "听歌：回复“序号”",
-            "下载：回复“序号 下载”",
+            "视频：回复“序号”",
+            "音频播放：回复“序号 音频”",
+            "音频下载：回复“序号 音频下载”",
         )
     )
 
@@ -472,7 +507,7 @@ def _delivery_duration_error(limits: MediaLimits) -> str:
     assert limits.max_duration_ms is not None
     minutes = limits.max_duration_ms // 60_000
     if limits.max_duration_ms == VOICE_MEDIA_LIMITS.max_duration_ms:
-        return f"歌曲时长超过 {minutes} 分钟，请回复“序号 下载”发送文件"
+        return f"歌曲时长超过 {minutes} 分钟，请回复“序号 音频下载”下载音频文件"
     return f"歌曲时长超过 {minutes} 分钟，无法发送"
 
 
@@ -492,20 +527,15 @@ def _nonnegative_int(value: Any) -> int:
 
 
 def _select_pages(pages: Any, song_title: str | None) -> tuple[Any, ...]:
-    """Keep all pages of a single-page video, but never guess a collection P.
+    """Select pages only when the audio path supplied a song identity.
 
-    Bilibili ranks videos, not individual pages. A multi-page video can be a
-    playlist or an album, where taking its first page would silently change the
-    requested song. For those videos this tiny check is a page-identity guard,
-    not a second ranking algorithm: pages stay in their source order and are
-    retained only when the structured song title is visibly present as a
-    complete title phrase. If that evidence is absent, the video is skipped
-    rather than delivering an arbitrary page. In particular, artist terms
-    from the broader Bilibili query can never choose a page.
+    Video requests keep Bilibili's page order without semantic song filtering;
+    direct listening may use the structured song title to avoid picking an
+    unrelated page from a multi-page collection.
     """
 
     values = tuple(pages)
-    if len(values) <= 1:
+    if len(values) <= 1 or not song_title:
         return values
 
     terms = _page_title_terms(song_title)

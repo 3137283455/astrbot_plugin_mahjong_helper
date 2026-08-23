@@ -67,13 +67,24 @@ class BilibiliCandidateFilterTests(unittest.TestCase):
                     prepare_bilibili_search_query(
                         f"请帮我听歌 {original_marker} 周杰伦 晴天 320kbps 无损"
                     ),
-                    "周杰伦 晴天",
+                    "请帮我听歌 周杰伦 晴天",
                 )
 
         self.assertEqual(prepare_bilibili_search_query("日不落"), "日不落")
         self.assertEqual(
             prepare_bilibili_search_query("我要听 晴天 Live Remix"),
-            "晴天 live remix",
+            "我要听 晴天 live remix",
+        )
+        self.assertEqual(
+            prepare_bilibili_search_query("我要看 BV1Tyur6REd8"),
+            "我要看 bv1tyur6red8",
+        )
+        # 语义词（我要看/播放）全部保留：语义提取由前置 LLM 负责。
+        self.assertEqual(
+            prepare_bilibili_search_query(
+                "我要看BV1r3QXBjE3p 忘情牛肉面 播放许家印 朋友的酒"
+            ),
+            "我要看bv1r3qxbje3p 忘情牛肉面 播放许家印 朋友的酒",
         )
 
     def test_keeps_platform_order_for_all_version_labels(self) -> None:

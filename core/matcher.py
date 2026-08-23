@@ -63,19 +63,15 @@ def _has_deliverable_duration(duration_ms: int, max_duration_ms: int | None) -> 
     )
 
 
-def _strip_query_noise(query: str) -> str:
-    value = query
-    while True:
-        stripped = _QUERY_PREFIX.sub("", value, count=1)
-        if stripped == value:
-            return value
-        value = stripped
-
-
 def _clean_bilibili_search_terms(query: str) -> str:
-    """Remove request syntax without changing the requested work identity."""
+    """Remove only technical noise; content words stay intact.
 
-    cleaned = _strip_query_noise(_normalise_spaces(query))
+    Semantic extraction ("我要看/我要听/播放") is the upstream LLM's job;
+    command-style entrances ("/我要看 <作品名>") strip their own prefix.
+    This layer must not delete words that could be part of a real title.
+    """
+
+    cleaned = _normalise_spaces(query)
     cleaned = _remove_patterns(cleaned, _ORIGINAL_MARKERS)
     cleaned = _QUERY_QUALITY_MARKERS.sub(" ", cleaned)
     return _normalise_spaces(cleaned)
@@ -96,13 +92,6 @@ def _markers(*patterns: str) -> tuple[re.Pattern[str], ...]:
 
 
 _WHITESPACE = re.compile(r"\s+")
-_QUERY_PREFIX = re.compile(
-    r"^\s*(?:(?:请(?:帮我)?|帮我)?(?:播放(?:一下)?(?:歌曲?|音乐)?|点歌|点(?:一)?首(?:歌曲?)?|"
-    r"听(?:一下)?(?:歌曲?|音乐)?|下载(?:一)?首?(?:歌曲?)?)|"
-    r"(?:我要|我想)(?:听(?:一下)?(?:歌曲?|音乐)?|播放(?:一下)?(?:歌曲?|音乐)?|"
-    r"下载(?:一)?首?(?:歌曲?)?)?|来(?:一)?首(?:歌曲?)?)\s*",
-    re.IGNORECASE,
-)
 _QUERY_QUALITY_MARKERS = re.compile(
     r"(?<![a-z0-9])(?:\d{3,4}p|\d{2,3}k(?:bps)?|flac|mp3|hi[ -]?res|hq|sq)(?![a-z0-9])|"
     r"无损|高音质|完整版",

@@ -1,4 +1,4 @@
-"""AstrBot entry point for the intentionally small listen-music plugin."""
+"""AstrBot entry point for the intentionally small bili-player plugin."""
 
 import asyncio
 import base64
@@ -16,7 +16,7 @@ import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.event.filter import CustomFilter
-from astrbot.api.message_components import File, Record
+from astrbot.api.message_components import File, Record, Video
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import error_response, json_response, request, stream_response
 from astrbot.core.agent.tool import FunctionTool
@@ -42,6 +42,7 @@ from .core.accounts import (
 from .core.bilibili import BilibiliClient, parse_bilibili_video_ref
 from .core.media import (
     DOWNLOAD_MEDIA_LIMITS,
+    VIDEO_MEDIA_LIMITS,
     VOICE_MEDIA_LIMITS,
     FfmpegUnavailableError,
     MediaError,
@@ -62,7 +63,7 @@ from .core.services import (
 )
 
 
-PLUGIN_NAME = "astrbot_plugin_listen_music"
+PLUGIN_NAME = "astrbot_plugin_bili_player"
 INTERACTION_TIMEOUT_SECONDS = 90
 SEARCH_SNAPSHOT_TTL_SECONDS = 300.0
 SEARCH_SNAPSHOT_MAX_ENTRIES = 1024
@@ -70,6 +71,12 @@ MAX_DELIVERY_NOTE_LENGTH = 120
 # AstrBot's weixin_oc adapter accepts File outbound but ignores Record.
 _VOICE_AS_FILE_PLATFORMS = frozenset({"weixin_oc"})
 _CANONICAL_RECORDING_PREFERENCES = frozenset({"原版", "原唱", "original"})
+
+
+class _StaleLlmDelivery(Exception):
+    """An obsolete hidden LLM delivery that must not message the user."""
+
+
 _CHINESE_SELECTION_POSITIONS = tuple("一二三四五六七八九十")
 if SEARCH_LIMIT > len(_CHINESE_SELECTION_POSITIONS):
     raise RuntimeError("selection grammar needs more Chinese position names")
@@ -89,10 +96,10 @@ _SELECTION_POSITION_PATTERN = "|".join(
 )
 _SELECTION_RE = re.compile(
     r"^(?:(?:我|我要|我想|帮我|请)\s*)?"
-    r"(?:(下载|听(?:歌)?|播放)\s*)?"
+    r"(?:(音频下载|下载|听(?:歌)?|播放|视频|音频)\s*)?"
     r"(?:(?:选择|选)\s*)?"
     rf"(?:第\s*)?({_SELECTION_POSITION_PATTERN})\s*(?:首(?:歌)?|个|号)?"
-    r"(?:\s*(下载|听(?:歌)?|播放))?"
+    r"(?:\s*(音频下载|下载|听(?:歌)?|播放|视频|音频))?"
     r"(?:[，,。！？!]\s*)*$"
 )
 _DELIVERY_NOTE_REJECTED_MARKERS = (
@@ -113,30 +120,29 @@ _DELIVERY_NOTE_REJECTED_MARKERS = (
     "换用",
     "重试",
     "已送上",
-    "播放",
-    "发送",
 )
 
 
 class _DeliveryMode(str, Enum):
-    """The two AstrBot transport forms for an already-prepared audio file."""
+    """The three AstrBot transport forms for an already-prepared media file."""
 
     VOICE = "voice"
     DOWNLOAD = "download"
+    VIDEO = "video"
 
 
 def _media_limits_for(action: _DeliveryMode) -> MediaLimits:
     """Keep user-visible delivery intent aligned with one media budget."""
 
-    return (
-        DOWNLOAD_MEDIA_LIMITS
-        if action is _DeliveryMode.DOWNLOAD
-        else VOICE_MEDIA_LIMITS
-    )
+    if action is _DeliveryMode.DOWNLOAD:
+        return DOWNLOAD_MEDIA_LIMITS
+    if action is _DeliveryMode.VIDEO:
+        return VIDEO_MEDIA_LIMITS
+    return VOICE_MEDIA_LIMITS
 
 
 @dataclass(frozen=True, slots=True)
-class _MusicRequest:
+class _BilibiliRequest:
     """The structured song identity supplied by one LLM tool call."""
 
     title: str
@@ -150,7 +156,7 @@ class _MusicRequest:
         *,
         artist: object | None = None,
         version: object | None = None,
-    ) -> "_MusicRequest":
+    ) -> "_BilibiliRequest":
         normalized_title = _normalize_music_request_field(title)
         if not normalized_title:
             raise ValueError("请提供歌曲名称")
@@ -191,6 +197,16 @@ def _tool_error(message: str) -> str:
 
     return json.dumps(
         {"status": "error", "message": message},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _tool_result(status: str, message: str) -> str:
+    """Return a compact structured tool outcome for the LLM."""
+
+    return json.dumps(
+        {"status": status, "message": message},
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -284,7 +300,7 @@ class _DiscardSelectionWaitFilter(CustomFilter):
         )
 
 
-def _music_request_parameters() -> dict[str, Any]:
+def _bilibili_request_parameters() -> dict[str, Any]:
     """Build the shared, small structured-intent contract for LLM tools."""
 
     return {
@@ -292,15 +308,15 @@ def _music_request_parameters() -> dict[str, Any]:
         "properties": {
             "title": {
                 "type": "string",
-                "description": "具体歌曲名；“唱首歌”时必须先选定一首具体歌曲。",
+                "description": "作品名；“唱首歌”时先选定一首具体歌曲。",
             },
             "artist": {
                 "type": "string",
-                "description": "歌手、乐队或作品演者；没有明确线索时省略。",
+                "description": "歌手、乐队或 UP 主；无明确线索时省略。",
             },
             "version": {
                 "type": "string",
-                "description": "仅填写用户明确指定的版本偏好；未指定时省略，不要自行添加。",
+                "description": "用户明确指定的版本偏好；未指定时省略。",
             },
         },
         "required": ["title"],
@@ -313,23 +329,34 @@ def _tool_event(context: Any) -> AstrMessageEvent | None:
     return event if isinstance(event, AstrMessageEvent) else None
 
 
-class FindMusicTool(FunctionTool):
-    """Return a bounded, private candidate set for one direct listening request."""
+class FindInBilibiliTool(FunctionTool):
+    """Unified pre-step search for listening, watching, or downloading."""
 
     def __init__(self, plugin: "ListenMusicPlugin") -> None:
         super().__init__(
-            name="find_music",
+            name="find_in_bilibili",
             description=(
-                "仅用于直接听歌前的隐藏检索。传入整理后的具体歌名、歌手和版本偏好；"
-                "“唱首歌”时先选定一首再调用。本工具返回当前会话的候选给你判断，"
-                "不向用户发送候选，也不发送音乐。成功后必须仅从返回的 search_id 和 position 中选择，"
-                "候选评估时，歌名精确或完整匹配优先；用户给出歌手时，以候选标题、搜索标题或分P标题中的歌手线索佐证。"
-                "必须遵守用户明确的版本偏好；未指定版本时，优先普通完整录音，但 Live、翻唱、AI、Remix、DJ、伴奏和 MV 等标签"
-                "只是证据，不能据此直接排除候选。时长只用于识别明显片段或不合理结果，不能因小幅差异否定其他强证据。"
-                "没有可信候选时不要猜测或发送，简短请求用户补充歌名或歌手。选定后紧接着调用 deliver_music 发送语音；"
-                "不要用于用户明确搜索、找歌或下载，也不要输出评分、推理、检索过程或其他过程文字。"
+                "统一前置搜索：点歌、听歌、看视频、下载音频前先调用。title 必须是纯作品名——去掉“我要看/我要听/播放”等指令词，"
+                "也不要附加“原版/无损”等偏好词；可选传歌手和版本偏好。“唱首歌”时先选定一首。"
+                "delivery 默认 video（视频文件可自行保存）；仅明确要听/播放时用 audio；下载音频或需要用户比较版本时用 download。直接看视频固定交付第一个候选，精确 AV/BV 多分 P 由用户选择。"
+                "返回候选供交付判断，不向用户发送内容；只能从返回的 search_id 和 position 中选。"
+                "候选评估：作品名精确或完整匹配优先，歌手线索佐证，必须遵守版本偏好；Live/翻唱/AI/DJ/伴奏/MV 等标签仅作证据。"
+                "没有可信候选时不要猜测或发送，简短请求用户补充作品名。成功后调用 deliver_media 完成交付，不输出过程文字。"
+                "本工具失败时只返回 error 信息，由你用自然语言向用户转述，不要直接输出 JSON。"
             ),
-            parameters=_music_request_parameters(),
+            parameters={
+                "type": "object",
+                "properties": {
+                    **_bilibili_request_parameters()["properties"],
+                    "delivery": {
+                        "type": "string",
+                        "enum": ["audio", "video", "download"],
+                        "description": "默认 video；仅明确要听/播放时用 audio；下载音频时用 download。",
+                    },
+                },
+                "required": ["title"],
+                "additionalProperties": False,
+            },
         )
         self._plugin = plugin
 
@@ -337,42 +364,55 @@ class FindMusicTool(FunctionTool):
         event = _tool_event(context)
         if event is None:
             return _tool_error("无法获取当前聊天会话。")
-        return await self._plugin.find_music_for_llm(
+        return await self._plugin.find_in_bilibili_for_llm(
             event,
             kwargs.get("title", ""),
             artist=kwargs.get("artist"),
             version=kwargs.get("version"),
+            delivery=kwargs.get("delivery"),
         )
 
 
-class DeliverMusicTool(FunctionTool):
-    """Terminally send voice for an LLM-selected candidate from a live snapshot."""
+class DeliverMediaTool(FunctionTool):
+    """Deliver a chosen candidate, automatically or via a user-owned pick."""
 
     def __init__(self, plugin: "ListenMusicPlugin") -> None:
         super().__init__(
-            name="deliver_music",
+            name="deliver_media",
             description=(
-                "仅在 find_music 成功后使用。只能使用其返回的 search_id 和 position，"
-                "发送语音并结束本轮音乐流程。不要用于下载，不要编造序号或 search_id，"
-                "调用前后不要输出过程、解释、确认文字或其他工具调用。"
+                "仅在 find_in_bilibili 成功后调用，只能用其返回的 search_id 和 position 完成交付并结束本轮。"
+                "直接听/看（let_user_choose=false）：自动发送；audio 发可播放语音，video 固定发第一个候选的视频，精确 AV/BV 多分 P 时展示候选。"
+                "本工具会返回明确的交付结果（已发送/已展示候选/错误），不要重复调用同一 search_id。"
+                "成功时不要复述发送过程；失败时由你用自然语言向用户转述错误，不要输出 JSON。"
+                "下载音频或让用户挑（let_user_choose=true）：展示候选，用户回“序号”发视频、“序号 音频”播放、“序号 音频下载”下载音频文件；"
+                "下载音频必须让用户选。不得编造 search_id/序号，不输出过程、解释或确认文字。"
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "search_id": {
                         "type": "string",
-                        "description": "find_music 返回的当前会话 search_id。",
+                        "description": "find_in_bilibili 返回的当前会话 search_id。",
                     },
                     "position": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": SEARCH_LIMIT,
-                        "description": "find_music 返回的候选序号。",
+                        "description": "find_in_bilibili 返回的候选序号；let_user_choose 为 true 时可填 1。",
                     },
                     "note": {
                         "type": "string",
                         "maxLength": MAX_DELIVERY_NOTE_LENGTH,
                         "description": "可选的一句自然预告，不重复歌名，不写检索过程或发送后的确认。",
+                    },
+                    "delivery": {
+                        "type": "string",
+                        "enum": ["audio", "video", "download"],
+                        "description": "audio 发可播放语音；video 发视频；download 下载音频文件（必须让用户选）。",
+                    },
+                    "let_user_choose": {
+                        "type": "boolean",
+                        "description": "下载音频或让用户挑时 true，展示候选；直接听/看时省略。",
                     },
                 },
                 "required": ["search_id", "position"],
@@ -381,43 +421,17 @@ class DeliverMusicTool(FunctionTool):
         )
         self._plugin = plugin
 
-    async def call(self, context: Any, **kwargs: Any) -> None:
+    async def call(self, context: Any, **kwargs: Any) -> str | None:
         event = _tool_event(context)
         if event is None:
             return None
-        return await self._plugin.deliver_music_for_llm(
+        return await self._plugin.deliver_media_for_llm(
             event,
             kwargs.get("search_id", ""),
             kwargs.get("position"),
             note=kwargs.get("note"),
-        )
-
-
-class SearchMusicTool(FunctionTool):
-    """Terminally show a user-owned candidate list for search or download."""
-
-    def __init__(self, plugin: "ListenMusicPlugin") -> None:
-        super().__init__(
-            name="search_music",
-            description=(
-                "仅用于用户明确搜索、找歌或下载歌曲。工具会直接展示候选，用户自行回复序号听歌，"
-                "或回复“序号 下载”收文件。下载必须调用本工具，不能自动选择下载版本。"
-                "用户原文中给出 AV/BV 或标准 Bilibili 视频链接时也使用本工具，插件会精确展开该视频的分 P。"
-                "这是终止型工具：调用前后不要输出过程、解释或补充文字。"
-            ),
-            parameters=_music_request_parameters(),
-        )
-        self._plugin = plugin
-
-    async def call(self, context: Any, **kwargs: Any) -> None:
-        event = _tool_event(context)
-        if event is None:
-            return None
-        return await self._plugin.present_music_search_for_llm(
-            event,
-            kwargs.get("title", ""),
-            artist=kwargs.get("artist"),
-            version=kwargs.get("version"),
+            delivery=kwargs.get("delivery"),
+            let_user_choose=bool(kwargs.get("let_user_choose", False)),
         )
 
 
@@ -482,12 +496,11 @@ class ListenMusicPlugin(Star):
             )
             self._register_account_routes()
             self.context.add_llm_tools(
-                FindMusicTool(self),
-                DeliverMusicTool(self),
-                SearchMusicTool(self),
+                FindInBilibiliTool(self),
+                DeliverMediaTool(self),
             )
             self._initialized = True
-            logger.info("listen-music plugin initialized")
+            logger.info("bili-player plugin initialized")
         except Exception:
             await http.close()
             raise
@@ -527,11 +540,94 @@ class ListenMusicPlugin(Star):
     @filter.command("搜索歌曲")
     async def search_song(self, event: AstrMessageEvent, query: GreedyStr):
         """搜索歌曲 <关键词>"""
-        # This command owns the visible catalogue and the following selection.
+        async for result in self._run_search_command(event, query):
+            yield result
+
+    @filter.command("搜索视频")
+    async def search_video(self, event: AstrMessageEvent, query: GreedyStr):
+        """搜索视频 <关键词>"""
+        async for result in self._run_search_command(
+            event, query, usage="搜索视频 <关键词>"
+        ):
+            yield result
+
+    @filter.command("/我要听")
+    async def listen_command(self, event: AstrMessageEvent, query: GreedyStr):
+        """兜底命令：/我要听 <作品名> 展示候选，由用户选择。"""
+        async for result in self._run_search_command(
+            event, query, usage="/我要听 <作品名>"
+        ):
+            yield result
+
+    @filter.command("/我要看")
+    async def watch_command(self, event: AstrMessageEvent, query: GreedyStr):
+        """兜底命令：/我要看 <作品名> 直接发第一个视频；含 AV/BV 时先展示分 P。"""
         event.should_call_llm(True)
         query = query.strip()
         if not query:
-            yield event.plain_result("请使用：搜索歌曲 <关键词>")
+            yield event.plain_result("请使用：/我要看 <作品名>")
+            event.stop_event()
+            return
+        if parse_bilibili_video_ref(query) is not None:
+            async for result in self._run_search_command(
+                event, query, usage="/我要看 <作品名>"
+            ):
+                yield result
+            return
+        session_id = event.unified_msg_origin
+        self._clear_llm_search(session_id)
+        await self._cancel_selection_wait(session_id)
+        try:
+            snapshot = await self._require_search().search(
+                session_id=session_id,
+                query=query,
+                video_ref=None,
+            )
+        except MusicSearchError as exc:
+            yield event.plain_result(str(exc))
+            event.stop_event()
+            return
+        except Exception:
+            logger.exception("bili-player watch command failed")
+            yield event.plain_result("搜索视频时发生错误，请稍后重试")
+            event.stop_event()
+            return
+        candidate = snapshot.candidate_at(1)
+        if candidate is None:
+            yield event.plain_result("没有找到可发送的视频。")
+            event.stop_event()
+            return
+        try:
+            await self._deliver_with_preface(
+                event,
+                candidate=candidate,
+                action=_DeliveryMode.VIDEO,
+                preface=_delivery_preface(candidate, _DeliveryMode.VIDEO, None),
+            )
+        except (DeliveryError, FfmpegUnavailableError, MediaError) as exc:
+            yield event.plain_result(str(exc))
+            event.stop_event()
+            return
+        except Exception:
+            logger.exception("bili-player watch command delivery failed")
+            yield event.plain_result("视频发送失败，请稍后重试。")
+            event.stop_event()
+            return
+        event.stop_event()
+
+    async def _run_search_command(
+        self,
+        event: AstrMessageEvent,
+        query: GreedyStr,
+        *,
+        usage: str = "搜索歌曲 <关键词>",
+    ) -> AsyncIterator[str]:
+        """Show the candidate catalogue and own the following selection."""
+
+        event.should_call_llm(True)
+        query = query.strip()
+        if not query:
+            yield event.plain_result(f"请使用：{usage}")
             event.stop_event()
             return
         session_id = event.unified_msg_origin
@@ -548,8 +644,8 @@ class ListenMusicPlugin(Star):
             event.stop_event()
             return
         except Exception:
-            logger.exception("listen-music command search failed")
-            yield event.plain_result("搜索歌曲时发生错误，请稍后重试")
+            logger.exception("bili-player command search failed")
+            yield event.plain_result(f"{_command_error_label(usage)}，请稍后重试")
             event.stop_event()
             return
 
@@ -560,52 +656,14 @@ class ListenMusicPlugin(Star):
         yield event.plain_result(format_search_results(snapshot))
         event.stop_event()
 
-    async def present_music_search_for_llm(
+    async def find_in_bilibili_for_llm(
         self,
         event: AstrMessageEvent,
         title: object,
         *,
         artist: object | None = None,
         version: object | None = None,
-    ) -> None:
-        """Show a manual candidate list and hand the next reply to SessionWaiter."""
-        session_id = event.unified_msg_origin
-        self._clear_llm_search(session_id)
-        try:
-            await self._cancel_selection_wait(session_id)
-            music = _MusicRequest.from_fields(
-                title,
-                artist=artist,
-                version=version,
-            )
-            snapshot = await self._require_search().search(
-                session_id=session_id,
-                query=music.query,
-                song_title=music.title,
-                video_ref=parse_bilibili_video_ref(event.message_str),
-            )
-            if not await self._start_selection_wait(event, snapshot):
-                await self._send_llm_tool_failure(event, "插件正在停止，无法继续选歌。")
-                return None
-            try:
-                await event.send(event.plain_result(format_search_results(snapshot)))
-            except Exception:
-                await self._cancel_selection_wait(event.unified_msg_origin)
-                raise
-        except (MusicSearchError, ValueError) as exc:
-            await self._send_llm_tool_failure(event, str(exc))
-        except Exception:
-            logger.exception("listen-music LLM search failed")
-            await self._send_llm_tool_failure(event, "搜索歌曲时发生错误，请稍后重试。")
-        return None
-
-    async def find_music_for_llm(
-        self,
-        event: AstrMessageEvent,
-        title: object,
-        *,
-        artist: object | None = None,
-        version: object | None = None,
+        delivery: object | None = None,
     ) -> str:
         """Create a one-shot candidate snapshot for LLM-side direct selection."""
         session_id = event.unified_msg_origin
@@ -614,17 +672,37 @@ class ListenMusicPlugin(Star):
             await self._cancel_selection_wait(session_id)
             if not self._is_current_llm_search(session_id, lease):
                 return _tool_error("歌曲请求已被新的消息替换")
-            music = _MusicRequest.from_fields(
+            music = _BilibiliRequest.from_fields(
                 title,
                 artist=artist,
                 version=version,
             )
-            snapshot = await self._require_search().search(
-                session_id=session_id,
-                query=music.query,
-                song_title=music.title,
-                max_duration_ms=VOICE_MEDIA_LIMITS.max_duration_ms,
-            )
+            delivery_action = _resolve_delivery_action(delivery)
+            # 请求本身是 AV/BV 号时走精确详情（关键词搜索对 BV 召回不可靠）；
+            # 普通作品名才走关键词。语义提取仍由前置 LLM 负责。
+            video_ref = parse_bilibili_video_ref(
+                music.title
+            ) or parse_bilibili_video_ref(event.message_str)
+            search_kwargs: dict[str, object] = {
+                "session_id": session_id,
+                "query": music.query,
+                # 只有直接听音频才做歌名/分P语义筛选；视频只按搜索结果交付。
+                "song_title": (
+                    music.title
+                    if delivery_action is _DeliveryMode.VOICE and video_ref is None
+                    else None
+                ),
+                "max_duration_ms": (
+                    None
+                    if video_ref is not None
+                    else _media_limits_for(delivery_action).max_duration_ms
+                ),
+            }
+            if video_ref is not None:
+                # 精确视频保留全部分 P，由用户选择；长音频在列表中标记“音频仅可下载”。
+                search_kwargs["video_ref"] = video_ref
+            snapshot = await self._require_search().search(**search_kwargs)
+
             if not self._complete_llm_search(session_id, lease, snapshot):
                 return _tool_error("歌曲请求已被新的消息替换")
             return _llm_candidate_result(snapshot)
@@ -636,25 +714,33 @@ class ListenMusicPlugin(Star):
             return _tool_error(str(exc))
         except Exception:
             self._discard_llm_search(session_id, lease)
-            logger.exception("listen-music LLM candidate search failed")
+            logger.exception("bili-player LLM candidate search failed")
             return _tool_error("搜索歌曲时发生错误，请稍后重试。")
 
-    async def deliver_music_for_llm(
+    async def deliver_media_for_llm(
         self,
         event: AstrMessageEvent,
         search_id: object,
         position: object,
         *,
         note: object | None = None,
-    ) -> None:
-        """Terminally deliver one candidate from the active LLM search snapshot."""
+        delivery: object | None = None,
+        let_user_choose: bool = False,
+    ) -> str:
+        """Terminally deliver one candidate from the active LLM search snapshot.
+
+        Returns a compact structured result so the model knows whether the
+        delivery happened, instead of guessing from an empty tool response.
+        """
         session_id = event.unified_msg_origin
         try:
             normalized_search_id = str(search_id).strip()
-            selected_position = _parse_candidate_position(position)
+            requested_position = _parse_candidate_position(position)
+            selected_position = requested_position
+            delivery_action = _resolve_delivery_action(delivery)
             lease = self._active_llm_search(session_id, normalized_search_id)
             if lease is None:
-                raise DeliveryError("候选已失效，请重新搜索")
+                raise _StaleLlmDelivery("search lease missing or superseded")
 
             snapshot = self._require_search().snapshot(
                 search_id=normalized_search_id,
@@ -662,29 +748,64 @@ class ListenMusicPlugin(Star):
             )
             if snapshot is None:
                 self._discard_llm_search(session_id, lease)
+                raise _StaleLlmDelivery("search snapshot missing or expired")
+            # Validate the model-provided position even when video delivery
+            # intentionally uses the first candidate below.
+            requested_candidate = snapshot.candidate_at(requested_position)
+            if requested_candidate is None:
                 raise DeliveryError("候选无效或已过期，请重新搜索")
+            if _requires_user_page_choice(snapshot):
+                # An exact AV/BV reference exposes every page; only the user
+                # may pick the concrete page for a multi-page video.
+                let_user_choose = True
+            elif not let_user_choose and delivery_action is _DeliveryMode.VIDEO:
+                # Direct video requests use Bilibili's first result; video has
+                # no music-semantic ranking step for the LLM to reproduce.
+                selected_position = 1
             candidate = snapshot.candidate_at(selected_position)
             if candidate is None:
                 raise DeliveryError("候选无效或已过期，请重新搜索")
+            if delivery_action is _DeliveryMode.DOWNLOAD:
+                # Downloading an audio file is never automatic: the user must
+                # confirm the exact candidate from the visible catalogue.
+                let_user_choose = True
+            if bool(let_user_choose):
+                if not await self._start_selection_wait(event, snapshot):
+                    self._discard_llm_search(session_id, lease)
+                    raise DeliveryError("插件正在停止，无法继续选歌")
+                await event.send(event.plain_result(format_search_results(snapshot)))
+                return _tool_result("choose", "已展示候选列表，等待用户选择。")
             if not self._consume_llm_search(session_id, lease):
-                raise DeliveryError("候选已失效，请重新搜索")
+                raise _StaleLlmDelivery("search lease was replaced before delivery")
+            if _selection_requires_download(candidate, delivery_action):
+                # Voice messages cannot carry such a long track; deliver the
+                # audio file instead so the listen request still completes.
+                delivery_action = _DeliveryMode.DOWNLOAD
             await self._deliver_with_preface(
                 event,
                 candidate=candidate,
-                action=_DeliveryMode.VOICE,
-                preface=_delivery_preface(candidate, _DeliveryMode.VOICE, note),
+                action=delivery_action,
+                preface=_delivery_preface(candidate, delivery_action, note),
             )
+            return _tool_result(
+                "delivered",
+                f"已发送《{candidate.display_title}》（{_delivery_mode_label(delivery_action)}）。",
+            )
+        except _StaleLlmDelivery as exc:
+            # The originating user request has already moved on.  Do not leak
+            # an internal lease race as a confusing chat message.
+            logger.info("bili-player ignored stale LLM delivery: %s", exc)
+            return _tool_error("候选已失效，请重新搜索")
         except (
             ValueError,
             DeliveryError,
             FfmpegUnavailableError,
             MediaError,
         ) as exc:
-            await self._send_llm_tool_failure(event, str(exc))
+            return _tool_error(str(exc))
         except Exception:
-            logger.exception("listen-music LLM candidate delivery failed")
-            await self._send_llm_tool_failure(event, "歌曲发送失败，请稍后重试。")
-        return None
+            logger.exception("bili-player LLM candidate delivery failed")
+            return _tool_error("歌曲发送失败，请稍后重试。")
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=11)
     async def discard_llm_search_on_new_message(self, event: AstrMessageEvent) -> None:
@@ -704,16 +825,6 @@ class ListenMusicPlugin(Star):
         await self._cancel_selection_wait(event.unified_msg_origin)
         self._clear_llm_search(event.unified_msg_origin)
 
-    async def _send_llm_tool_failure(
-        self, event: AstrMessageEvent, message: str
-    ) -> None:
-        """End a terminal tool call after the plugin has shown its own error."""
-
-        try:
-            await event.send(event.plain_result(message))
-        except Exception:
-            logger.exception("listen-music failed to send LLM tool failure")
-
     async def _deliver_with_preface(
         self,
         event: AstrMessageEvent,
@@ -725,11 +836,8 @@ class ListenMusicPlugin(Star):
         """Overlap a user-visible preface with preparation of the selected media."""
 
         preparation = asyncio.create_task(
-            self._require_delivery().deliver(
-                candidate,
-                limits=_media_limits_for(action),
-            ),
-            name=f"listen-music-delivery-{candidate.candidate_id}",
+            self._deliver_candidate(candidate, action),
+            name=f"bili-player-delivery-{candidate.candidate_id}",
         )
         handed_to_sender = False
         try:
@@ -788,7 +896,7 @@ class ListenMusicPlugin(Star):
                 waiter=waiter,
                 selection=selection,
             ),
-            name=f"listen-music-selection-{snapshot.search_id}",
+            name=f"bili-player-selection-{snapshot.search_id}",
         )
         # Ensure SessionWaiter has registered before the result list can reach
         # a user able to reply immediately.
@@ -819,7 +927,7 @@ class ListenMusicPlugin(Star):
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("listen-music selection wait failed")
+            logger.exception("bili-player selection wait failed")
             if self._initialized:
                 await source_event.send(
                     source_event.plain_result("选歌流程已结束，请重新搜索。")
@@ -846,7 +954,13 @@ class ListenMusicPlugin(Star):
                 return
             parsed = _parse_selection(reply.message_str)
             if parsed is None:
-                await reply.send(reply.plain_result("请回复“序号”或“序号 下载”。"))
+                await reply.send(
+                    reply.plain_result(
+                        "请回复“序号”发视频、“序号 音频”播放音频，"
+                        "或“序号 音频下载”下载音频。"
+                    )
+                )
+                stop_wait = False
                 return
             position, action = parsed
             current = self._require_search().snapshot(
@@ -860,21 +974,18 @@ class ListenMusicPlugin(Star):
             if _selection_requires_download(candidate, action):
                 await reply.send(
                     reply.plain_result(
-                        f"第 {position} 首时长超过 15 分钟，仅可下载；"
-                        f"请回复“{position} 下载”。"
+                        f"第 {position} 首音频超过 15 分钟，无法直接播放；"
+                        f"请回复“{position}”发视频，或回复“{position} 音频下载”下载音频文件。"
                     )
                 )
                 stop_wait = False
                 return
-            result = await self._require_delivery().deliver(
-                candidate,
-                limits=_media_limits_for(action),
-            )
+            result = await self._deliver_candidate(candidate, action)
             await self._send_delivery(reply, result, action)
         except (DeliveryError, FfmpegUnavailableError, MediaError) as exc:
             await reply.send(reply.plain_result(str(exc)))
         except Exception:
-            logger.exception("listen-music interactive delivery failed")
+            logger.exception("bili-player interactive delivery failed")
             await reply.send(reply.plain_result("歌曲发送失败，请稍后重试。"))
         finally:
             if stop_wait:
@@ -916,7 +1027,7 @@ class ListenMusicPlugin(Star):
         except AccountError as exc:
             return error_response(str(exc), status_code=400)
         except Exception:
-            logger.exception("listen-music account login start failed")
+            logger.exception("bili-player account login start failed")
             return error_response("无法创建登录二维码", status_code=502)
 
     async def account_events(self, session_id: str):
@@ -989,6 +1100,24 @@ class ListenMusicPlugin(Star):
     async def _bilibili_profile(self, cookies: dict[str, str]) -> Any:
         return await self._require_bilibili().profile_from_cookies(cookies)
 
+    async def _deliver_candidate(
+        self,
+        candidate: BilibiliCandidate,
+        action: _DeliveryMode,
+    ) -> DeliveryResult:
+        """Prepare the transport matching the selected action."""
+
+        delivery = self._require_delivery()
+        if action is _DeliveryMode.VIDEO:
+            return await delivery.deliver_video(
+                candidate,
+                limits=_media_limits_for(action),
+            )
+        return await delivery.deliver(
+            candidate,
+            limits=_media_limits_for(action),
+        )
+
     async def _send_delivery(
         self,
         event: AstrMessageEvent,
@@ -1008,7 +1137,18 @@ class ListenMusicPlugin(Star):
                     return
                 except Exception:
                     logger.warning(
-                        "listen-music voice delivery failed on %s; falling back to file",
+                        "bili-player voice delivery failed on %s; falling back to file",
+                        platform_name,
+                    )
+
+            if action is _DeliveryMode.VIDEO:
+                try:
+                    component = Video.fromFileSystem(result.media.path)
+                    await event.send(MessageChain([component]))
+                    return
+                except Exception:
+                    logger.warning(
+                        "bili-player video delivery failed on %s; falling back to file",
                         platform_name,
                     )
 
@@ -1199,8 +1339,13 @@ class ListenMusicPlugin(Star):
 
 
 def _parse_selection(message: str) -> tuple[int, _DeliveryMode] | None:
-    """Parse the one user-facing grammar used by every selection flow."""
+    """Parse the one user-facing grammar used by every selection flow.
 
+    The public grammar is three commands: a bare number sends the video,
+    "序号 音频" plays audio, and "序号 音频下载" downloads the audio file.
+    The parser also tolerates natural synonyms such as "下载/听/播放" so an
+    intent-bearing reply is never misread as a bare video request.
+    """
     match = _SELECTION_RE.fullmatch(" ".join(message.split()))
     if match is None:
         return None
@@ -1213,7 +1358,7 @@ def _parse_selection(message: str) -> tuple[int, _DeliveryMode] | None:
     if len(actions) > 1:
         return None
     return _SELECTION_POSITION_MAP[raw_position], next(
-        iter(actions), _DeliveryMode.VOICE
+        iter(actions), _DeliveryMode.VIDEO
     )
 
 
@@ -1221,8 +1366,59 @@ def _is_selection_reply(message: str) -> bool:
     return message == "取消" or _parse_selection(message) is not None
 
 
+_DELIVERY_ACTIONS = {
+    "audio": _DeliveryMode.VOICE,
+    "video": _DeliveryMode.VIDEO,
+    "download": _DeliveryMode.DOWNLOAD,
+}
+
+
+def _resolve_delivery_action(text: object) -> _DeliveryMode:
+    """Map the structured LLM tool value onto one delivery form.
+
+    Both tool contracts already constrain this field to a small enum, so a
+    free-form intent guess would add behavior the schema does not promise.
+    Video is the default: only an explicit listen/play intent produces
+    directly playable audio, because a video file can be kept anyway.
+    """
+
+    return _DELIVERY_ACTIONS.get(
+        " ".join(str(text or "").split()).casefold(), _DeliveryMode.VIDEO
+    )
+
+
+def _delivery_mode_label(action: _DeliveryMode) -> str:
+    """Return the one user/LLM-visible noun for an already-prepared delivery."""
+
+    return {
+        _DeliveryMode.VOICE: "音频",
+        _DeliveryMode.VIDEO: "视频",
+        _DeliveryMode.DOWNLOAD: "音频文件",
+    }[action]
+
+
+def _requires_user_page_choice(snapshot: SearchSnapshot) -> bool:
+    """Require the user, not the LLM, to pick a page of an exact video reference."""
+
+    return bool(
+        getattr(snapshot, "by_video_reference", False) and len(snapshot.candidates) > 1
+    )
+
+
+def _command_error_label(usage: str) -> str:
+    """Keep command fallback errors consistent with the command the user sent."""
+
+    if usage.startswith("搜索视频") or usage.startswith("/我要看"):
+        return "搜索视频时发生错误"
+    return "搜索歌曲时发生错误"
+
+
 def _selection_mode_from_word(word: str) -> _DeliveryMode:
-    return _DeliveryMode.DOWNLOAD if word == "下载" else _DeliveryMode.VOICE
+    if word in ("下载", "音频下载"):
+        return _DeliveryMode.DOWNLOAD
+    if word == "视频":
+        return _DeliveryMode.VIDEO
+    return _DeliveryMode.VOICE
 
 
 def _selection_requires_download(
@@ -1247,6 +1443,8 @@ def _delivery_preface(
 
     if action is _DeliveryMode.VOICE:
         lead = f"给你播放《{candidate.display_title}》"
+    elif action is _DeliveryMode.VIDEO:
+        lead = f"给你发送《{candidate.display_title}》的视频"
     else:
         lead = f"给你发送《{candidate.display_title}》的音频文件"
 

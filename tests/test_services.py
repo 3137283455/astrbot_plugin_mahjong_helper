@@ -84,6 +84,7 @@ class FakeBilibili:
         self.video_calls: list[str] = []
         self.aid_calls: list[int] = []
         self.resolve_calls: list[tuple[str, int]] = []
+        self.video_resolve_calls: list[tuple[str, int]] = []
 
     async def search_videos(self, query: str, *, limit: int = 12):
         self.search_queries.append(query)
@@ -233,7 +234,8 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         snapshot = await search.search(session_id="chat-a", query="请播放 原版 晴天")
 
         self.assertEqual(snapshot.query, "请播放 原版 晴天")
-        self.assertEqual(bilibili.search_queries, ["晴天"])
+        self.assertFalse(snapshot.by_video_reference)
+        self.assertEqual(bilibili.search_queries, ["请播放 晴天"])
         self.assertEqual(snapshot.candidates[0].candidate_id, "BV1:1")
 
     async def test_search_keeps_long_audio_without_a_duration_limit(self) -> None:
@@ -246,7 +248,7 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item.candidate_id for item in snapshot.candidates], ["BVlong:1"]
         )
-        self.assertIn("(16:00，仅可下载)", format_search_results(snapshot))
+        self.assertIn("(16:00，音频仅可下载)", format_search_results(snapshot))
 
     async def test_search_excludes_long_audio_with_a_duration_limit(self) -> None:
         search, _, _, _ = await self._workflow(
@@ -364,6 +366,7 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(snapshot.query, "av170001")
+        self.assertTrue(snapshot.by_video_reference)
         self.assertEqual(bilibili.search_queries, [])
         self.assertEqual(bilibili.aid_calls, [170001])
         self.assertEqual(
@@ -371,34 +374,7 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
             ["BV1canonical:11", "BV1canonical:12"],
         )
 
-    async def test_exact_reference_applies_the_duration_limit(self) -> None:
-        exact_video = video(
-            "BV1canonical",
-            title="完整视频",
-            pages=(
-                Page(11, "P1 短内容", 269_000),
-                Page(12, "P2 长内容", 16 * 60 * 1000),
-            ),
-        )
-        search, _, bilibili, _ = await self._workflow(
-            (),
-            reference_videos={170001: exact_video},
-        )
-
-        snapshot = await search.search(
-            session_id="chat-a",
-            query="下载 av170001",
-            video_ref=BilibiliVideoRef(aid=170001),
-            max_duration_ms=15 * 60 * 1000,
-        )
-
-        self.assertEqual(bilibili.search_queries, [])
-        self.assertEqual(
-            [candidate.candidate_id for candidate in snapshot.candidates],
-            ["BV1canonical:11"],
-        )
-
-    async def test_exact_reference_failure_never_falls_back_to_keyword_search(
+    async def test_exact_bv_reference_never_falls_back_to_keyword_search(
         self,
     ) -> None:
         search, _, bilibili, _ = await self._workflow(
@@ -489,8 +465,9 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         rendered_for_user = format_search_results(snapshot)
         self.assertIn("详情页标题 - P2 歌曲页 (4:29)", rendered_for_user)
         self.assertNotIn("UP主", rendered_for_user)
-        self.assertIn("听歌：回复“序号”", rendered_for_user)
-        self.assertIn("下载：回复“序号 下载”", rendered_for_user)
+        self.assertIn("视频：回复“序号”", rendered_for_user)
+        self.assertIn("音频播放：回复“序号 音频”", rendered_for_user)
+        self.assertIn("音频下载：回复“序号 音频下载”", rendered_for_user)
         self.assertEqual(
             set(summary[0].__dataclass_fields__),
             {"position", "title", "duration", "search_title", "page_title"},
@@ -566,7 +543,9 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
             ["BVmulti:11"],
         )
 
-    async def test_multi_page_without_a_structured_title_is_skipped(self) -> None:
+    async def test_video_search_keeps_all_multi_page_results_without_song_filter(
+        self,
+    ) -> None:
         pages = (
             Page(10, "周杰伦访谈", 31_000),
             Page(11, "晴天", 269_000),
@@ -575,8 +554,12 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
             (video("BVmulti", title="周杰伦歌曲合集", pages=pages),)
         )
 
-        with self.assertRaisesRegex(MusicSearchError, "没有找到"):
-            await search.search(session_id="chat-a", query="晴天 周杰伦")
+        snapshot = await search.search(session_id="chat-a", query="晴天 周杰伦")
+
+        self.assertEqual(
+            [candidate.candidate_id for candidate in snapshot.candidates],
+            ["BVmulti:10", "BVmulti:11"],
+        )
 
     async def test_search_keeps_bilibili_order_for_simplified_traditional_names(
         self,
@@ -634,7 +617,7 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         snapshot = await search.search(session_id="chat-a", query="长音频")
         candidate = snapshot.candidates[0]
 
-        with self.assertRaisesRegex(DeliveryError, "序号 下载"):
+        with self.assertRaisesRegex(DeliveryError, "序号 音频下载"):
             await delivery.deliver(candidate)
         self.assertEqual(bilibili.resolve_calls, [])
 

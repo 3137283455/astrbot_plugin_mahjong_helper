@@ -87,6 +87,7 @@ class SearchSnapshotStoreTests(unittest.TestCase):
                 "candidates",
                 "created_at",
                 "expires_at",
+                "by_video_reference",
             },
         )
 

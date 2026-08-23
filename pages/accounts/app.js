@@ -241,7 +241,7 @@ async function boot() {
   }
   try {
     const context = await bridge.ready();
-    document.title = context?.pageTitle || "我想听歌！- 音乐账号";
+    document.title = context?.pageTitle || "bili播放器 - 音乐账号";
     bindActions();
     await refreshStatus();
   } catch (error) {

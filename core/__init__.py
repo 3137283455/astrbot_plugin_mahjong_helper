@@ -1,4 +1,4 @@
-"""Core values and pure services for the listen-music plugin."""
+"""Core values and pure services for the bili-player plugin."""
 
 from .models import (
     BilibiliCandidate,

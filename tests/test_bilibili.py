@@ -18,6 +18,7 @@ ensure_aiohttp()
 from core.bilibili import (
     BilibiliClient,
     BilibiliVideoRef,
+    _DashVideoTrack,
     derive_wbi_mixin_key,
     parse_bilibili_video_ref,
     sign_wbi_params,
@@ -166,6 +167,33 @@ class AidFixtureBilibiliClient(BilibiliClient):
 
 
 class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
+    def test_video_track_selection_stays_at_or_below_480p(self) -> None:
+        def track(stream_id: int, codecs: str) -> _DashVideoTrack:
+            return _DashVideoTrack(
+                stream_id=stream_id,
+                url=f"https://cdn.example.test/{stream_id}.m4s",
+                backup_urls=(),
+                bandwidth=1_000_000,
+                mime_type="video/mp4",
+                codecs=codecs,
+            )
+
+        selected = BilibiliClient._select_dash_video_track(
+            (
+                track(16, "avc1.64001f"),
+                track(32, "hev1.1.6.L120.90"),
+                track(32, "avc1.64001f"),
+                track(64, "avc1.640028"),
+            )
+        )
+        self.assertIsNotNone(selected)
+        self.assertEqual((selected.stream_id, selected.codecs), (32, "avc1.64001f"))
+
+        fallback = BilibiliClient._select_dash_video_track(
+            (track(64, "avc1.640028"), track(80, "avc1.64002a"))
+        )
+        self.assertEqual(fallback.stream_id, 64)
+
     def test_wbi_signing_fixture_filters_reserved_characters(self) -> None:
         key = derive_wbi_mixin_key(
             "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",

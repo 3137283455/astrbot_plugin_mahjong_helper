@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-from .models import LocalMedia, ResolvedAudio
+from .models import LocalMedia, ResolvedAudio, ResolvedVideo
 
 
 _MEBIBYTE = 1024 * 1024
@@ -70,6 +70,11 @@ VOICE_MEDIA_LIMITS = MediaLimits(
 )
 DOWNLOAD_MEDIA_LIMITS = MediaLimits(
     max_bytes=100 * _MEBIBYTE,
+    max_duration_ms=None,
+    download_timeout_seconds=900.0,
+)
+VIDEO_MEDIA_LIMITS = MediaLimits(
+    max_bytes=150 * _MEBIBYTE,
     max_duration_ms=None,
     download_timeout_seconds=900.0,
 )
@@ -216,7 +221,7 @@ class MediaStore:
 
             size_bytes = output_path.stat().st_size
             if size_bytes > limits.max_bytes:
-                raise _too_large_error(limits)
+                raise _too_large_error(limits, "音频")
 
             media = LocalMedia(
                 path=output_path,
@@ -240,6 +245,94 @@ class MediaStore:
         finally:
             if downloaded is not None:
                 _unlink_quietly(downloaded.path)
+            if output_path is not None:
+                _unlink_quietly(output_path)
+            if lease is not None and not handed_off:
+                await self._release_lease(lease)
+            if not preparation_finished:
+                await self._finish_preparation(task)
+
+    async def prepare_video(
+        self,
+        video: ResolvedVideo,
+        *,
+        filename_stem: str,
+        limits: MediaLimits = VIDEO_MEDIA_LIMITS,
+    ) -> LocalMedia:
+        """Materialize ``video`` as a unique, bounded temporary MP4 file.
+
+        A DASH video stream is downloaded together with its companion audio
+        stream and muxed by ffmpeg.  A progressive MP4 already contains both,
+        so it is used directly.
+        """
+
+        if not self._ffmpeg_path:
+            raise FfmpegUnavailableError("宿主机未安装 ffmpeg，暂时无法播放视频")
+
+        task = await self._begin_preparation()
+        token = secrets.token_hex(16)
+        downloaded_video: _DownloadedFile | None = None
+        downloaded_audio: _DownloadedFile | None = None
+        output_path: Path | None = None
+        lease: _DeliveryLease | None = None
+        handed_off = False
+        preparation_finished = False
+        try:
+            await self._delivery_slots.acquire()
+            lease = _DeliveryLease()
+            await self._ensure_open()
+            try:
+                downloaded_video = await asyncio.wait_for(
+                    self._download_video_with_backups(video, token, limits=limits),
+                    timeout=limits.download_timeout_seconds,
+                )
+                if video.needs_remux:
+                    if not video.audio_url:
+                        raise MediaError("视频缺少音频流，无法合成播放")
+                    downloaded_audio = await asyncio.wait_for(
+                        self._download_audio_track(video, token, limits=limits),
+                        timeout=limits.download_timeout_seconds,
+                    )
+            except asyncio.TimeoutError as exc:
+                raise MediaDownloadError("视频源下载超时") from exc
+
+            if video.needs_remux:
+                output_path = await self._remux_video_to_mp4(
+                    downloaded_video.path, downloaded_audio.path, token
+                )
+                mime_type = "video/mp4"
+            else:
+                output_path = downloaded_video.path
+                mime_type = "video/mp4"
+                downloaded_video = None
+
+            size_bytes = output_path.stat().st_size
+            if size_bytes > limits.max_bytes:
+                raise _too_large_error(limits, "视频")
+
+            media = LocalMedia(
+                path=output_path,
+                filename=_filename_for(filename_stem, mime_type),
+                mime_type=mime_type,
+                size_bytes=size_bytes,
+            )
+            await self._register_path(output_path, lease)
+            await self._finish_preparation(task)
+            preparation_finished = True
+            handed_off = True
+            output_path = None
+            return media
+        except asyncio.CancelledError:
+            raise
+        except MediaError:
+            raise
+        except Exception as exc:
+            raise MediaError("无法处理视频文件") from exc
+        finally:
+            if downloaded_video is not None:
+                _unlink_quietly(downloaded_video.path)
+            if downloaded_audio is not None:
+                _unlink_quietly(downloaded_audio.path)
             if output_path is not None:
                 _unlink_quietly(output_path)
             if lease is not None and not handed_off:
@@ -347,6 +440,7 @@ class MediaStore:
                     fallback_mime=audio.mime_type,
                     token=f"{token}-{index}",
                     limits=limits,
+                    noun="音频",
                 )
                 if not _is_audio_mime(
                     downloaded.mime_type, allow_video=audio.needs_remux
@@ -370,10 +464,11 @@ class MediaStore:
         fallback_mime: str | None,
         token: str,
         limits: MediaLimits,
+        noun: str = "音频",
     ) -> _DownloadedFile:
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise MediaDownloadError("音源返回了无效地址")
+            raise MediaDownloadError(f"{noun}源返回了无效地址")
 
         await asyncio.to_thread(self._media_dir.mkdir, parents=True, exist_ok=True)
         part_path = self._media_dir / f".{token}.part"
@@ -392,11 +487,11 @@ class MediaStore:
             ) as response:
                 status = int(getattr(response, "status", 0))
                 if status < 200 or status >= 300:
-                    raise MediaDownloadError(f"音源请求失败（HTTP {status}）")
+                    raise MediaDownloadError(f"{noun}源请求失败（HTTP {status}）")
                 response_headers = getattr(response, "headers", {})
                 content_length = _content_length(response_headers)
                 if content_length is not None and content_length > limits.max_bytes:
-                    raise _too_large_error(limits)
+                    raise _too_large_error(limits, noun)
 
                 size_bytes = 0
                 with part_path.open("wb") as target:
@@ -405,7 +500,7 @@ class MediaStore:
                             continue
                         size_bytes += len(chunk)
                         if size_bytes > limits.max_bytes:
-                            raise _too_large_error(limits)
+                            raise _too_large_error(limits, noun)
                         target.write(chunk)
         except asyncio.CancelledError:
             _unlink_quietly(part_path)
@@ -419,7 +514,7 @@ class MediaStore:
 
         try:
             if not part_path.is_file() or part_path.stat().st_size == 0:
-                raise MediaDownloadError("音源返回了空音频文件")
+                raise MediaDownloadError(f"{noun}源返回了空文件")
 
             mime_type = _media_mime(response_headers, fallback_mime)
             output_path = self._media_dir / f"{token}{_suffix_for_mime(mime_type)}"
@@ -490,6 +585,127 @@ class MediaStore:
             )
         return output_path
 
+    async def _download_video_with_backups(
+        self,
+        video: ResolvedVideo,
+        token: str,
+        *,
+        limits: MediaLimits,
+    ) -> _DownloadedFile:
+        last_error: Exception | None = None
+        for index, url in enumerate((video.video_url, *video.video_backup_urls)):
+            try:
+                downloaded = await self._download_one(
+                    url,
+                    headers=video.headers,
+                    fallback_mime=video.mime_type or "video/mp4",
+                    token=f"{token}-video-{index}",
+                    limits=limits,
+                    noun="视频",
+                )
+                if not _is_video_mime(downloaded.mime_type):
+                    _unlink_quietly(downloaded.path)
+                    raise MediaDownloadError("视频流返回了非视频内容")
+                return downloaded
+            except asyncio.CancelledError:
+                raise
+            except MediaError as exc:
+                last_error = exc
+        if isinstance(last_error, MediaTooLargeError):
+            raise last_error
+        raise MediaDownloadError("没有可下载的视频流") from last_error
+
+    async def _download_audio_track(
+        self,
+        video: ResolvedVideo,
+        token: str,
+        *,
+        limits: MediaLimits,
+    ) -> _DownloadedFile:
+        assert video.audio_url is not None
+        last_error: Exception | None = None
+        for index, url in enumerate((video.audio_url, *video.audio_backup_urls)):
+            try:
+                downloaded = await self._download_one(
+                    url,
+                    headers=video.headers,
+                    fallback_mime="audio/mp4",
+                    token=f"{token}-audio-{index}",
+                    limits=limits,
+                    noun="声音轨",
+                )
+                if not _is_audio_mime(downloaded.mime_type, allow_video=True):
+                    _unlink_quietly(downloaded.path)
+                    raise MediaDownloadError("声音轨返回了非音频内容")
+                return downloaded
+            except asyncio.CancelledError:
+                raise
+            except MediaError as exc:
+                last_error = exc
+        if isinstance(last_error, MediaTooLargeError):
+            raise last_error
+        raise MediaDownloadError("没有可下载的声音轨") from last_error
+
+    async def _remux_video_to_mp4(
+        self, video_path: Path, audio_path: Path, token: str
+    ) -> Path:
+        assert self._ffmpeg_path is not None
+        output_path = self._media_dir / f"{token}.mp4"
+        _unlink_quietly(output_path)
+        process: asyncio.subprocess.Process | None = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                self._ffmpeg_path,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(video_path),
+                "-i",
+                str(audio_path),
+                "-c:v",
+                "copy",
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(output_path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            if process is not None and process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await process.wait()
+                except ProcessLookupError:
+                    pass
+            _unlink_quietly(output_path)
+            raise
+        except OSError as exc:
+            _unlink_quietly(output_path)
+            raise MediaRemuxError("无法启动 ffmpeg") from exc
+        except Exception as exc:
+            _unlink_quietly(output_path)
+            raise MediaRemuxError("无法使用 ffmpeg 合成视频") from exc
+
+        if (
+            process.returncode != 0
+            or not output_path.is_file()
+            or output_path.stat().st_size == 0
+        ):
+            _unlink_quietly(output_path)
+            detail = stderr.decode("utf-8", "replace").strip()
+            raise MediaRemuxError(
+                "无法使用 ffmpeg 合成视频" + (f"：{detail[:240]}" if detail else "")
+            )
+        return output_path
+
 
 def _content_length(headers: Any) -> int | None:
     try:
@@ -519,9 +735,9 @@ def _duration_limit_message(limits: MediaLimits) -> str:
     return f"音频时长超过 {limit_text} 限制"
 
 
-def _too_large_error(limits: MediaLimits) -> MediaTooLargeError:
+def _too_large_error(limits: MediaLimits, noun: str) -> MediaTooLargeError:
     return MediaTooLargeError(
-        f"音频文件超过 {_format_byte_limit(limits.max_bytes)} 限制"
+        f"{noun}文件超过 {_format_byte_limit(limits.max_bytes)} 限制"
     )
 
 
@@ -560,6 +776,7 @@ def _suffix_for_mime(mime_type: str) -> str:
         "audio/opus": ".opus",
         "audio/wav": ".wav",
         "audio/x-wav": ".wav",
+        "video/mp4": ".mp4",
     }
     if mime_type in known:
         return known[mime_type]
@@ -571,6 +788,13 @@ def _is_audio_mime(mime_type: str, *, allow_video: bool) -> bool:
     if mime_type.startswith("audio/"):
         return True
     return allow_video and mime_type in {"video/mp4", "application/mp4"}
+
+
+def _is_video_mime(mime_type: str) -> bool:
+    return mime_type.startswith("video/") or mime_type in {
+        "application/mp4",
+        "application/octet-stream",
+    }
 
 
 def _filename_for(stem: str, mime_type: str) -> str:
@@ -599,5 +823,6 @@ __all__ = [
     "MediaRemuxError",
     "MediaStore",
     "MediaTooLargeError",
+    "VIDEO_MEDIA_LIMITS",
     "VOICE_MEDIA_LIMITS",
 ]

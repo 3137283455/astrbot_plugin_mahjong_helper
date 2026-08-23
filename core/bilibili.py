@@ -24,7 +24,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 import aiohttp
 
-from .models import ResolvedAudio
+from .models import ResolvedAudio, ResolvedVideo
 
 
 BILIBILI_WEB_ORIGIN = "https://www.bilibili.com"
@@ -42,6 +42,9 @@ _WBI_KEY_TTL_SECONDS = 10 * 60
 _QR_SESSION_TTL_SECONDS = 180
 _WBI_RETRY_CODES = frozenset({-403, -352})
 _TARGET_AUDIO_BANDWIDTH = 192_000
+# Bilibili quality id (qn) for 480P; video delivery prefers 480P or lower so a
+# phone-friendly file stays small and broadly playable.
+_TARGET_VIDEO_QUALITY = 32
 
 # Bilibili's documented mixin permutation.  Keeping it as data makes the
 # signing algorithm below easy to audit and test independently.
@@ -262,6 +265,16 @@ class _DashAudioTrack:
     backup_urls: tuple[str, ...]
     bandwidth: int
     mime_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DashVideoTrack:
+    stream_id: int
+    url: str
+    backup_urls: tuple[str, ...]
+    bandwidth: int
+    mime_type: str
+    codecs: str
 
 
 def derive_wbi_mixin_key(img_url: str, sub_url: str) -> str:
@@ -552,6 +565,63 @@ class BilibiliClient:
             )
         raise BilibiliError("Bilibili did not return a playable audio stream")
 
+    async def resolve_video(self, bvid: str, cid: int) -> ResolvedVideo:
+        """Resolve one Bilibili page to a 480P-or-lower video stream.
+
+        DASH video is tried first with a companion DASH audio track so the page
+        can be muxed into a single MP4.  When Bilibili does not expose DASH
+        video, a single progressive MP4 segment is kept as a compatibility
+        fallback (``needs_remux`` stays false because it already contains both
+        picture and sound).
+        """
+        normalized_bvid = _normalise_bvid(bvid)
+        if cid <= 0:
+            raise ValueError("cid must be positive")
+
+        data = await self._wbi_data(
+            _PLAY_URL,
+            {
+                "bvid": normalized_bvid,
+                "cid": cid,
+                "qn": _TARGET_VIDEO_QUALITY,
+                "fnval": 16,
+                "fnver": 0,
+                "fourk": 0,
+                "platform": "pc",
+            },
+        )
+        duration_ms = _to_int(data.get("timelength")) or None
+        headers = await self.stream_headers(normalized_bvid)
+        dash = data.get("dash")
+        video_track = self._select_dash_video_track(self._dash_video_tracks(dash))
+        if video_track is not None:
+            audio_track = self._select_dash_track(self._dash_audio_tracks(dash))
+            return ResolvedVideo(
+                video_url=video_track.url,
+                video_backup_urls=video_track.backup_urls,
+                audio_url=audio_track.url if audio_track is not None else None,
+                audio_backup_urls=(
+                    audio_track.backup_urls if audio_track is not None else ()
+                ),
+                headers=headers,
+                mime_type=video_track.mime_type or "video/mp4",
+                duration_ms=duration_ms,
+                needs_remux=True,
+            )
+
+        progressive = self._single_progressive_track(data.get("durl"))
+        if progressive is not None:
+            url, backup_urls = progressive
+            return ResolvedVideo(
+                video_url=url,
+                video_backup_urls=backup_urls,
+                headers=headers,
+                mime_type="video/mp4",
+                duration_ms=duration_ms,
+                needs_remux=False,
+            )
+        raise BilibiliError("Bilibili did not return a playable video stream")
+
     async def stream_headers(self, bvid: str) -> dict[str, str]:
         """Build headers required when a downstream downloader fetches a stream."""
         normalized_bvid = _normalise_bvid(bvid)
@@ -839,6 +909,76 @@ class BilibiliClient:
             durl[0].get("backup_url") or durl[0].get("backupUrl"),
         )
         return (urls[0], urls[1:]) if urls else None
+
+    @staticmethod
+    def _dash_video_tracks(dash: Any) -> tuple[_DashVideoTrack, ...]:
+        if not isinstance(dash, Mapping):
+            return ()
+        raw_tracks = dash.get("video")
+        if not isinstance(raw_tracks, list):
+            return ()
+        tracks: list[_DashVideoTrack] = []
+        for raw_track in raw_tracks:
+            if not isinstance(raw_track, Mapping):
+                continue
+            urls = _unique_urls(
+                str(raw_track.get("baseUrl") or raw_track.get("base_url") or ""),
+                raw_track.get("backupUrl") or raw_track.get("backup_url"),
+            )
+            if not urls:
+                continue
+            tracks.append(
+                _DashVideoTrack(
+                    stream_id=_to_int(raw_track.get("id"), 0),
+                    url=urls[0],
+                    backup_urls=urls[1:],
+                    bandwidth=max(0, _to_int(raw_track.get("bandwidth"))),
+                    mime_type=str(
+                        raw_track.get("mimeType")
+                        or raw_track.get("mime_type")
+                        or "video/mp4"
+                    ),
+                    codecs=str(raw_track.get("codecs") or raw_track.get("codec") or ""),
+                )
+            )
+        return tuple(tracks)
+
+    @staticmethod
+    def _select_dash_video_track(
+        tracks: tuple[_DashVideoTrack, ...],
+    ) -> _DashVideoTrack | None:
+        if not tracks:
+            return None
+        below_target = [
+            track for track in tracks if track.stream_id <= _TARGET_VIDEO_QUALITY
+        ]
+        pool = below_target if below_target else tracks
+        best_id = (
+            max(track.stream_id for track in pool)
+            if below_target
+            else min(track.stream_id for track in pool)
+        )
+        same_quality = [track for track in pool if track.stream_id == best_id]
+        avc = [track for track in same_quality if BilibiliClient._is_avc_codec(track)]
+        if avc:
+            return max(avc, key=lambda track: (track.bandwidth, track.stream_id))
+        with_codec = [track for track in same_quality if track.codecs]
+        if with_codec:
+            return max(with_codec, key=lambda track: (track.bandwidth, track.stream_id))
+        return max(same_quality, key=lambda track: (track.bandwidth, track.stream_id))
+
+    @staticmethod
+    def _is_avc_codec(track: _DashVideoTrack) -> bool:
+        """Prefer AVC (H.264) over HEVC for broad player compatibility."""
+        codecs = track.codecs.lower()
+        if "avc" in codecs:
+            return True
+        if "hev" in codecs or "hvc" in codecs:
+            return False
+        mime = track.mime_type.lower()
+        if "avc" in mime:
+            return True
+        return mime == "video/mp4" and not codecs
 
     def _discard_expired_qr_sessions(self, now: float) -> None:
         for token, pending in tuple(self._qr_sessions.items()):

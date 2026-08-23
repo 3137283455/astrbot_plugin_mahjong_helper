@@ -356,7 +356,7 @@ class AccountService:
             self._sessions[session.session_id] = session
             self._active_session_id = session.session_id
             session.task = asyncio.create_task(
-                self._poll_login(session), name="listen-music-bilibili-qr-login"
+                self._poll_login(session), name="bili-player-bilibili-qr-login"
             )
             return self._session_payload(session)
 
@@ -450,6 +450,11 @@ class AccountService:
                     )
                     try:
                         async with self._lock:
+                            if (
+                                self._active_session_id != session.session_id
+                                or session.state in _TERMINAL_STATES
+                            ):
+                                return
                             await self._store.save(record)
                             self._credentials = record
                     except CredentialStoreError:

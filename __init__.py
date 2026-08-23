@@ -1,1 +1,1 @@
-"""AstrBot listen-music plugin package."""
+"""AstrBot bili-player plugin package."""

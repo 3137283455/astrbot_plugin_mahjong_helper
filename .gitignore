@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+
+# 本地环境笔记，不属于插件发布内容
+DSH_ANCHORED_STANDARD_NOTE.md
+.DS_Store
