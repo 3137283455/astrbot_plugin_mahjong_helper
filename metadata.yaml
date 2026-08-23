@@ -5,4 +5,4 @@ short_desc: bili播放器！用 Bilibili 找歌、看视频并发送可播放媒
 version: 0.1.5
 astrbot_version: ">=4.26,<5"
 author: 57Darling02
-repo: https://github.com/57Darling02/astrbot_plugin_listen_music
+repo: https://github.com/57Darling02/astrbot_plugin_bili_player

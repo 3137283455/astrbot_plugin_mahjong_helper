@@ -71,7 +71,7 @@ Bilibili 账号不是搜索和基础播放的前提。未登录时仍会匿名�
 在 AstrBot WebUI 中通过仓库地址安装：
 
 ```text
-https://github.com/57Darling02/astrbot_plugin_listen_music
+https://github.com/57Darling02/astrbot_plugin_bili_player
 ```
 
 通过仓库或插件市场安装后，AstrBot 会记录安装来源，WebUI 可以检查更新。已有手动复制目录或 ZIP 安装的实例，需要重新绑定该仓库来源，或按仓库方式重装一次。

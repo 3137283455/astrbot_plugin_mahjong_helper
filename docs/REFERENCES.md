@@ -42,4 +42,4 @@ NeriPlayer 是历史设计参考，帮助本项目厘清视频与具体分 P 的
 | Bilibili 请求、WBI、DASH、备用 URL | 本项目 `core/bilibili.py` 与 `core/media.py` | 单源、具体 `bvid:cid`、失败不换歌 |
 | AstrBot 命令、LLM、等待、媒体发送、WebUI | `astrbot_plugin_music` 的 AstrBot 使用方式；本项目 `main.py` 测试 | 维持当前小边界，不带回旧架构 |
 
-本项目仓库为 [57Darling02/astrbot_plugin_listen_music](https://github.com/57Darling02/astrbot_plugin_listen_music)。上面两个链接是参考项目的确切 GitHub 地址，不是本项目的镜像或依赖。
+本项目仓库为 [57Darling02/astrbot_plugin_bili_player](https://github.com/57Darling02/astrbot_plugin_bili_player)。上面两个链接是参考项目的确切 GitHub 地址，不是本项目的镜像或依赖。
