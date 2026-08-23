@@ -768,6 +768,9 @@ class ListenMusicPlugin(Star):
                 await event.send(
                     event.plain_result(self._format_selection_results(snapshot))
                 )
+                # AstrBot ends the agent loop only for a None tool result.
+                # Safe here: event.send() either succeeded or raised into the
+                # error path below.
                 return None
             if not self._consume_llm_search(session_id, lease):
                 raise _StaleLlmDelivery("search lease was replaced before delivery")
@@ -780,6 +783,8 @@ class ListenMusicPlugin(Star):
                 candidate=candidate,
                 action=delivery_action,
             )
+            # None is the only AstrBot signal for "already sent; end loop".
+            # All failure paths above return an error string instead.
             return None
         except _StaleLlmDelivery as exc:
             # The originating user request has already moved on.  Do not leak
