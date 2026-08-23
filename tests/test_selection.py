@@ -88,6 +88,7 @@ class SearchSnapshotStoreTests(unittest.TestCase):
                 "created_at",
                 "expires_at",
                 "by_video_reference",
+                "fuzzy_query",
             },
         )
 

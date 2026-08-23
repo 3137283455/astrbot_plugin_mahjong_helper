@@ -216,6 +216,7 @@ class SearchSnapshot:
     created_at: float
     expires_at: float
     by_video_reference: bool = False
+    fuzzy_query: bool = False
 
     def __post_init__(self) -> None:
         search_id = self.search_id.strip()
@@ -243,6 +244,7 @@ class SearchSnapshot:
         object.__setattr__(self, "query", query)
         object.__setattr__(self, "candidates", candidates)
         object.__setattr__(self, "by_video_reference", bool(self.by_video_reference))
+        object.__setattr__(self, "fuzzy_query", bool(self.fuzzy_query))
 
     def candidate(self, candidate_id: str) -> BilibiliCandidate | None:
         """Return a candidate only when its opaque ID is in this result."""

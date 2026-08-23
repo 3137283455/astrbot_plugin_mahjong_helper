@@ -57,6 +57,8 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 
 精确视频会列出全部可交付分 P：
 
+一条消息混入多个 AV/BV 时，插件不会猜测任务边界，而是把整段消息作为一个模糊关键词搜索，并强制展示候选让你自行选择。
+
 ```text
 搜索视频 BV1xxxxxxxxxx
 搜索歌曲 https://www.bilibili.com/video/BV1xxxxxxxxxx/
@@ -90,7 +92,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 | 无法生成二维码 | 安装 `qrcode[pil]`，检查网络和管理员权限 |
 | 能搜索不能发送 | 检查 ffmpeg、适配器文件上限、Bilibili 播放权限 |
 | WebUI 不提示更新 | 确认从仓库安装，且 `metadata.yaml.version` 已递增 |
-| 一条消息里多个请求未全部处理 | 插件会拒绝批量 AV/BV；请让用户逐条发送，不要把连续命令交给防抖插件合并 |
+| 一条消息里多个请求混在一起 | 插件会把整段拼接消息当作一个模糊关键词搜索，并强制展示候选让用户自选；若结果不对，请让用户逐条发送 |
 
 ## 开发者
 

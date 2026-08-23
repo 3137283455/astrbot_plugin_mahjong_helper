@@ -215,6 +215,7 @@ def _llm_candidate_result(snapshot: SearchSnapshot) -> str:
         {
             "status": "candidates",
             "search_id": snapshot.search_id,
+            "requires_user_choice": _requires_user_page_choice(snapshot),
             "candidates": [
                 {
                     "position": candidate.position,
@@ -643,11 +644,13 @@ class ListenMusicPlugin(Star):
         session_id = event.unified_msg_origin
         self._clear_llm_search(session_id)
         await self._cancel_selection_wait(session_id)
+        fuzzy_query = len(parse_bilibili_video_refs(query)) > 1
         try:
             snapshot = await self._require_search().search(
                 session_id=session_id,
                 query=query,
-                video_ref=parse_bilibili_video_ref(query),
+                video_ref=None if fuzzy_query else parse_bilibili_video_ref(query),
+                fuzzy_query=fuzzy_query,
             )
         except MusicSearchError as exc:
             yield event.plain_result(str(exc))
@@ -681,10 +684,7 @@ class ListenMusicPlugin(Star):
         lease: _LlmSearch | None = None
         try:
             message_refs = parse_bilibili_video_refs(event.message_str)
-            if len(message_refs) > 1:
-                return _tool_error(
-                    "这条消息包含多个 AV/BV 视频请求；请让用户逐条发送。",
-                )
+            fuzzy_query = len(message_refs) > 1
             lease = self._begin_llm_search(session_id)
             await self._cancel_selection_wait(session_id)
             if not self._is_current_llm_search(session_id, lease):
@@ -695,24 +695,29 @@ class ListenMusicPlugin(Star):
                 version=version,
             )
             delivery_key = _resolve_delivery_key(delivery, settings)
-            # 请求本身是 AV/BV 号时走精确详情（关键词搜索对 BV 召回不可靠）；
-            # 普通作品名才走关键词。语义提取仍由前置 LLM 负责。
-            video_ref = parse_bilibili_video_ref(
-                music.title
-            ) or parse_bilibili_video_ref(event.message_str)
             search_kwargs: dict[str, object] = {
                 "session_id": session_id,
                 "query": music.query,
-                # 音频意图才做歌名/分P语义筛选；视频按平台搜索结果交付。
-                "song_title": (
-                    music.title
-                    if delivery_key in {"audio", "download"} and video_ref is None
-                    else None
-                ),
+                "song_title": None,
+                "fuzzy_query": False,
             }
-            if video_ref is not None:
-                # 精确视频保留全部分 P，由用户选择。
-                search_kwargs["video_ref"] = video_ref
+            if fuzzy_query:
+                # 防抖插件把多个命令拼成了一段文本：不猜任务边界，
+                # 整段作为模糊关键词交给 Bilibili，并强制用户自行选择。
+                search_kwargs["query"] = event.message_str.strip()
+                search_kwargs["fuzzy_query"] = True
+            else:
+                # 请求本身是 AV/BV 号时走精确详情（关键词搜索对 BV 召回不可靠）；
+                # 普通作品名才走关键词。语义提取仍由前置 LLM 负责。
+                video_ref = parse_bilibili_video_ref(
+                    music.title
+                ) or parse_bilibili_video_ref(event.message_str)
+                if video_ref is not None:
+                    # 精确视频保留全部分 P，由用户选择。
+                    search_kwargs["video_ref"] = video_ref
+                elif delivery_key in {"audio", "download"}:
+                    # 只有可信的普通音频意图才做歌名/分P语义筛选。
+                    search_kwargs["song_title"] = music.title
             snapshot = await self._require_search().search(**search_kwargs)
 
             if not self._complete_llm_search(session_id, lease, snapshot, delivery_key):
@@ -1382,6 +1387,7 @@ class ListenMusicPlugin(Star):
             video_enabled=settings.video_allowed,
             audio_enabled=settings.audio_allowed,
             default_audio_form=settings.preferred_audio_form,
+            fuzzy_query=bool(getattr(snapshot, "fuzzy_query", False)),
         )
 
 
@@ -1493,10 +1499,14 @@ def _action_for_delivery_key(
 
 
 def _requires_user_page_choice(snapshot: SearchSnapshot) -> bool:
-    """Require the user, not the LLM, to pick a page of an exact video reference."""
+    """Require the user when the snapshot is an exact multi-page video or a fuzzy query."""
 
     return bool(
-        getattr(snapshot, "by_video_reference", False) and len(snapshot.candidates) > 1
+        getattr(snapshot, "fuzzy_query", False)
+        or (
+            getattr(snapshot, "by_video_reference", False)
+            and len(snapshot.candidates) > 1
+        )
     )
 
 

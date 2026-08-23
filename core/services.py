@@ -101,6 +101,7 @@ class SearchService:
         song_title: str | None = None,
         video_ref: BilibiliVideoRef | None = None,
         max_duration_ms: int | None = None,
+        fuzzy_query: bool = False,
     ) -> SearchSnapshot:
         """Search Bilibili and retain a session-bound candidate set.
 
@@ -145,6 +146,7 @@ class SearchService:
             query=requested_query,
             candidates=candidates,
             by_video_reference=video_ref is not None,
+            fuzzy_query=fuzzy_query,
         )
 
     async def _filtered_candidates(
@@ -348,10 +350,17 @@ def format_search_results(
     video_enabled: bool = True,
     audio_enabled: bool = True,
     default_audio_form: str = "voice",
+    fuzzy_query: bool = False,
 ) -> str:
     """Produce the user-visible catalogue for one configured action surface."""
 
-    lines = [f"Bilibili 搜索结果：{snapshot.query}"]
+    if fuzzy_query:
+        lines = [
+            f"Bilibili 搜索结果（按拼接后的消息搜索）：{snapshot.query}",
+            "结果可能不精确；请自行选择，或重新逐条发送。",
+        ]
+    else:
+        lines = [f"Bilibili 搜索结果：{snapshot.query}"]
     for position, candidate in enumerate(snapshot.candidates, start=1):
         download_only = (
             "，音频仅可下载"

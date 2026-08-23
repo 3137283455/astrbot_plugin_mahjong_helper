@@ -43,6 +43,7 @@ class SearchSnapshotStore:
         query: str,
         candidates: Sequence[BilibiliCandidate],
         by_video_reference: bool = False,
+        fuzzy_query: bool = False,
     ) -> SearchSnapshot:
         """Store candidates and return an opaque ID that cannot cross sessions."""
 
@@ -59,6 +60,7 @@ class SearchSnapshotStore:
             created_at=now,
             expires_at=now + self._ttl_seconds,
             by_video_reference=by_video_reference,
+            fuzzy_query=fuzzy_query,
         )
         self._snapshots[search_id] = snapshot
         return snapshot

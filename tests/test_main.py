@@ -272,6 +272,8 @@ class _Snapshot:
         self.candidates = candidates
         self.session_id = "chat-a"
         self.expires_at = float("inf")
+        self.by_video_reference = False
+        self.fuzzy_query = False
 
     def candidate_at(self, position: int) -> _Candidate | None:
         if position < 1 or position > len(self.candidates):
@@ -434,6 +436,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": "chat-a",
                     "query": "一路生花 温奕心",
                     "song_title": None,
+                    "fuzzy_query": False,
                 }
             ],
         )
@@ -708,15 +711,19 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             {"name": "fixture.m4a", "file": "/tmp/fixture.m4a"},
         )
 
-    async def test_find_rejects_a_debounced_message_with_multiple_video_refs(
+    async def test_find_uses_a_debounced_message_as_one_fuzzy_query(
         self,
     ) -> None:
+        snapshot = _Snapshot((_Candidate("BV1fixture:1", "候选"),))
+        snapshot.fuzzy_query = True
+
         class FakeSearch:
-            async def search(self, **_kwargs):
-                raise AssertionError("multi-ref input must not reach Bilibili search")
+            async def search(self, **kwargs):
+                self.calls = kwargs
+                return snapshot
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)
-        plugin._search = FakeSearch()
+        plugin._search = search = FakeSearch()
         _configure_selection_waits(plugin)
         event = _SendingEvent(
             "chat-a",
@@ -727,9 +734,38 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             event, "BV1Q541167Qg", delivery="video"
         )
 
-        self.assertEqual(json.loads(result)["status"], "error")
-        self.assertIn("逐条发送", json.loads(result)["message"])
-        self.assertEqual(plugin._llm_searches, {})
+        payload = json.loads(result)
+        self.assertEqual(payload["status"], "candidates")
+        self.assertTrue(payload["requires_user_choice"])
+        self.assertTrue(search.calls["fuzzy_query"])
+        self.assertNotIn("video_ref", search.calls)
+        self.assertEqual(search.calls["query"], event.message_str)
+        self.assertIsNone(search.calls["song_title"])
+
+    async def test_fuzzy_query_forces_manual_selection_instead_of_first_video(
+        self,
+    ) -> None:
+        snapshot = _Snapshot((_Candidate("BV1fixture:1", "候选一"),))
+        snapshot.fuzzy_query = True
+
+        class FailingDelivery:
+            async def deliver_video(self, *_args, **_kwargs):
+                raise AssertionError("fuzzy query must not auto-deliver the first hit")
+
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        plugin._search = types.SimpleNamespace(snapshot=lambda **_kwargs: snapshot)
+        plugin._delivery = FailingDelivery()
+        plugin._media = types.SimpleNamespace()
+        _configure_selection_waits(plugin)
+        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="video")
+        event = _SendingEvent("chat-a", "拼接请求")
+
+        result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
+
+        self.assertIsNone(result)
+        self.assertIn("按拼接后的消息搜索", event.sent[0][1])
+        self.assertIn("chat-a", plugin._selection_waits)
+        await plugin._cancel_selection_wait("chat-a")
 
     async def test_find_rejects_a_second_search_in_the_same_turn(self) -> None:
         class FakeSearch:

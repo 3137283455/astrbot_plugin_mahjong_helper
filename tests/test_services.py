@@ -517,8 +517,23 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         assert owned is not None
         self.assertEqual(owned.candidates, snapshot.candidates)
         self.assertEqual(owned.query, "晴天")
+        self.assertFalse(owned.fuzzy_query)
         self.assertIsNone(
             search.snapshot(search_id=snapshot.search_id, session_id="chat-b")
+        )
+
+    async def test_fuzzy_query_flag_is_kept_on_the_snapshot(self) -> None:
+        search, _, _, _ = await self._workflow((video("BV1"),))
+
+        snapshot = await search.search(
+            session_id="chat-a",
+            query="BV1A BV1B",
+            fuzzy_query=True,
+        )
+
+        self.assertTrue(snapshot.fuzzy_query)
+        self.assertIn(
+            "按拼接后的消息搜索", format_search_results(snapshot, fuzzy_query=True)
         )
 
     async def test_multi_page_identity_uses_the_song_title_not_artist_terms(
