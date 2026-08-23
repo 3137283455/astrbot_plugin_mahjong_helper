@@ -342,27 +342,55 @@ class DeliveryService:
         return DeliveryResult(candidate=candidate, media=media)
 
 
-def format_search_results(snapshot: SearchSnapshot) -> str:
-    """Produce the only user-visible catalogue rendering used by command flow."""
+def format_search_results(
+    snapshot: SearchSnapshot,
+    *,
+    video_enabled: bool = True,
+    audio_enabled: bool = True,
+    default_audio_form: str = "voice",
+) -> str:
+    """Produce the user-visible catalogue for one configured action surface."""
 
     lines = [f"Bilibili 搜索结果：{snapshot.query}"]
     for position, candidate in enumerate(snapshot.candidates, start=1):
         download_only = (
             "，音频仅可下载"
-            if _duration_exceeds_limit(candidate.duration_ms, VOICE_MEDIA_LIMITS)
+            if audio_enabled
+            and default_audio_form == "voice"
+            and _duration_exceeds_limit(candidate.duration_ms, VOICE_MEDIA_LIMITS)
             else ""
         )
         lines.append(
             f"{position}. {candidate.display_title} "
             f"({_duration_text(candidate.duration_ms)}{download_only})"
         )
-    lines.extend(
-        (
-            "视频：回复“序号”",
-            "音频播放：回复“序号 音频”",
-            "音频下载：回复“序号 音频下载”",
-        )
-    )
+
+    if video_enabled:
+        if audio_enabled:
+            lines.append("视频：回复“序号”")
+        else:
+            lines.append("发送视频：回复“序号”")
+    if audio_enabled:
+        if default_audio_form == "file":
+            lines.append(
+                "发送音频文件：回复“序号”"
+                if not video_enabled
+                else "音频文件：回复“序号 音频”"
+            )
+        elif video_enabled:
+            lines.extend(
+                (
+                    "音频播放：回复“序号 音频”",
+                    "音频下载：回复“序号 音频下载”",
+                )
+            )
+        else:
+            lines.extend(
+                (
+                    "播放音频：回复“序号”或“序号 音频”",
+                    "音频下载：回复“序号 音频下载”",
+                )
+            )
 
     return "\n".join(lines)
 

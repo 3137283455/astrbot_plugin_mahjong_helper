@@ -203,6 +203,9 @@ def _install_astrbot_doubles() -> None:
 ensure_aiohttp()
 _install_astrbot_doubles()
 listen_main = importlib.import_module("astrbot_plugin_bili_player.main")
+core_settings = importlib.import_module("astrbot_plugin_bili_player.core.settings")
+AudioFormPreference = core_settings.AudioFormPreference
+MediaPreference = core_settings.MediaPreference
 
 
 class _Event(listen_main.AstrMessageEvent):
@@ -281,11 +284,14 @@ def _configure_selection_waits(plugin: object) -> None:
     plugin._llm_searches = {}
     plugin._selection_lock = asyncio.Lock()
     plugin._initialized = True
+    plugin._settings = listen_main.PluginSettings()
 
 
-def _set_llm_search(plugin: object, session_id: str, search_id: str) -> None:
+def _set_llm_search(
+    plugin: object, session_id: str, search_id: str, delivery: str = "video"
+) -> None:
     plugin._llm_searches[session_id] = listen_main._LlmSearch(
-        expires_at=float("inf"), search_id=search_id
+        expires_at=float("inf"), search_id=search_id, delivery=delivery
     )
 
 
@@ -319,7 +325,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deliver_tool.name, "deliver_media")
         self.assertEqual(
             set(deliver_tool.parameters["properties"]),
-            {"search_id", "position", "note", "delivery", "let_user_choose"},
+            {"search_id", "position", "note", "let_user_choose"},
         )
         self.assertEqual(deliver_tool.parameters["required"], ["search_id", "position"])
         self.assertEqual(
@@ -339,18 +345,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return '{"status":"candidates"}'
 
             async def deliver_media_for_llm(
-                self, event, search_id, position, *, note, delivery, let_user_choose
+                self, event, search_id, position, *, note, let_user_choose
             ):
                 calls.append(
-                    (
-                        "deliver",
-                        event,
-                        search_id,
-                        position,
-                        note,
-                        delivery,
-                        let_user_choose,
-                    )
+                    ("deliver", event, search_id, position, note, let_user_choose)
                 )
                 return None
 
@@ -378,7 +376,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             calls,
             [
                 ("find", event, "晴天", "周杰伦", "原唱", None),
-                ("deliver", event, "opaque-search", 2, "午后听一听", None, False),
+                ("deliver", event, "opaque-search", 2, "午后听一听", False),
             ],
         )
 
@@ -436,7 +434,6 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                     "session_id": "chat-a",
                     "query": "一路生花 温奕心",
                     "song_title": None,
-                    "max_duration_ms": None,
                 }
             ],
         )
@@ -592,7 +589,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         plugin._delivery = delivery = FakeDelivery()
         plugin._media = FakeMedia()
         plugin._llm_searches = {}
-        _set_llm_search(plugin, "chat-a", snapshot.search_id)
+        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="audio")
         event = _SendingEvent("chat-a")
 
         tool_result = await plugin.deliver_media_for_llm(
@@ -600,7 +597,6 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             snapshot.search_id,
             1,
             note="愿你接下来的路一路生花",
-            delivery="audio",
         )
 
         self.assertEqual(json.loads(tool_result)["status"], "delivered")
@@ -695,12 +691,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         plugin._media = FakeMedia()
         _configure_selection_waits(plugin)
-        _set_llm_search(plugin, "chat-a", snapshot.search_id)
+        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="audio")
         event = _SendingEvent("chat-a")
 
-        result = await plugin.deliver_media_for_llm(
-            event, snapshot.search_id, 1, delivery="audio"
-        )
+        result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
 
         self.assertEqual(
             json.loads(result),
@@ -720,7 +714,9 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             {"name": "fixture.m4a", "file": "/tmp/fixture.m4a"},
         )
 
-    async def test_find_with_audio_intent_applies_voice_duration_limit(self) -> None:
+    async def test_find_with_audio_intent_keeps_long_candidates_for_file_fallback(
+        self,
+    ) -> None:
         class FakeSearch:
             async def search(self, **kwargs):
                 self.calls = kwargs
@@ -733,10 +729,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         await plugin.find_in_bilibili_for_llm(event, "晴天", delivery="audio")
 
-        self.assertEqual(
-            search.calls["max_duration_ms"],
-            listen_main.VOICE_MEDIA_LIMITS.max_duration_ms,
-        )
+        self.assertNotIn("max_duration_ms", search.calls)
         self.assertEqual(search.calls["song_title"], "晴天")
 
     async def test_find_with_video_intent_skips_music_semantic_filter(self) -> None:
@@ -753,7 +746,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         await plugin.find_in_bilibili_for_llm(event, "晴天", delivery="video")
 
         self.assertIsNone(search.calls["song_title"])
-        self.assertIsNone(search.calls["max_duration_ms"])
+        self.assertNotIn("max_duration_ms", search.calls)
 
     async def test_find_with_exact_reference_keeps_all_pages_for_user_choice(
         self,
@@ -771,7 +764,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         await plugin.find_in_bilibili_for_llm(event, "BV1Q541167Qg", delivery="audio")
 
         self.assertEqual(search.calls["video_ref"].bvid, "BV1Q541167Qg")
-        self.assertIsNone(search.calls["max_duration_ms"])
+        self.assertNotIn("max_duration_ms", search.calls)
         self.assertIsNone(search.calls["song_title"])
 
     async def test_deliver_exact_multi_page_reference_always_shows_candidates(
@@ -804,7 +797,6 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             event,
             snapshot.search_id,
             1,
-            delivery="video",
             let_user_choose=False,
         )
 
@@ -865,15 +857,112 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("chat-a", plugin._selection_waits)
         await plugin._cancel_selection_wait("chat-a")
 
-    def test_structured_delivery_values_map_onto_one_form(self) -> None:
+    def test_structured_delivery_values_resolve_against_settings(self) -> None:
+        settings = listen_main.PluginSettings()
         expected = listen_main._DeliveryMode
-        self.assertEqual(listen_main._resolve_delivery_action("audio"), expected.VOICE)
-        self.assertEqual(listen_main._resolve_delivery_action("video"), expected.VIDEO)
+
+        self.assertEqual(listen_main._resolve_delivery_key("auto", settings), "video")
+        self.assertEqual(listen_main._resolve_delivery_key("video", settings), "video")
+        self.assertEqual(listen_main._resolve_delivery_key("audio", settings), "audio")
         self.assertEqual(
-            listen_main._resolve_delivery_action("download"), expected.DOWNLOAD
+            listen_main._resolve_delivery_key("download", settings), "download"
         )
-        self.assertEqual(listen_main._resolve_delivery_action(None), expected.VIDEO)
-        self.assertEqual(listen_main._resolve_delivery_action(""), expected.VIDEO)
+        self.assertEqual(
+            listen_main._action_for_delivery_key("audio", settings), expected.VOICE
+        )
+        self.assertEqual(
+            listen_main._action_for_delivery_key("video", settings), expected.VIDEO
+        )
+        self.assertEqual(
+            listen_main._action_for_delivery_key("download", settings),
+            expected.DOWNLOAD,
+        )
+
+    def test_settings_defaults_and_auto_media_resolution(self) -> None:
+        settings = listen_main.PluginSettings()
+        self.assertTrue(settings.video_allowed)
+        self.assertTrue(settings.audio_allowed)
+        self.assertEqual(settings.default_media, "video")
+        self.assertEqual(settings.preferred_audio_form, "voice")
+
+        audio_first = listen_main.PluginSettings(
+            media_preference=MediaPreference.AUDIO_FIRST,
+            audio_form_preference=AudioFormPreference.FILE_FIRST,
+        )
+        self.assertEqual(
+            listen_main._resolve_delivery_key("auto", audio_first), "audio"
+        )
+        self.assertEqual(
+            listen_main._action_for_delivery_key("audio", audio_first),
+            listen_main._DeliveryMode.DOWNLOAD,
+        )
+
+        audio_only = listen_main.PluginSettings(
+            media_preference=MediaPreference.AUDIO_ONLY
+        )
+        with self.assertRaisesRegex(ValueError, "未开启视频"):
+            listen_main._resolve_delivery_key("video", audio_only)
+        self.assertEqual(
+            listen_main._resolve_delivery_key("audio", audio_only), "audio"
+        )
+
+        video_only = listen_main.PluginSettings(
+            media_preference=MediaPreference.VIDEO_ONLY
+        )
+        with self.assertRaisesRegex(ValueError, "未开启音频"):
+            listen_main._resolve_delivery_key("audio", video_only)
+
+    def test_audio_only_selection_uses_configured_default_action(self) -> None:
+        voice_only = listen_main.PluginSettings(
+            media_preference=MediaPreference.AUDIO_ONLY,
+            audio_form_preference=AudioFormPreference.VOICE_FIRST,
+        )
+        file_only = listen_main.PluginSettings(
+            media_preference=MediaPreference.AUDIO_ONLY,
+            audio_form_preference=AudioFormPreference.FILE_FIRST,
+        )
+
+        self.assertEqual(
+            listen_main._parse_selection_for_settings("1", voice_only),
+            (1, listen_main._DeliveryMode.VOICE),
+        )
+        self.assertEqual(
+            listen_main._parse_selection_for_settings("1", file_only),
+            (1, listen_main._DeliveryMode.DOWNLOAD),
+        )
+        self.assertEqual(
+            listen_main._parse_selection_for_settings("1 视频", voice_only),
+            (1, listen_main._DeliveryMode.VIDEO),
+        )
+
+    def test_format_results_respects_media_gates(self) -> None:
+        snapshot = _Snapshot((_Candidate("BV1fixture:1", "晴天"),))
+        video_only = listen_main.PluginSettings(
+            media_preference=MediaPreference.VIDEO_ONLY
+        )
+        audio_only = listen_main.PluginSettings(
+            media_preference=MediaPreference.AUDIO_ONLY
+        )
+
+        rendered_video = listen_main.format_search_results(
+            snapshot, video_enabled=True, audio_enabled=False
+        )
+        self.assertIn("发送视频：回复“序号”", rendered_video)
+        self.assertNotIn("音频", rendered_video.split("Bilibili 搜索结果：", 1)[1])
+
+        rendered_audio = listen_main.format_search_results(
+            snapshot,
+            video_enabled=False,
+            audio_enabled=True,
+            default_audio_form="voice",
+        )
+        self.assertIn("播放音频：回复“序号”或“序号 音频”", rendered_audio)
+        self.assertNotIn("视频", rendered_audio.split("Bilibili 搜索结果：", 1)[1])
+
+        self.assertTrue(video_only.video_allowed)
+        self.assertFalse(video_only.audio_allowed)
+        self.assertTrue(audio_only.audio_allowed)
+        self.assertFalse(audio_only.video_allowed)
 
     async def test_deliver_media_rejects_a_hallucinated_hidden_search_id(self) -> None:
         class FakeSearch:
@@ -1027,14 +1116,13 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         plugin._delivery = FailingDelivery()
         plugin._media = types.SimpleNamespace()
         _configure_selection_waits(plugin)
-        _set_llm_search(plugin, "chat-a", snapshot.search_id)
+        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="download")
         event = _SendingEvent("chat-a", "下载晴天")
 
         result = await plugin.deliver_media_for_llm(
             event,
             snapshot.search_id,
             1,
-            delivery="download",
             let_user_choose=False,
         )
 
@@ -1566,7 +1654,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(controller.stopped)
         self.assertEqual(len(reply.sent), 1)
-        self.assertIn("请回复“序号”", reply.sent[0][1])
+        self.assertIn("请回复：", reply.sent[0][1])
 
     def test_selection_parser_and_filter_share_one_grammar(self) -> None:
         # 公开语法是“序号 / 序号 音频 / 序号 音频下载”；解析器同时宽容

@@ -8,6 +8,7 @@
 
 | 问题 | 先读 | 通常只改 |
 | --- | --- | --- |
+| 配置解析与意图策略 | `tests/test_settings.py` | `core/settings.py`、`_conf_schema.json` |
 | 候选可交付性、页身份 | `tests/test_matcher.py` | `core/matcher.py` |
 | 搜索、快照、交付编排 | `tests/test_services.py`、`tests/test_selection.py` | `core/services.py`、`core/selection.py` |
 | WBI、详情、DASH、二维码 | `tests/test_bilibili.py` | `core/bilibili.py` |
@@ -19,15 +20,16 @@
 
 - 单源 Bilibili；候选身份固定为 `bvid:cid`，失败不换歌、不换 P。
 - 本地不评分、不过滤版本标签；LLM 只从受限候选集中选择。
-- `MediaLimits` 是唯一资源边界来源，不在调用点散落常量。
+- 配置只表达意图策略；`MediaLimits` 是唯一资源边界来源，不把时长/体积/并发做成配置项。
 - 下载音频必须用户确认；精确 AV/BV 多分 P 必须用户选择。
 - 媒体发送后必须 `release()`；Cookie 不得进入聊天、日志、LLM 或 WebUI。
 - 不为了少量重复引入跨层框架或音源抽象。
 
 ## 修改前检查
 
+- 改配置：同步 `_conf_schema.json`、`PluginSettings` 与测试，保证默认值等于当前行为。
 - 改搜索/过滤：补候选去重、顺序、分 P、精确视频不回退的正反例。
-- 改 LLM 协作：覆盖候选范围验证、`delivered/choose/error`、下载强制用户确认。
+- 改 LLM 协作：覆盖候选范围验证、`auto/video/audio/download` 解析、`delivered/choose/error`、下载强制用户确认。
 - 改交付：覆盖平台回退、准备失败、取消、发送失败、文件清理、插件停止。
 - 改账号/WebUI：覆盖管理员身份、会话归属、SSE 脱敏、Cookie 文件权限。
 

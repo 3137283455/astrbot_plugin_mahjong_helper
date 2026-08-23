@@ -51,6 +51,7 @@ from .core.media import (
 )
 from .core.models import BilibiliCandidate, SearchSnapshot
 from .core.selection import SearchSnapshotStore
+from .core.settings import PluginSettings
 from .core.services import (
     SEARCH_LIMIT,
     DeliveryError,
@@ -71,6 +72,7 @@ MAX_DELIVERY_NOTE_LENGTH = 120
 # AstrBot's weixin_oc adapter accepts File outbound but ignores Record.
 _VOICE_AS_FILE_PLATFORMS = frozenset({"weixin_oc"})
 _CANONICAL_RECORDING_PREFERENCES = frozenset({"原版", "原唱", "original"})
+_DELIVERY_KEYS = frozenset({"auto", "video", "audio", "download"})
 
 
 class _StaleLlmDelivery(Exception):
@@ -265,6 +267,7 @@ class _LlmSearch:
 
     expires_at: float
     search_id: str | None = None
+    delivery: str = "video"
 
 
 class _SelectionSessionFilter(SessionFilter):
@@ -338,7 +341,7 @@ class FindInBilibiliTool(FunctionTool):
             description=(
                 "统一前置搜索：点歌、听歌、看视频、下载音频前先调用。title 必须是纯作品名——去掉“我要看/我要听/播放”等指令词，"
                 "也不要附加“原版/无损”等偏好词；可选传歌手和版本偏好。“唱首歌”时先选定一首。"
-                "delivery 默认 video（视频文件可自行保存）；仅明确要听/播放时用 audio；下载音频或需要用户比较版本时用 download。直接看视频固定交付第一个候选，精确 AV/BV 多分 P 由用户选择。"
+                "delivery：auto=用户未明确看/听/下载（如只说“播放/来一首”），交给插件配置；video=明确要看/视频；audio=明确要听/唱/音频；download=下载音频，后续必须让用户选择。"
                 "返回候选供交付判断，不向用户发送内容；只能从返回的 search_id 和 position 中选。"
                 "候选评估：作品名精确或完整匹配优先，歌手线索佐证，必须遵守版本偏好；Live/翻唱/AI/DJ/伴奏/MV 等标签仅作证据。"
                 "没有可信候选时不要猜测或发送，简短请求用户补充作品名。成功后调用 deliver_media 完成交付，不输出过程文字。"
@@ -350,8 +353,8 @@ class FindInBilibiliTool(FunctionTool):
                     **_bilibili_request_parameters()["properties"],
                     "delivery": {
                         "type": "string",
-                        "enum": ["audio", "video", "download"],
-                        "description": "默认 video；仅明确要听/播放时用 audio；下载音频时用 download。",
+                        "enum": ["auto", "video", "audio", "download"],
+                        "description": "auto 仅在用户确实没有明确媒体意图时使用。",
                     },
                 },
                 "required": ["title"],
@@ -381,7 +384,8 @@ class DeliverMediaTool(FunctionTool):
             name="deliver_media",
             description=(
                 "仅在 find_in_bilibili 成功后调用，只能用其返回的 search_id 和 position 完成交付并结束本轮。"
-                "直接听/看（let_user_choose=false）：自动发送；audio 发可播放语音，video 固定发第一个候选的视频，精确 AV/BV 多分 P 时展示候选。"
+                "交付媒体类型由 find_in_bilibili 的 delivery 和插件配置决定，本工具不再接收 delivery。"
+                "直接交付（let_user_choose=false）：自动发送；视频请求固定发第一个候选，精确 AV/BV 多分 P 时展示候选。"
                 "本工具会返回明确的交付结果（已发送/已展示候选/错误），不要重复调用同一 search_id。"
                 "成功时不要复述发送过程；失败时由你用自然语言向用户转述错误，不要输出 JSON。"
                 "下载音频或让用户挑（let_user_choose=true）：展示候选，用户回“序号”发视频、“序号 音频”播放、“序号 音频下载”下载音频文件；"
@@ -405,11 +409,6 @@ class DeliverMediaTool(FunctionTool):
                         "maxLength": MAX_DELIVERY_NOTE_LENGTH,
                         "description": "可选的一句自然预告，不重复歌名，不写检索过程或发送后的确认。",
                     },
-                    "delivery": {
-                        "type": "string",
-                        "enum": ["audio", "video", "download"],
-                        "description": "audio 发可播放语音；video 发视频；download 下载音频文件（必须让用户选）。",
-                    },
                     "let_user_choose": {
                         "type": "boolean",
                         "description": "下载音频或让用户挑时 true，展示候选；直接听/看时省略。",
@@ -430,7 +429,6 @@ class DeliverMediaTool(FunctionTool):
             kwargs.get("search_id", ""),
             kwargs.get("position"),
             note=kwargs.get("note"),
-            delivery=kwargs.get("delivery"),
             let_user_choose=bool(kwargs.get("let_user_choose", False)),
         )
 
@@ -440,6 +438,7 @@ class ListenMusicPlugin(Star):
 
     def __init__(self, context: Context, config: dict[str, Any] | None = None) -> None:
         super().__init__(context, config)
+        self._settings = PluginSettings.from_mapping(config)
         self._http: aiohttp.ClientSession | None = None
         self._accounts: AccountService | None = None
         self._bilibili: BilibiliClient | None = None
@@ -546,6 +545,12 @@ class ListenMusicPlugin(Star):
     @filter.command("搜索视频")
     async def search_video(self, event: AstrMessageEvent, query: GreedyStr):
         """搜索视频 <关键词>"""
+        if not self._settings.video_allowed:
+            yield event.plain_result(
+                "当前插件配置未开启视频交付。\n可在插件配置中调整“默认媒体类型”。"
+            )
+            event.stop_event()
+            return
         async for result in self._run_search_command(
             event, query, usage="搜索视频 <关键词>"
         ):
@@ -554,6 +559,12 @@ class ListenMusicPlugin(Star):
     @filter.command("/我要听")
     async def listen_command(self, event: AstrMessageEvent, query: GreedyStr):
         """兜底命令：/我要听 <作品名> 展示候选，由用户选择。"""
+        if not self._settings.audio_allowed:
+            yield event.plain_result(
+                "当前插件配置未开启音频交付。\n可在插件配置中调整“默认媒体类型”。"
+            )
+            event.stop_event()
+            return
         async for result in self._run_search_command(
             event, query, usage="/我要听 <作品名>"
         ):
@@ -563,6 +574,12 @@ class ListenMusicPlugin(Star):
     async def watch_command(self, event: AstrMessageEvent, query: GreedyStr):
         """兜底命令：/我要看 <作品名> 直接发第一个视频；含 AV/BV 时先展示分 P。"""
         event.should_call_llm(True)
+        if not self._settings.video_allowed:
+            yield event.plain_result(
+                "当前插件配置未开启视频交付。\n可在插件配置中调整“默认媒体类型”。"
+            )
+            event.stop_event()
+            return
         query = query.strip()
         if not query:
             yield event.plain_result("请使用：/我要看 <作品名>")
@@ -653,7 +670,7 @@ class ListenMusicPlugin(Star):
             yield event.plain_result("插件正在停止，无法继续选歌。")
             event.stop_event()
             return
-        yield event.plain_result(format_search_results(snapshot))
+        yield event.plain_result(self._format_selection_results(snapshot))
         event.stop_event()
 
     async def find_in_bilibili_for_llm(
@@ -667,6 +684,7 @@ class ListenMusicPlugin(Star):
     ) -> str:
         """Create a one-shot candidate snapshot for LLM-side direct selection."""
         session_id = event.unified_msg_origin
+        settings = getattr(self, "_settings", None) or PluginSettings()
         lease = self._begin_llm_search(session_id)
         try:
             await self._cancel_selection_wait(session_id)
@@ -677,7 +695,7 @@ class ListenMusicPlugin(Star):
                 artist=artist,
                 version=version,
             )
-            delivery_action = _resolve_delivery_action(delivery)
+            delivery_key = _resolve_delivery_key(delivery, settings)
             # 请求本身是 AV/BV 号时走精确详情（关键词搜索对 BV 召回不可靠）；
             # 普通作品名才走关键词。语义提取仍由前置 LLM 负责。
             video_ref = parse_bilibili_video_ref(
@@ -686,24 +704,19 @@ class ListenMusicPlugin(Star):
             search_kwargs: dict[str, object] = {
                 "session_id": session_id,
                 "query": music.query,
-                # 只有直接听音频才做歌名/分P语义筛选；视频只按搜索结果交付。
+                # 音频意图才做歌名/分P语义筛选；视频按平台搜索结果交付。
                 "song_title": (
                     music.title
-                    if delivery_action is _DeliveryMode.VOICE and video_ref is None
+                    if delivery_key in {"audio", "download"} and video_ref is None
                     else None
-                ),
-                "max_duration_ms": (
-                    None
-                    if video_ref is not None
-                    else _media_limits_for(delivery_action).max_duration_ms
                 ),
             }
             if video_ref is not None:
-                # 精确视频保留全部分 P，由用户选择；长音频在列表中标记“音频仅可下载”。
+                # 精确视频保留全部分 P，由用户选择。
                 search_kwargs["video_ref"] = video_ref
             snapshot = await self._require_search().search(**search_kwargs)
 
-            if not self._complete_llm_search(session_id, lease, snapshot):
+            if not self._complete_llm_search(session_id, lease, snapshot, delivery_key):
                 return _tool_error("歌曲请求已被新的消息替换")
             return _llm_candidate_result(snapshot)
         except asyncio.CancelledError:
@@ -724,20 +737,19 @@ class ListenMusicPlugin(Star):
         position: object,
         *,
         note: object | None = None,
-        delivery: object | None = None,
         let_user_choose: bool = False,
     ) -> str:
         """Terminally deliver one candidate from the active LLM search snapshot.
 
-        Returns a compact structured result so the model knows whether the
-        delivery happened, instead of guessing from an empty tool response.
+        The media type was fixed by ``find_in_bilibili`` and the plugin
+        settings; this method only validates the lease and executes it.
         """
         session_id = event.unified_msg_origin
+        settings = getattr(self, "_settings", None) or PluginSettings()
         try:
             normalized_search_id = str(search_id).strip()
             requested_position = _parse_candidate_position(position)
             selected_position = requested_position
-            delivery_action = _resolve_delivery_action(delivery)
             lease = self._active_llm_search(session_id, normalized_search_id)
             if lease is None:
                 raise _StaleLlmDelivery("search lease missing or superseded")
@@ -749,8 +761,7 @@ class ListenMusicPlugin(Star):
             if snapshot is None:
                 self._discard_llm_search(session_id, lease)
                 raise _StaleLlmDelivery("search snapshot missing or expired")
-            # Validate the model-provided position even when video delivery
-            # intentionally uses the first candidate below.
+            delivery_key = lease.delivery
             requested_candidate = snapshot.candidate_at(requested_position)
             if requested_candidate is None:
                 raise DeliveryError("候选无效或已过期，请重新搜索")
@@ -758,14 +769,15 @@ class ListenMusicPlugin(Star):
                 # An exact AV/BV reference exposes every page; only the user
                 # may pick the concrete page for a multi-page video.
                 let_user_choose = True
-            elif not let_user_choose and delivery_action is _DeliveryMode.VIDEO:
+            elif not let_user_choose and delivery_key == "video":
                 # Direct video requests use Bilibili's first result; video has
                 # no music-semantic ranking step for the LLM to reproduce.
                 selected_position = 1
             candidate = snapshot.candidate_at(selected_position)
             if candidate is None:
                 raise DeliveryError("候选无效或已过期，请重新搜索")
-            if delivery_action is _DeliveryMode.DOWNLOAD:
+            delivery_action = _action_for_delivery_key(delivery_key, settings)
+            if delivery_key == "download":
                 # Downloading an audio file is never automatic: the user must
                 # confirm the exact candidate from the visible catalogue.
                 let_user_choose = True
@@ -773,7 +785,9 @@ class ListenMusicPlugin(Star):
                 if not await self._start_selection_wait(event, snapshot):
                     self._discard_llm_search(session_id, lease)
                     raise DeliveryError("插件正在停止，无法继续选歌")
-                await event.send(event.plain_result(format_search_results(snapshot)))
+                await event.send(
+                    event.plain_result(self._format_selection_results(snapshot))
+                )
                 return _tool_result("choose", "已展示候选列表，等待用户选择。")
             if not self._consume_llm_search(session_id, lease):
                 raise _StaleLlmDelivery("search lease was replaced before delivery")
@@ -948,21 +962,23 @@ class ListenMusicPlugin(Star):
         """Resolve the next real user reply against its original snapshot."""
 
         stop_wait = True
+        settings = getattr(self, "_settings", None) or PluginSettings()
         try:
             if " ".join(reply.message_str.split()) == "取消":
                 await reply.send(reply.plain_result("已取消选歌。"))
                 return
-            parsed = _parse_selection(reply.message_str)
+            parsed = _parse_selection_for_settings(reply.message_str, settings)
             if parsed is None:
-                await reply.send(
-                    reply.plain_result(
-                        "请回复“序号”发视频、“序号 音频”播放音频，"
-                        "或“序号 音频下载”下载音频。"
-                    )
-                )
+                await reply.send(reply.plain_result(_selection_help(settings)))
                 stop_wait = False
                 return
             position, action = parsed
+            if action is _DeliveryMode.VIDEO and not settings.video_allowed:
+                await reply.send(reply.plain_result("当前插件配置未开启视频交付。"))
+                return
+            if action is not _DeliveryMode.VIDEO and not settings.audio_allowed:
+                await reply.send(reply.plain_result("当前插件配置未开启音频交付。"))
+                return
             current = self._require_search().snapshot(
                 search_id=snapshot.search_id,
                 session_id=reply.unified_msg_origin,
@@ -972,12 +988,17 @@ class ListenMusicPlugin(Star):
                 await reply.send(reply.plain_result("搜索结果已过期，请重新搜索。"))
                 return
             if _selection_requires_download(candidate, action):
-                await reply.send(
-                    reply.plain_result(
+                if settings.video_allowed:
+                    hint = (
                         f"第 {position} 首音频超过 15 分钟，无法直接播放；"
                         f"请回复“{position}”发视频，或回复“{position} 音频下载”下载音频文件。"
                     )
-                )
+                else:
+                    hint = (
+                        f"第 {position} 首音频超过 15 分钟，无法直接播放；"
+                        f"请回复“{position} 音频下载”下载音频文件。"
+                    )
+                await reply.send(reply.plain_result(hint))
                 stop_wait = False
                 return
             result = await self._deliver_candidate(candidate, action)
@@ -1251,7 +1272,11 @@ class ListenMusicPlugin(Star):
         return lease
 
     def _complete_llm_search(
-        self, session_id: str, lease: _LlmSearch, snapshot: SearchSnapshot
+        self,
+        session_id: str,
+        lease: _LlmSearch,
+        snapshot: SearchSnapshot,
+        delivery_key: str,
     ) -> bool:
         """Publish results only when the request still owns this chat's lease."""
 
@@ -1259,6 +1284,7 @@ class ListenMusicPlugin(Star):
             return False
         lease.search_id = snapshot.search_id
         lease.expires_at = snapshot.expires_at
+        lease.delivery = delivery_key
         return True
 
     def _is_current_llm_search(self, session_id: str, lease: _LlmSearch) -> bool:
@@ -1337,6 +1363,17 @@ class ListenMusicPlugin(Star):
             raise RuntimeError("plugin is not initialized")
         return self._delivery
 
+    def _format_selection_results(self, snapshot: SearchSnapshot) -> str:
+        """Render the candidate catalogue for the currently configured actions."""
+
+        settings = getattr(self, "_settings", None) or PluginSettings()
+        return format_search_results(
+            snapshot,
+            video_enabled=settings.video_allowed,
+            audio_enabled=settings.audio_allowed,
+            default_audio_form=settings.preferred_audio_form,
+        )
+
 
 def _parse_selection(message: str) -> tuple[int, _DeliveryMode] | None:
     """Parse the one user-facing grammar used by every selection flow.
@@ -1362,29 +1399,87 @@ def _parse_selection(message: str) -> tuple[int, _DeliveryMode] | None:
     )
 
 
+def _parse_selection_for_settings(
+    message: str, settings: PluginSettings
+) -> tuple[int, _DeliveryMode] | None:
+    """Parse a reply with the configured default for a bare position number."""
+
+    normalized = " ".join(message.split())
+    match = _SELECTION_RE.fullmatch(normalized)
+    if match is None:
+        return None
+    prefix_action, raw_position, suffix_action = match.groups()
+    actions = {
+        _selection_mode_from_word(word)
+        for word in (prefix_action, suffix_action)
+        if word is not None
+    }
+    if len(actions) > 1:
+        return None
+    action = next(iter(actions), _DeliveryMode.VIDEO)
+    if action is _DeliveryMode.VIDEO and not actions and not settings.video_allowed:
+        action = _action_for_delivery_key("audio", settings)
+    return _SELECTION_POSITION_MAP[raw_position], action
+
+
+def _selection_help(settings: PluginSettings) -> str:
+    """One-line reply grammar rendered from the configured action surface."""
+
+    options: list[str] = []
+    if settings.video_allowed:
+        options.append("“序号”发视频")
+    if settings.audio_allowed:
+        if settings.preferred_audio_form == "file":
+            options.append(
+                "“序号 音频”发音频文件"
+                if settings.video_allowed
+                else "“序号”或“序号 音频”发音频文件"
+            )
+        else:
+            options.append(
+                "“序号 音频”播放音频"
+                if settings.video_allowed
+                else "“序号”或“序号 音频”播放音频"
+            )
+            options.append("“序号 音频下载”下载音频文件")
+    return "请回复：" + "；".join(options) + "。"
+
+
 def _is_selection_reply(message: str) -> bool:
     return message == "取消" or _parse_selection(message) is not None
 
 
-_DELIVERY_ACTIONS = {
-    "audio": _DeliveryMode.VOICE,
-    "video": _DeliveryMode.VIDEO,
-    "download": _DeliveryMode.DOWNLOAD,
-}
+def _resolve_delivery_key(text: object, settings: PluginSettings) -> str:
+    """Resolve the LLM's media intent against the configured policy."""
+
+    key = " ".join(str(text or "").split()).casefold() or "auto"
+    if key not in _DELIVERY_KEYS:
+        key = "auto"
+    if key == "auto":
+        return settings.default_media
+    if key == "video" and not settings.video_allowed:
+        raise ValueError(
+            "当前插件配置未开启视频交付。\n可在插件配置中调整“默认媒体类型”。"
+        )
+    if key in {"audio", "download"} and not settings.audio_allowed:
+        raise ValueError(
+            "当前插件配置未开启音频交付。\n可在插件配置中调整“默认媒体类型”。"
+        )
+    return key
 
 
-def _resolve_delivery_action(text: object) -> _DeliveryMode:
-    """Map the structured LLM tool value onto one delivery form.
+def _action_for_delivery_key(
+    delivery_key: str, settings: PluginSettings
+) -> _DeliveryMode:
+    """Turn the resolved intent into the first transport to attempt."""
 
-    Both tool contracts already constrain this field to a small enum, so a
-    free-form intent guess would add behavior the schema does not promise.
-    Video is the default: only an explicit listen/play intent produces
-    directly playable audio, because a video file can be kept anyway.
-    """
-
-    return _DELIVERY_ACTIONS.get(
-        " ".join(str(text or "").split()).casefold(), _DeliveryMode.VIDEO
-    )
+    if delivery_key == "video":
+        return _DeliveryMode.VIDEO
+    if delivery_key == "download":
+        return _DeliveryMode.DOWNLOAD
+    if settings.preferred_audio_form == "file":
+        return _DeliveryMode.DOWNLOAD
+    return _DeliveryMode.VOICE
 
 
 def _delivery_mode_label(action: _DeliveryMode) -> str:
