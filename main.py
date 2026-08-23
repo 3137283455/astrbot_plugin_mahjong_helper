@@ -72,7 +72,6 @@ PLUGIN_NAME = "astrbot_plugin_bili_player"
 INTERACTION_TIMEOUT_SECONDS = 90
 SEARCH_SNAPSHOT_TTL_SECONDS = 300.0
 SEARCH_SNAPSHOT_MAX_ENTRIES = 1024
-MAX_DELIVERY_NOTE_LENGTH = 120
 # AstrBot's weixin_oc adapter accepts File outbound but ignores Record.
 _VOICE_AS_FILE_PLATFORMS = frozenset({"weixin_oc"})
 _CANONICAL_RECORDING_PREFERENCES = frozenset({"原版", "原唱", "original"})
@@ -107,25 +106,6 @@ _SELECTION_RE = re.compile(
     rf"(?:第\s*)?({_SELECTION_POSITION_PATTERN})\s*(?:首(?:歌)?|个|号)?"
     r"(?:\s*(音频下载|下载|听(?:歌)?|播放|视频|音频))?"
     r"(?:[，,。！？!]\s*)*$"
-)
-_DELIVERY_NOTE_REJECTED_MARKERS = (
-    "正在找",
-    "帮你找",
-    "我帮你找",
-    "找到了",
-    "找到后",
-    "搜索",
-    "查找",
-    "正在准备",
-    "处理中",
-    "正在处理",
-    "下载中",
-    "检索",
-    "匹配",
-    "关键词",
-    "换用",
-    "重试",
-    "已送上",
 )
 
 
@@ -398,11 +378,6 @@ class DeliverMediaTool(FunctionTool):
                         "maximum": SEARCH_LIMIT,
                         "description": "find_in_bilibili 返回的候选序号；let_user_choose 为 true 时可填 1。",
                     },
-                    "note": {
-                        "type": "string",
-                        "maxLength": MAX_DELIVERY_NOTE_LENGTH,
-                        "description": "可选的一句自然预告，不重复歌名，不写检索过程或发送后的确认。",
-                    },
                     "let_user_choose": {
                         "type": "boolean",
                         "description": "下载音频或让用户挑时 true，展示候选；直接听/看时省略。",
@@ -422,7 +397,6 @@ class DeliverMediaTool(FunctionTool):
             event,
             kwargs.get("search_id", ""),
             kwargs.get("position"),
-            note=kwargs.get("note"),
             let_user_choose=bool(kwargs.get("let_user_choose", False)),
         )
 
@@ -609,11 +583,10 @@ class ListenMusicPlugin(Star):
             event.stop_event()
             return
         try:
-            await self._deliver_with_preface(
+            await self._deliver_media(
                 event,
                 candidate=candidate,
                 action=_DeliveryMode.VIDEO,
-                preface=_delivery_preface(candidate, _DeliveryMode.VIDEO, None),
             )
         except (DeliveryError, FfmpegUnavailableError, MediaError) as exc:
             yield event.plain_result(str(exc))
@@ -743,7 +716,6 @@ class ListenMusicPlugin(Star):
         search_id: object,
         position: object,
         *,
-        note: object | None = None,
         let_user_choose: bool = False,
     ) -> str | None:
         """Terminally deliver one candidate from the active LLM search snapshot.
@@ -803,11 +775,10 @@ class ListenMusicPlugin(Star):
                 # Voice messages cannot carry such a long track; deliver the
                 # audio file instead so the listen request still completes.
                 delivery_action = _DeliveryMode.DOWNLOAD
-            await self._deliver_with_preface(
+            await self._deliver_media(
                 event,
                 candidate=candidate,
                 action=delivery_action,
-                preface=_delivery_preface(candidate, delivery_action, note),
             )
             return None
         except _StaleLlmDelivery as exc:
@@ -844,43 +815,30 @@ class ListenMusicPlugin(Star):
         await self._cancel_selection_wait(event.unified_msg_origin)
         self._clear_llm_search(event.unified_msg_origin)
 
-    async def _deliver_with_preface(
+    async def _deliver_media(
         self,
         event: AstrMessageEvent,
         *,
         candidate: BilibiliCandidate,
         action: _DeliveryMode,
-        preface: str,
     ) -> None:
-        """Overlap a user-visible preface with preparation of the selected media."""
+        """Prepare and send only the media; no preface or follow-up text."""
 
         preparation = asyncio.create_task(
             self._deliver_candidate(candidate, action),
             name=f"bili-player-delivery-{candidate.candidate_id}",
         )
-        handed_to_sender = False
         try:
-            # Give the delivery task one event-loop turn to start resolving the
-            # stream before the outbound preface begins its own network work.
-            await asyncio.sleep(0)
-            prepared: DeliveryResult | None = None
-            if preparation.done():
-                prepared = preparation.result()
-
-            await event.send(event.plain_result(preface))
-            if prepared is None:
-                prepared = await preparation
-            handed_to_sender = True
-            await self._send_delivery(event, prepared, action)
+            prepared = await preparation
         except BaseException:
-            if not handed_to_sender:
-                await self._discard_delivery_preparation(preparation)
+            await self._discard_delivery_preparation(preparation)
             raise
+        await self._send_delivery(event, prepared, action)
 
     async def _discard_delivery_preparation(
         self, preparation: asyncio.Task[DeliveryResult]
     ) -> None:
-        """Cancel or release a prepared item when its preface cannot be sent."""
+        """Cancel or release a prepared item when it never reaches the sender."""
 
         if not preparation.done():
             preparation.cancel()
@@ -1537,38 +1495,6 @@ def _selection_requires_download(
         and VOICE_MEDIA_LIMITS.max_duration_ms is not None
         and candidate.duration_ms > VOICE_MEDIA_LIMITS.max_duration_ms
     )
-
-
-def _delivery_preface(
-    candidate: BilibiliCandidate,
-    action: _DeliveryMode,
-    note: object | None,
-) -> str:
-    """Build the sole user-visible message that precedes a delivered item."""
-
-    if action is _DeliveryMode.VOICE:
-        lead = f"给你播放《{candidate.display_title}》"
-    elif action is _DeliveryMode.VIDEO:
-        lead = f"给你发送《{candidate.display_title}》的视频"
-    else:
-        lead = f"给你发送《{candidate.display_title}》的音频文件"
-
-    normalized = " ".join(str(note or "").replace("\x00", "").split())
-    if (
-        not normalized
-        or len(normalized) > MAX_DELIVERY_NOTE_LENGTH
-        or any(marker in normalized for marker in _DELIVERY_NOTE_REJECTED_MARKERS)
-    ):
-        return f"{lead}。"
-
-    normalized = normalized.lstrip("，,。；;：: ")
-    if not normalized:
-        return f"{lead}。"
-    if normalized[-1] not in "。！？!?" and (
-        normalized[-1].isalnum() or "\u4e00" <= normalized[-1] <= "\u9fff"
-    ):
-        normalized += "。"
-    return f"{lead}，{normalized}"
 
 
 def _public_login_snapshot(

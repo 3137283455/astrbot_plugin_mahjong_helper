@@ -19,7 +19,7 @@
 https://github.com/57Darling02/astrbot_plugin_bili_player
 ```
 
-运行要求：AstrBot `>=4.26,<5`、Python `>=3.10`、可访问 Bilibili。自然语言点播需要模型支持工具调用；建议 Provider 工具超时直听 ≥ 300 秒、直接视频 ≥ 900 秒。
+运行要求：AstrBot `>=4.26,<5`、Python `>=3.10`、可访问 Bilibili。自然语言点播需要模型支持工具调用；建议 Provider 工具超时直听 ≥ 300 秒、直接视频 ≥ 900 秒，并关闭 `provider_settings.show_tool_use_status` 与 `show_tool_call_result`，避免工具过程文字出现在聊天里。
 
 ## 配置
 
@@ -92,6 +92,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 | 无法生成二维码 | 安装 `qrcode[pil]`，检查网络和管理员权限 |
 | 能搜索不能发送 | 检查 ffmpeg、适配器文件上限、Bilibili 播放权限 |
 | WebUI 不提示更新 | 确认从仓库安装，且 `metadata.yaml.version` 已递增 |
+| 仍看到“调用工具”等过程文字 | 关闭 Provider 的 `show_tool_use_status` 与 `show_tool_call_result`；插件直发媒体本身不会再附带预告文字 |
 | 一条消息里多个请求混在一起 | 插件会把整段拼接消息当作一个模糊关键词搜索，并强制展示候选让用户自选；若结果不对，请让用户逐条发送 |
 
 ## 开发者

@@ -64,7 +64,7 @@ LLM 只在搜索阶段表达媒体意图，交付阶段不得改写：
 | `download` | 音频文件，必须用户确认 | 100 MiB / 900 秒 |
 
 - 直接看视频固定第一候选；精确 AV/BV 多分 P 强制用户选择（`by_video_reference`）。
-- 发送完成 `finally release()` 删除媒体；DASH 由 `ffmpeg` 无损封装。
+- 直发媒体不发送任何预告或确认文字；发送完成 `finally release()` 删除媒体；DASH 由 `ffmpeg` 无损封装。
 
 ## 会话
 

@@ -327,7 +327,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deliver_tool.name, "deliver_media")
         self.assertEqual(
             set(deliver_tool.parameters["properties"]),
-            {"search_id", "position", "note", "let_user_choose"},
+            {"search_id", "position", "let_user_choose"},
         )
         self.assertEqual(deliver_tool.parameters["required"], ["search_id", "position"])
         self.assertEqual(
@@ -347,11 +347,9 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return '{"status":"candidates"}'
 
             async def deliver_media_for_llm(
-                self, event, search_id, position, *, note, let_user_choose
+                self, event, search_id, position, *, let_user_choose
             ):
-                calls.append(
-                    ("deliver", event, search_id, position, note, let_user_choose)
-                )
+                calls.append(("deliver", event, search_id, position, let_user_choose))
                 return None
 
         event = _Event("chat-a", "播放晴天")
@@ -371,14 +369,13 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 context,
                 search_id="opaque-search",
                 position=2,
-                note="午后听一听",
             )
         )
         self.assertEqual(
             calls,
             [
                 ("find", event, "晴天", "周杰伦", "原唱", None),
-                ("deliver", event, "opaque-search", 2, "午后听一听", False),
+                ("deliver", event, "opaque-search", 2, False),
             ],
         )
 
@@ -595,12 +592,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="audio")
         event = _SendingEvent("chat-a")
 
-        tool_result = await plugin.deliver_media_for_llm(
-            event,
-            snapshot.search_id,
-            1,
-            note="愿你接下来的路一路生花",
-        )
+        tool_result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
 
         self.assertIsNone(tool_result)
         self.assertEqual(plugin._llm_searches, {})
@@ -612,10 +604,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(delivery.limits, listen_main.VOICE_MEDIA_LIMITS)
         self.assertEqual(
             event.sent,
-            [
-                ("plain", "给你播放《温奕心 - 一路生花》，愿你接下来的路一路生花。"),
-                listen_main.MessageChain([("record", Path("/tmp/fixture.m4a"))]),
-            ],
+            [listen_main.MessageChain([("record", Path("/tmp/fixture.m4a"))])],
         )
         self.assertEqual(released, [media])
 
@@ -658,9 +647,9 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(delivery.selected, candidate)
         self.assertIs(delivery.limits, listen_main.VIDEO_MEDIA_LIMITS)
         self.assertEqual(
-            event.sent[0], ("plain", "给你发送《温奕心 - 一路生花》的视频。")
+            event.sent,
+            [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
         )
-        self.assertEqual(event.sent[1], [("video", Path("/tmp/fixture.mp4"))])
 
     async def test_llm_auto_listen_long_audio_falls_back_to_file(self) -> None:
         candidate = _Candidate("BV1fixture:1", "温奕心 - 一路生花")
@@ -702,12 +691,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertIs(delivery.selected, candidate)
         self.assertIs(delivery.limits, listen_main.DOWNLOAD_MEDIA_LIMITS)
+        self.assertEqual(len(event.sent), 1)
+        self.assertIsInstance(event.sent[0][0], listen_main.File)
         self.assertEqual(
-            event.sent[0], ("plain", "给你发送《温奕心 - 一路生花》的音频文件。")
-        )
-        self.assertIsInstance(event.sent[1][0], listen_main.File)
-        self.assertEqual(
-            event.sent[1][0].kwargs,
+            event.sent[0][0].kwargs,
             {"name": "fixture.m4a", "file": "/tmp/fixture.m4a"},
         )
 
@@ -1157,7 +1144,6 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             event,
             snapshot.search_id,
             1,
-            note="下载",
             let_user_choose=True,
         )
 
@@ -1294,7 +1280,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 0)
         self.assertTrue(event.stopped)
         self.assertIs(delivery.selected, candidate)
-        self.assertEqual(event.sent[0], ("plain", "给你发送《晴天》的视频。"))
+        self.assertEqual(
+            event.sent,
+            [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
+        )
 
     async def test_search_song_uses_the_same_selection_session(self) -> None:
         snapshot = _Snapshot((_Candidate("BV1fixture:1", "晴天"),))
@@ -1577,39 +1566,6 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
         await plugin._cancel_selection_wait("chat-a")
 
-    async def test_preface_failure_releases_the_prepared_file(self) -> None:
-        candidate = _Candidate("BV1fixture:1", "一路生花")
-        media = types.SimpleNamespace(
-            path=Path("/tmp/fixture.m4a"), filename="fixture.m4a"
-        )
-        result = types.SimpleNamespace(candidate=candidate, media=media)
-        released: list[object] = []
-
-        class FakeDelivery:
-            async def deliver(self, _candidate, *, limits):
-                return result
-
-        class FakeMedia:
-            async def release(self, released_media):
-                released.append(released_media)
-
-        class FailingEvent(_SendingEvent):
-            async def send(self, _message: object) -> None:
-                raise RuntimeError("preface unavailable")
-
-        plugin = object.__new__(listen_main.ListenMusicPlugin)
-        plugin._delivery = FakeDelivery()
-        plugin._media = FakeMedia()
-
-        with self.assertRaisesRegex(RuntimeError, "preface unavailable"):
-            await plugin._deliver_with_preface(
-                FailingEvent("chat-a"),
-                candidate=candidate,
-                action=listen_main._DeliveryMode.VOICE,
-                preface="给你播放《一路生花》。",
-            )
-        self.assertEqual(released, [media])
-
     async def test_send_delivery_falls_back_to_file_when_voice_component_fails(
         self,
     ) -> None:
@@ -1781,17 +1737,6 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(discard_filter.filter(_Event("chat-a", "第1首"), None))
         self.assertFalse(discard_filter.filter(_Event("chat-a", "取消"), None))
         self.assertFalse(discard_filter.filter(_Event("chat-b", "再发一次"), None))
-
-    def test_delivery_preface_discards_work_trace_notes(self) -> None:
-        candidate = _Candidate("BV1fixture:1", "一路生花")
-
-        preface = listen_main._delivery_preface(
-            candidate,
-            listen_main._DeliveryMode.VOICE,
-            "我换用中文关键词再检索一次",
-        )
-
-        self.assertEqual(preface, "给你播放《一路生花》。")
 
     def test_login_views_never_expose_the_raw_qr_url(self) -> None:
         snapshot = {
