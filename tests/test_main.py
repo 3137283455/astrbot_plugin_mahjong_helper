@@ -708,6 +708,49 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             {"name": "fixture.m4a", "file": "/tmp/fixture.m4a"},
         )
 
+    async def test_find_rejects_a_debounced_message_with_multiple_video_refs(
+        self,
+    ) -> None:
+        class FakeSearch:
+            async def search(self, **_kwargs):
+                raise AssertionError("multi-ref input must not reach Bilibili search")
+
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        plugin._search = FakeSearch()
+        _configure_selection_waits(plugin)
+        event = _SendingEvent(
+            "chat-a",
+            "我要看 BV1Q541167Qg BV1R34y1Q7J4 BV1cTYkzsEUF",
+        )
+
+        result = await plugin.find_in_bilibili_for_llm(
+            event, "BV1Q541167Qg", delivery="video"
+        )
+
+        self.assertEqual(json.loads(result)["status"], "error")
+        self.assertIn("逐条发送", json.loads(result)["message"])
+        self.assertEqual(plugin._llm_searches, {})
+
+    async def test_find_rejects_a_second_search_in_the_same_turn(self) -> None:
+        class FakeSearch:
+            async def search(self, **kwargs):
+                self.calls = getattr(self, "calls", [])
+                self.calls.append(kwargs)
+                return _Snapshot((_Candidate("BV1fixture:1", "晴天"),))
+
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        plugin._search = search = FakeSearch()
+        _configure_selection_waits(plugin)
+        event = _SendingEvent("chat-a", "晴天")
+
+        first = await plugin.find_in_bilibili_for_llm(event, "晴天")
+        second = await plugin.find_in_bilibili_for_llm(event, "晴天")
+
+        self.assertEqual(json.loads(first)["status"], "candidates")
+        self.assertEqual(json.loads(second)["status"], "error")
+        self.assertIn("已有未完成的搜索", json.loads(second)["message"])
+        self.assertEqual(len(search.calls), 1)
+
     async def test_find_with_audio_intent_keeps_long_candidates_for_file_fallback(
         self,
     ) -> None:

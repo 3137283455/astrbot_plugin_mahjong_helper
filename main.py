@@ -39,7 +39,11 @@ from .core.accounts import (
     QrLoginPoll,
     QrLoginStart,
 )
-from .core.bilibili import BilibiliClient, parse_bilibili_video_ref
+from .core.bilibili import (
+    BilibiliClient,
+    parse_bilibili_video_ref,
+    parse_bilibili_video_refs,
+)
 from .core.media import (
     DOWNLOAD_MEDIA_LIMITS,
     VIDEO_MEDIA_LIMITS,
@@ -330,7 +334,7 @@ class FindInBilibiliTool(FunctionTool):
             name="find_in_bilibili",
             description=(
                 "统一前置搜索：点歌、听歌、看视频、下载音频前先调用。title 必须是纯作品名——去掉“我要看/我要听/播放”等指令词，"
-                "也不要附加“原版/无损”等偏好词；可选传歌手和版本偏好。“唱首歌”时先选定一首。"
+                "也不要附加“原版/无损”等偏好词；可选传歌手和版本偏好。“唱首歌”时先选定一首。用户一条消息包含多个作品/命令时不要批量搜索，请让用户逐条发送。"
                 "delivery：auto=用户未明确看/听/下载（如只说“播放/来一首”），交给插件配置；video=明确要看/视频；audio=明确要听/唱/音频；download=下载音频，后续必须让用户选择。"
                 "返回候选供交付判断，不向用户发送内容；只能从返回的 search_id 和 position 中选。"
                 "候选评估：作品名精确或完整匹配优先，歌手线索佐证，必须遵守版本偏好；Live/翻唱/AI/DJ/伴奏/MV 等标签仅作证据。"
@@ -674,8 +678,14 @@ class ListenMusicPlugin(Star):
         """Create a one-shot candidate snapshot for LLM-side direct selection."""
         session_id = event.unified_msg_origin
         settings = getattr(self, "_settings", None) or PluginSettings()
-        lease = self._begin_llm_search(session_id)
+        lease: _LlmSearch | None = None
         try:
+            message_refs = parse_bilibili_video_refs(event.message_str)
+            if len(message_refs) > 1:
+                return _tool_error(
+                    "这条消息包含多个 AV/BV 视频请求；请让用户逐条发送。",
+                )
+            lease = self._begin_llm_search(session_id)
             await self._cancel_selection_wait(session_id)
             if not self._is_current_llm_search(session_id, lease):
                 return _tool_error("歌曲请求已被新的消息替换")
@@ -709,13 +719,16 @@ class ListenMusicPlugin(Star):
                 return _tool_error("歌曲请求已被新的消息替换")
             return _llm_candidate_result(snapshot)
         except asyncio.CancelledError:
-            self._discard_llm_search(session_id, lease)
+            if lease is not None:
+                self._discard_llm_search(session_id, lease)
             raise
         except (MusicSearchError, ValueError) as exc:
-            self._discard_llm_search(session_id, lease)
+            if lease is not None:
+                self._discard_llm_search(session_id, lease)
             return _tool_error(str(exc))
         except Exception:
-            self._discard_llm_search(session_id, lease)
+            if lease is not None:
+                self._discard_llm_search(session_id, lease)
             logger.exception("bili-player LLM candidate search failed")
             return _tool_error("搜索歌曲时发生错误，请稍后重试。")
 
@@ -1241,10 +1254,20 @@ class ListenMusicPlugin(Star):
             self._selection_waits.pop(session_id, None)
 
     def _begin_llm_search(self, session_id: str) -> _LlmSearch:
-        """Replace one chat's hidden search lease without a background cleaner."""
+        """Open one hidden search lease per chat without a background cleaner.
+
+        A second ``find_in_bilibili`` call inside the same user turn means the
+        LLM is fanning out one debounced multi-task prompt. Reject it instead
+        of silently replacing the first search lease.
+        """
 
         now = time.monotonic()
         self._purge_expired_llm_searches(now)
+        active = self._llm_searches.get(session_id)
+        if active is not None and active.expires_at > now:
+            raise ValueError(
+                "当前会话已有未完成的搜索；请先完成交付，或让用户重新发送一条消息。",
+            )
         if (
             session_id not in self._llm_searches
             and len(self._llm_searches) >= SEARCH_SNAPSHOT_MAX_ENTRIES

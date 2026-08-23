@@ -90,6 +90,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 | 无法生成二维码 | 安装 `qrcode[pil]`，检查网络和管理员权限 |
 | 能搜索不能发送 | 检查 ffmpeg、适配器文件上限、Bilibili 播放权限 |
 | WebUI 不提示更新 | 确认从仓库安装，且 `metadata.yaml.version` 已递增 |
+| 一条消息里多个请求未全部处理 | 插件会拒绝批量 AV/BV；请让用户逐条发送，不要把连续命令交给防抖插件合并 |
 
 ## 开发者
 

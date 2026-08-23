@@ -21,6 +21,7 @@ from core.bilibili import (
     _DashVideoTrack,
     derive_wbi_mixin_key,
     parse_bilibili_video_ref,
+    parse_bilibili_video_refs,
     sign_wbi_params,
 )
 
@@ -64,6 +65,19 @@ class BilibiliVideoRefTests(unittest.TestCase):
         ):
             with self.subTest(value=value):
                 self.assertIsNone(parse_bilibili_video_ref(value))
+
+    def test_parse_all_refs_deduplicates_in_first_seen_order(self) -> None:
+        text = "BV1Q541167Qg 和 av170001，再看 BV1Q541167Qg"
+
+        refs = parse_bilibili_video_refs(text)
+
+        self.assertEqual(
+            refs,
+            (
+                BilibiliVideoRef(bvid="BV1Q541167Qg"),
+                BilibiliVideoRef(aid=170001),
+            ),
+        )
 
     def test_reference_requires_exactly_one_valid_identifier(self) -> None:
         invalid_refs = (

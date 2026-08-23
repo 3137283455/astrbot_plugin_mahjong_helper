@@ -174,6 +174,35 @@ class BilibiliVideoRef:
         object.__setattr__(self, "bvid", f"BV{self.bvid[2:]}")
 
 
+def parse_bilibili_video_refs(value: str | None) -> tuple[BilibiliVideoRef, ...]:
+    """Extract every literal AV/BV identifier, preserving first-seen order.
+
+    Used to reject a debounced message that merged several video commands.
+    """
+
+    if not isinstance(value, str):
+        return ()
+    refs: list[BilibiliVideoRef] = []
+    seen: set[tuple[str, int | None]] = set()
+    for match in _VIDEO_REF_TOKEN_RE.finditer(value):
+        bvid = match.group("bvid")
+        if bvid is not None:
+            key = ("bvid", bvid.casefold())
+            ref = BilibiliVideoRef(bvid=bvid)
+        else:
+            aid = match.group("aid")
+            if aid is None:
+                continue
+            parsed_aid = int(aid[2:])
+            key = ("aid", parsed_aid)
+            ref = BilibiliVideoRef(aid=parsed_aid)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(ref)
+    return tuple(refs)
+
+
 def parse_bilibili_video_ref(value: str | None) -> BilibiliVideoRef | None:
     """Extract the first literal AV or BV identifier from user-supplied text.
 
@@ -182,16 +211,8 @@ def parse_bilibili_video_ref(value: str | None) -> BilibiliVideoRef | None:
     not followed or otherwise resolved.
     """
 
-    if not isinstance(value, str):
-        return None
-    match = _VIDEO_REF_TOKEN_RE.search(value)
-    if match is None:
-        return None
-    bvid = match.group("bvid")
-    if bvid is not None:
-        return BilibiliVideoRef(bvid=bvid)
-    aid = match.group("aid")
-    return BilibiliVideoRef(aid=int(aid[2:])) if aid is not None else None
+    refs = parse_bilibili_video_refs(value)
+    return refs[0] if refs else None
 
 
 @dataclass(frozen=True, slots=True)
