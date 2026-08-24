@@ -9,6 +9,7 @@ import io
 import json
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -50,7 +51,7 @@ from .core.media import (
     MediaLimits,
     MediaStore,
 )
-from .core.models import BilibiliCandidate, SearchSnapshot
+from .core.models import BilibiliCandidate, LocalMedia, SearchSnapshot
 from .core.selection import SearchSnapshotStore
 from .core.settings import DeliveryReply, PluginLimits, PluginSettings
 from .core.services import (
@@ -793,8 +794,6 @@ class ListenMusicPlugin(Star):
                 # Safe here: event.send() either succeeded or raised into the
                 # error path below.
                 return None
-            if not self._consume_llm_search(session_id, lease):
-                raise _StaleLlmDelivery("search lease was replaced before delivery")
             if _selection_requires_download(
                 candidate, delivery_action, settings.limits.voice
             ):
@@ -806,6 +805,9 @@ class ListenMusicPlugin(Star):
                 candidate=candidate,
                 action=delivery_action,
             )
+            # Consume the lease only after delivery succeeded; a failed
+            # delivery keeps the snapshot so the model can retry once.
+            self._consume_llm_search(session_id, lease)
             if settings.delivery_reply is DeliveryReply.LLM:
                 return _llm_followup_result()
             # None is the only AstrBot signal for "already sent; end loop".
@@ -1110,6 +1112,30 @@ class ListenMusicPlugin(Star):
         except AccountError as exc:
             return error_response(str(exc), status_code=400)
 
+    async def account_import_credentials(self):
+        owner = self._dashboard_owner()
+        if owner is None:
+            return error_response(
+                "仅 Dashboard 管理员可管理账号与运行状态", status_code=403
+            )
+        get_json = getattr(request, "get_json", None)
+        payload = get_json(silent=True) if callable(get_json) else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        cookie_text = str(payload.get("cookies") or "").strip()
+        if not cookie_text:
+            return error_response("请提供完整的 Cookie 字符串", status_code=400)
+        try:
+            profile = await self._require_accounts().import_credentials(cookie_text)
+        except AccountError as exc:
+            return error_response(str(exc), status_code=400)
+        except Exception:
+            logger.exception("bili-player account credential import failed")
+            return error_response("无法导入账号凭证", status_code=502)
+        return json_response(
+            {"state": "connected", "display_name": profile.display_name}
+        )
+
     async def _start_bilibili_login(self) -> QrLoginStart:
         qr_session = await self._require_bilibili().start_qr_login()
         return QrLoginStart(
@@ -1131,6 +1157,41 @@ class ListenMusicPlugin(Star):
 
     async def _bilibili_profile(self, cookies: dict[str, str]) -> Any:
         return await self._require_bilibili().profile_from_cookies(cookies)
+
+    async def _send_onebot_voice(
+        self, event: AstrMessageEvent, media: LocalMedia
+    ) -> bool:
+        """Send one local voice as a compact OneBot record segment on aiocqhttp.
+
+        AstrBot's aiocqhttp adapter base64-encodes local Record components,
+        and a full song can exceed NapCat's WebSocket payload limit. Passing
+        the local file URI straight to the OneBot API keeps the message tiny
+        when AstrBot shares its data directory with the OneBot implementation.
+        """
+        if event.get_platform_name() != "aiocqhttp":
+            return False
+        api = getattr(getattr(event, "bot", None), "api", None)
+        if api is None or not callable(getattr(event, "is_private_chat", None)):
+            return False
+        payload: dict[str, Any] = {
+            "message": [
+                {
+                    "type": "record",
+                    "data": {"file": Path(media.path).resolve().as_uri()},
+                }
+            ]
+        }
+        if event.is_private_chat():
+            payload["user_id"] = event.get_sender_id()
+            await asyncio.wait_for(
+                api.call_action("send_private_msg", **payload), timeout=45.0
+            )
+        else:
+            payload["group_id"] = event.get_group_id()
+            await asyncio.wait_for(
+                api.call_action("send_group_msg", **payload), timeout=45.0
+            )
+        return True
 
     async def _deliver_candidate(
         self,
@@ -1160,6 +1221,8 @@ class ListenMusicPlugin(Star):
                 and platform_name not in _VOICE_AS_FILE_PLATFORMS
             ):
                 try:
+                    if await self._send_onebot_voice(event, result.media):
+                        return
                     component = Record.fromFileSystem(result.media.path)
                     await event.send(MessageChain([component]))
                     return
@@ -1216,6 +1279,12 @@ class ListenMusicPlugin(Star):
             self.account_logout,
             ["POST"],
             "Remove music account credentials",
+        )
+        self.context.register_web_api(
+            f"{prefix}/credentials",
+            self.account_import_credentials,
+            ["POST"],
+            "Import Bilibili cookies manually",
         )
 
     def _unregister_account_routes(self) -> None:

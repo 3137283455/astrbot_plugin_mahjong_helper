@@ -33,6 +33,18 @@
             <button class="danger-button" data-action="logout" type="button" hidden>退出登录</button>
           </div>
 
+          <details class="credential-import">
+            <summary>扫码不可用时，手动粘贴 Cookie 登录</summary>
+            <div class="credential-form">
+              <p class="credential-hint">
+                从浏览器开发者工具复制 <code>Cookie</code> 请求头的完整内容（须含 <code>SESSDATA</code>）。
+                导入后立即校验，无效或被拒的凭证不会保存。
+              </p>
+              <textarea id="credential-text" rows="3" placeholder="name=value; name2=value2; ..."></textarea>
+              <button class="secondary-button" id="import-credentials" type="button">导入并校验</button>
+            </div>
+          </details>
+
           <div class="card-divider"></div>
 
           <div class="runtime-status" aria-labelledby="runtime-heading">

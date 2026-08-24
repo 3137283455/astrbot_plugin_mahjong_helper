@@ -75,7 +75,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 | 未明确媒体类型 | 按插件配置 | 同一候选锁定为 `bvid:cid`，不换歌、不换分 P |
 | 下载音频 | 音频文件 | ≤ 50 MiB、不限时长；必须用户确认 |
 
-候选只显示标题和时长；超过 15 分钟的音频标记“音频仅可下载”。`weixin_oc` 平台的语音会直接以文件交付。
+候选显示时长与标题（超出 24 字截断）并附 up 主名；超过 15 分钟的音频标记“音频仅可下载”。`weixin_oc` 平台的语音会直接以文件交付。
 
 ## 管理与安全
 
@@ -83,8 +83,32 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 
 - 查看 `ffmpeg` 健康状态。
 - Bilibili 扫码登录、取消或退出；退出只删除本地凭证。
+- 扫码不可用时，可在页面直接粘贴浏览器 Cookie 手动登录：凭证会立即校验，无效会被拒绝。
 - Cookie 只存插件数据目录 `accounts.json`（`0600`），不进入聊天、日志或 WebUI。
 - 媒体文件发送后立即删除；无播放历史、收藏和缓存。
+
+### 手动登录与 accounts.json
+
+扫码登录不可用时（如 B 站扫码接口异常），两种手动方式任选：
+
+1. **WebUI 粘贴 Cookie**：打开插件 Page“账号与运行状态”，展开“手动粘贴 Cookie 登录”，粘贴浏览器 `Cookie` 请求头的完整内容（须含 `SESSDATA`），点击“导入并校验”。
+2. **直接写 accounts.json**：在插件数据目录（AstrBot 的 `data/plugin_data/astrbot_plugin_bili_player/`）创建 `accounts.json`，格式如下：
+
+```json
+{
+  "version": 1,
+  "bilibili": {
+    "cookies": {
+      "SESSDATA": "...",
+      "DedeUserID": "...",
+      "bili_jct": "..."
+    },
+    "saved_at": 0
+  }
+}
+```
+
+`cookies` 字段名与值需与浏览器一致（含 `SESSDATA`、`DedeUserID`、`bili_jct`）。写入后重启插件或重载页面即可生效。
 
 ## 故障排查
 
@@ -92,6 +116,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 | --- | --- |
 | 提示缺少 ffmpeg | `ffmpeg -version`，确认 PATH |
 | 无法生成二维码 | 安装 `qrcode[pil]`，检查网络和管理员权限 |
+| 扫码后一直等待或无法确认 | B 站扫码接口更新时可能出现；改用页面“手动粘贴 Cookie 登录”导入浏览器凭证 |
 | 能搜索不能发送 | 检查 ffmpeg、适配器文件上限、Bilibili 播放权限 |
 | WebUI 不提示更新 | 确认从仓库安装，且 `metadata.yaml.version` 已递增 |
 | 仍看到“调用工具”等过程文字 | 关闭 Provider 的 `show_tool_use_status` 与 `show_tool_call_result`；插件直发媒体本身不会再附带预告文字 |

@@ -14,6 +14,7 @@ if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
 from core.accounts import (
+    AccountError,
     AccountProfile,
     AccountService,
     BilibiliAuthenticator,
@@ -172,6 +173,61 @@ class AccountServiceTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             self.assertEqual(set(service._sessions), {third["session_id"]})
+        finally:
+            await service.aclose()
+
+    async def test_import_credentials_validates_and_persists(self) -> None:
+        service = await self._service([])
+        try:
+            profile = await service.import_credentials(
+                "SESSDATA=secret; DedeUserID=42; bili_jct=csrf; ignored=noise"
+            )
+
+            self.assertEqual(profile.display_name, "管理员")
+            self.assertEqual(
+                service.cookies(),
+                {
+                    "SESSDATA": "secret",
+                    "DedeUserID": "42",
+                    "bili_jct": "csrf",
+                    "ignored": "noise",
+                },
+            )
+            stored = json.loads(self.path.read_text(encoding="utf-8"))
+            self.assertEqual(stored["bilibili"]["cookies"]["SESSDATA"], "secret")
+        finally:
+            await service.aclose()
+
+    async def test_import_credentials_rejects_blank_text(self) -> None:
+        service = await self._service([])
+        try:
+            with self.assertRaisesRegex(AccountError, "Cookie 字段"):
+                await service.import_credentials("   ; =  ;")
+            self.assertFalse(service.has_credentials())
+            self.assertFalse(self.path.exists())
+        finally:
+            await service.aclose()
+
+    async def test_import_credentials_rejects_unverifiable_cookies(self) -> None:
+        async def start() -> QrLoginStart:
+            raise AssertionError("manual import must not start a QR session")
+
+        async def poll(_: object) -> QrLoginPoll:
+            raise AssertionError("manual import must not poll a QR session")
+
+        async def profile(_: dict[str, str]) -> AccountProfile:
+            return AccountProfile()
+
+        service = AccountService(
+            CredentialStore(self.path),
+            BilibiliAuthenticator(start=start, poll=poll, profile=profile),
+        )
+        await service.restore_credentials()
+        try:
+            with self.assertRaisesRegex(AccountError, "无效或已失效"):
+                await service.import_credentials("SESSDATA=stale")
+            self.assertFalse(service.has_credentials())
+            self.assertFalse(self.path.exists())
         finally:
             await service.aclose()
 

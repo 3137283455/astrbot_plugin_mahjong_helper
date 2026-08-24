@@ -371,16 +371,17 @@ def format_search_results(
     )
     for position, candidate in enumerate(snapshot.candidates, start=1):
         download_only = (
-            "，音频仅可下载"
+            "（音频仅可下载）"
             if audio_enabled
             and default_audio_form == "voice"
             and voice_limit is not None
             and candidate.duration_ms > voice_limit
             else ""
         )
+        uploader = f" - {candidate.uploader}" if candidate.uploader else ""
         lines.append(
-            f"{position}. {candidate.display_title} "
-            f"({_duration_text(candidate.duration_ms)}{download_only})"
+            f"{position}. [{_duration_text(candidate.duration_ms)}] "
+            f"{_truncate_title(candidate.display_title)}{uploader}{download_only}"
         )
 
     if video_enabled:
@@ -534,6 +535,14 @@ def _display_stem(candidate: BilibiliCandidate) -> str:
 def _duration_text(duration_ms: int) -> str:
     seconds = max(0, duration_ms) // 1000
     return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _truncate_title(title: str, *, limit: int = 24) -> str:
+    """Trim a candidate title to a bounded display width for list readability."""
+    compact = " ".join(str(title).strip().split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
 
 
 def _duration_exceeds_limit(

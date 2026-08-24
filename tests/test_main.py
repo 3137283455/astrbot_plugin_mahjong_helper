@@ -613,6 +613,49 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(released, [media])
 
+    async def test_deliver_media_keeps_lease_when_delivery_fails(self) -> None:
+        candidate = _Candidate("BV1fixture:1", "温奕心 - 一路生花")
+        snapshot = _Snapshot((candidate,))
+        media = types.SimpleNamespace(
+            path=Path("/tmp/fixture.m4a"), filename="fixture.m4a"
+        )
+        result = types.SimpleNamespace(candidate=candidate, media=media)
+
+        class RetryableDelivery:
+            def __init__(self) -> None:
+                self.attempts = 0
+
+            async def deliver(self, *_args, **_kwargs):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise listen_main.DeliveryError("Bilibili 音频下载失败")
+                return result
+
+        class FakeSearch:
+            def snapshot(self, **_kwargs):
+                return snapshot
+
+        class FakeMedia:
+            async def release(self, _released_media):
+                pass
+
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        plugin._search = FakeSearch()
+        plugin._delivery = RetryableDelivery()
+        plugin._media = FakeMedia()
+        plugin._llm_searches = {}
+        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="audio")
+        event = _SendingEvent("chat-a")
+
+        first = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
+        self.assertEqual(json.loads(first)["status"], "error")
+        # A failed delivery must keep the lease so the model can retry once.
+        self.assertEqual(_llm_search_ids(plugin), {"chat-a": snapshot.search_id})
+
+        second = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
+        self.assertIsNone(second)
+        self.assertEqual(plugin._llm_searches, {})
+
     async def test_llm_reply_mode_returns_status_after_media_only(self) -> None:
         candidate = _Candidate("BV1fixture:1", "晴天")
         snapshot = _Snapshot((candidate,))
@@ -1224,8 +1267,8 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertIn("Bilibili 搜索结果", event.sent[0][1])
-        self.assertIn("1. 候选 1 (3:00)", event.sent[0][1])
-        self.assertIn("10. 候选 10 (3:00)", event.sent[0][1])
+        self.assertIn("1. [3:00] 候选 1 - fixture-up", event.sent[0][1])
+        self.assertIn("10. [3:00] 候选 10 - fixture-up", event.sent[0][1])
         self.assertIn("chat-a", plugin._selection_waits)
         self.assertEqual(len(listen_main.SessionWaiter.instances), 1)
         self.assertTrue(listen_main.SessionWaiter.instances[0].registered.is_set())
@@ -1735,6 +1778,63 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(event.sent), 1)
         self.assertIsInstance(event.sent[0][0], listen_main.File)
 
+    async def test_send_onebot_voice_uses_local_file_uri_on_aiocqhttp(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        class FakeApi:
+            async def call_action(self, action: str, **payload):
+                calls.append({"action": action, **payload})
+
+        event = _SendingEvent("chat-a", platform_name="aiocqhttp")
+        event.bot = types.SimpleNamespace(api=FakeApi())
+        event.is_private_chat = lambda: False
+        event.get_group_id = lambda: "group-1"
+        media = types.SimpleNamespace(path=Path("/tmp/音乐 文件.m4a"))
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+
+        ok = await plugin._send_onebot_voice(event, media)
+
+        self.assertTrue(ok)
+        self.assertEqual(calls[0]["action"], "send_group_msg")
+        self.assertEqual(calls[0]["group_id"], "group-1")
+        segment = calls[0]["message"][0]
+        self.assertEqual(segment["type"], "record")
+        self.assertTrue(segment["data"]["file"].startswith("file:///"))
+
+    async def test_send_onebot_voice_skips_other_platforms(self) -> None:
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        media = types.SimpleNamespace(path=Path("/tmp/fixture.m4a"))
+        event = _SendingEvent("chat-a")
+        ok = await plugin._send_onebot_voice(event, media)
+        self.assertFalse(ok)
+
+    async def test_send_delivery_prefers_onebot_local_voice_on_aiocqhttp(self) -> None:
+        released: list[object] = []
+
+        class FakeMedia:
+            async def release(self, media):
+                released.append(media)
+
+        class FakeApi:
+            async def call_action(self, action: str, **payload):
+                pass
+
+        media_result = types.SimpleNamespace(
+            path=Path("/tmp/fixture.m4a"), filename="fixture.m4a"
+        )
+        plugin = object.__new__(listen_main.ListenMusicPlugin)
+        plugin._media = FakeMedia()
+        event = _SendingEvent("chat-a", platform_name="aiocqhttp")
+        event.bot = types.SimpleNamespace(api=FakeApi())
+        event.is_private_chat = lambda: True
+        event.get_sender_id = lambda: "user-1"
+        result = types.SimpleNamespace(media=media_result)
+
+        await plugin._send_delivery(event, result, listen_main._DeliveryMode.VOICE)
+
+        self.assertEqual(released, [media_result])
+        self.assertEqual(event.sent, [])
+
     def test_command_error_label_matches_the_user_command(self) -> None:
         self.assertEqual(
             listen_main._command_error_label("搜索视频 <关键词>"),
@@ -1869,6 +1969,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 "/astrbot_plugin_bili_player/accounts/login/<session_id>/events",
                 "/astrbot_plugin_bili_player/accounts/login/<session_id>/cancel",
                 "/astrbot_plugin_bili_player/accounts/logout",
+                "/astrbot_plugin_bili_player/accounts/credentials",
             ],
         )
 

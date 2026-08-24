@@ -166,6 +166,19 @@ def _normalise_cookies(value: Mapping[str, str] | None) -> dict[str, str]:
     return cookies
 
 
+def _parse_cookie_text(value: str) -> dict[str, str]:
+    """Parse a browser-style ``name=value; name2=value2`` cookie string."""
+    if not isinstance(value, str):
+        return {}
+    pairs: dict[str, str] = {}
+    for part in value.split(";"):
+        name, separator, cookie = part.strip().partition("=")
+        if not separator or not name or not cookie:
+            continue
+        pairs[name.strip()] = cookie.strip()
+    return _normalise_cookies(pairs)
+
+
 def _encode_credentials(record: AccountCredentials | None) -> bytes:
     payload: dict[str, object] = {"version": 1}
     if record is not None:
@@ -377,6 +390,34 @@ class AccountService:
             except CredentialStoreError as exc:
                 raise AccountError("无法保存退出状态") from exc
             self._credentials = None
+
+    async def import_credentials(self, cookie_text: str) -> AccountProfile:
+        """Validate and persist manually supplied administrator cookies.
+
+        The cookies must belong to a logged-in Bilibili session; otherwise the
+        import is rejected so a stale clipboard value can never silently
+        disable restricted-content playback.
+        """
+        await self.restore_credentials()
+        cookies = _parse_cookie_text(cookie_text)
+        if not cookies:
+            raise AccountError("未识别到有效的 Cookie 字段")
+        profile = await self._load_profile(cookies)
+        if not profile.display_name:
+            raise AccountError("Cookie 无效或已失效，无法登录 Bilibili")
+        async with self._lock:
+            await self._cancel_active_locked("账号凭证已手动更新")
+            record = AccountCredentials(
+                cookies=cookies,
+                profile=profile,
+                saved_at=time.time(),
+            )
+            try:
+                await self._store.save(record)
+            except CredentialStoreError as exc:
+                raise AccountError("无法保存登录状态") from exc
+            self._credentials = record
+        return profile
 
     async def login_events(
         self, session_id: str, owner_id: str

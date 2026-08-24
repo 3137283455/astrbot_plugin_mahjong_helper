@@ -250,7 +250,10 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [item.candidate_id for item in snapshot.candidates], ["BVlong:1"]
         )
-        self.assertIn("(16:00，音频仅可下载)", format_search_results(snapshot))
+        self.assertIn(
+            "[16:00] 周杰伦 - 晴天 - 长音频 - 周杰伦音乐（音频仅可下载）",
+            format_search_results(snapshot),
+        )
 
     async def test_search_excludes_long_audio_with_a_duration_limit(self) -> None:
         search, _, _, _ = await self._workflow(
@@ -465,7 +468,9 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         rendered_for_user = format_search_results(snapshot)
-        self.assertIn("详情页标题 - P2 歌曲页 (4:29)", rendered_for_user)
+        self.assertIn(
+            "[4:29] 详情页标题 - P2 歌曲页 - 不应暴露的上传者", rendered_for_user
+        )
         self.assertNotIn("UP主", rendered_for_user)
         self.assertIn("视频：回复“序号”", rendered_for_user)
         self.assertIn("音频播放：回复“序号 音频”", rendered_for_user)

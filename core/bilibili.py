@@ -20,7 +20,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import aiohttp
 
@@ -395,6 +395,33 @@ def _normalise_bvid(value: str) -> str:
     return bvid
 
 
+_LOGIN_COOKIE_NAMES = frozenset(
+    {"SESSDATA", "DedeUserID", "DedeUserID__ckMd5", "bili_jct", "sid"}
+)
+
+
+def _login_cookies_from_url(value: Any) -> dict[str, str]:
+    """Extract credential cookies from a confirmed QR login redirect URL.
+
+    Bilibili's web QR login historically delivered SESSDATA through
+    Set-Cookie headers, but the updated flow can also embed credentials as
+    query parameters of the redirect URL. Only well-known credential names
+    are accepted so an unexpected parameter cannot smuggle arbitrary cookies.
+    """
+
+    url = _normalise_url(value)
+    if not url:
+        return {}
+    query = urlsplit(url).query
+    if not query:
+        return {}
+    cookies: dict[str, str] = {}
+    for name, raw_value in parse_qsl(query, keep_blank_values=False):
+        if name in _LOGIN_COOKIE_NAMES and raw_value:
+            cookies[name] = raw_value
+    return cookies
+
+
 def _unique_urls(primary: str, candidates: Any) -> tuple[str, ...]:
     values = [primary]
     if isinstance(candidates, list):
@@ -723,6 +750,7 @@ class BilibiliClient:
             current.cookies.update(response_cookies)
             if code == 0:
                 cookies = dict(current.cookies)
+                cookies.update(_login_cookies_from_url(data.get("url")))
                 self._qr_sessions.pop(poll_token, None)
                 return BilibiliQrLoginPoll(
                     state="confirmed", cookies=cookies, message=message

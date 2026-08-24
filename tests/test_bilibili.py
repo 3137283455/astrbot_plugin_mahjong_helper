@@ -180,6 +180,33 @@ class AidFixtureBilibiliClient(BilibiliClient):
         }
 
 
+class QrLoginFixtureBilibiliClient(BilibiliClient):
+    """QR login fixture: one generate payload, then one fixed poll payload."""
+
+    def __init__(
+        self,
+        generate_payload: dict[str, object],
+        poll_payload: dict[str, object],
+        poll_cookies: dict[str, str],
+    ) -> None:
+        super().__init__(session=object())
+        self._generate_payload = generate_payload
+        self._poll_payload = poll_payload
+        self._poll_cookies = poll_cookies
+
+    async def _request_json(
+        self,
+        url,
+        *,
+        params=None,
+        cookies=None,
+        referer="https://www.bilibili.com/",
+    ):
+        if "qrcode/generate" in url:
+            return self._generate_payload, {}
+        return self._poll_payload, self._poll_cookies
+
+
 class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
     def test_video_track_selection_stays_at_or_below_480p(self) -> None:
         def track(stream_id: int, codecs: str) -> _DashVideoTrack:
@@ -256,6 +283,65 @@ class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.view_requests, [{"aid": 170001}])
         self.assertEqual(video.bvid, "BV1Q541167Qg")
         self.assertEqual([(page.cid, page.index) for page in video.pages], [(99, 1)])
+
+    async def test_qr_confirmation_extracts_credentials_from_redirect_url(self) -> None:
+        client = QrLoginFixtureBilibiliClient(
+            generate_payload={
+                "code": 0,
+                "data": {
+                    "qrcode_key": "fixture-key",
+                    "url": "https://passport.bilibili.com/login?code=1",
+                },
+            },
+            poll_payload={
+                "code": 0,
+                "data": {
+                    "code": 0,
+                    "url": (
+                        "https://passport.biligame.com/crossDomain?"
+                        "DedeUserID=42&SESSDATA=url-secret&bili_jct=csrf&ignored=param"
+                    ),
+                },
+            },
+            poll_cookies={},
+        )
+
+        session = await client.start_qr_login()
+        result = await client.poll_qr_login(session.poll_token)
+
+        self.assertEqual(result.state, "confirmed")
+        self.assertEqual(
+            result.cookies,
+            {"DedeUserID": "42", "SESSDATA": "url-secret", "bili_jct": "csrf"},
+        )
+
+    async def test_qr_confirmation_merges_set_cookie_with_url_credentials(self) -> None:
+        client = QrLoginFixtureBilibiliClient(
+            generate_payload={
+                "code": 0,
+                "data": {
+                    "qrcode_key": "fixture-key",
+                    "url": "https://passport.bilibili.com/login?code=1",
+                },
+            },
+            poll_payload={
+                "code": 0,
+                "data": {
+                    "code": 0,
+                    "url": "https://passport.biligame.com/crossDomain?SESSDATA=url-secret",
+                },
+            },
+            poll_cookies={"SESSDATA": "set-cookie-secret", "sid": "old"},
+        )
+
+        session = await client.start_qr_login()
+        result = await client.poll_qr_login(session.poll_token)
+
+        self.assertEqual(result.state, "confirmed")
+        # The freshest credentials come from the confirmation URL; the
+        # Set-Cookie value carried by earlier polls is superseded.
+        self.assertEqual(result.cookies["SESSDATA"], "url-secret")
+        self.assertEqual(result.cookies["sid"], "old")
 
 
 if __name__ == "__main__":

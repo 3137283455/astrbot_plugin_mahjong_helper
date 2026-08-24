@@ -39,6 +39,8 @@ const elements = {
   closeLogin: document.getElementById("close-login"),
   cancelLogin: document.getElementById("cancel-login"),
   account: document.querySelector(".account-card"),
+  credentialText: document.getElementById("credential-text"),
+  importCredentials: document.getElementById("import-credentials"),
 };
 
 let activeLogin = null;
@@ -239,12 +241,35 @@ async function logout(button) {
   }
 }
 
+async function importCredentials(button) {
+  const cookieText = elements.credentialText.value.trim();
+  if (!cookieText) {
+    showMessage("请粘贴完整的 Cookie 字符串。");
+    return;
+  }
+  setBusy(button, true);
+  showMessage("");
+  try {
+    const payload = await bridge.apiPost("accounts/credentials", { cookies: cookieText });
+    elements.credentialText.value = "";
+    showMessage(`已导入账号“${payload.display_name || "已登录"}”。`, "success");
+    await refreshStatus();
+  } catch (error) {
+    showMessage(messageFrom(error, "Cookie 无效或无法导入。"));
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 function bindActions() {
   elements.account.querySelector('[data-action="login"]').addEventListener("click", (event) => {
     void startLogin(event.currentTarget);
   });
   elements.account.querySelector('[data-action="logout"]').addEventListener("click", (event) => {
     void logout(event.currentTarget);
+  });
+  elements.importCredentials.addEventListener("click", (event) => {
+    void importCredentials(event.currentTarget);
   });
   elements.refresh.addEventListener("click", () => void refreshStatus());
   elements.closeLogin.addEventListener("click", () => void closeLogin(true));
