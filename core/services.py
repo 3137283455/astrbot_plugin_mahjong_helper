@@ -354,6 +354,7 @@ def format_search_results(
     default_audio_form: str = "voice",
     fuzzy_query: bool = False,
     voice_max_duration_ms: int | None = None,
+    show_uploader: bool = False,
 ) -> str:
     """Produce the user-visible catalogue for one configured action surface."""
 
@@ -378,7 +379,11 @@ def format_search_results(
             and candidate.duration_ms > voice_limit
             else ""
         )
-        uploader = f" - {candidate.uploader}" if candidate.uploader else ""
+        uploader = (
+            f" - {_truncate_title(candidate.uploader, limit=20)}"
+            if show_uploader and candidate.uploader
+            else ""
+        )
         lines.append(
             f"{position}. [{_duration_text(candidate.duration_ms)}] "
             f"{_truncate_title(candidate.display_title)}{uploader}{download_only}"

@@ -252,6 +252,10 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn(
             "[16:00] 周杰伦 - 晴天 - 长音频 - 周杰伦音乐（音频仅可下载）",
+            format_search_results(snapshot, show_uploader=True),
+        )
+        self.assertNotIn(
+            "周杰伦音乐",
             format_search_results(snapshot),
         )
 
@@ -467,11 +471,15 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 page_title="P2 歌曲页",
             ),
         )
-        rendered_for_user = format_search_results(snapshot)
+        rendered_for_user = format_search_results(snapshot, show_uploader=True)
         self.assertIn(
             "[4:29] 详情页标题 - P2 歌曲页 - 不应暴露的上传者", rendered_for_user
         )
         self.assertNotIn("UP主", rendered_for_user)
+        self.assertNotIn(
+            "不应暴露的上传者",
+            format_search_results(snapshot),
+        )
         self.assertIn("视频：回复“序号”", rendered_for_user)
         self.assertIn("音频播放：回复“序号 音频”", rendered_for_user)
         self.assertIn("音频下载：回复“序号 音频下载”", rendered_for_user)

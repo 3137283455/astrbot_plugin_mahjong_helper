@@ -1460,6 +1460,7 @@ class ListenMusicPlugin(Star):
             default_audio_form=settings.preferred_audio_form,
             fuzzy_query=bool(getattr(snapshot, "fuzzy_query", False)),
             voice_max_duration_ms=settings.limits.voice.max_duration_ms,
+            show_uploader=settings.show_uploader,
         )
 
 

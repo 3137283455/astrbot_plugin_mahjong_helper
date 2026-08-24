@@ -105,5 +105,11 @@
       "max": 500,
       "step": 5
     }
+  },
+  "show_uploader": {
+    "description": "搜索结果列表是否显示 up 主名",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后候选行附带 up 主名（最多 20 字截断），便于识别翻唱版本；LLM 侧证据始终不含上传者。"
   }
 }

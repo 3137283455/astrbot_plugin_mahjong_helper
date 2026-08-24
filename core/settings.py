@@ -116,6 +116,7 @@ class PluginSettings:
     media_preference: MediaPreference = MediaPreference.VIDEO_FIRST
     audio_form_preference: AudioFormPreference = AudioFormPreference.VOICE_FIRST
     delivery_reply: DeliveryReply = DeliveryReply.NONE
+    show_uploader: bool = False
     limits: PluginLimits = field(default_factory=PluginLimits)
 
     @classmethod
@@ -138,6 +139,7 @@ class PluginSettings:
                 config.get("delivery_reply"),
                 DeliveryReply.NONE,
             ),
+            show_uploader=bool(config.get("show_uploader", False)),
             limits=PluginLimits.from_mapping(config),
         )
 

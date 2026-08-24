@@ -1267,8 +1267,9 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertIn("Bilibili 搜索结果", event.sent[0][1])
-        self.assertIn("1. [3:00] 候选 1 - fixture-up", event.sent[0][1])
-        self.assertIn("10. [3:00] 候选 10 - fixture-up", event.sent[0][1])
+        self.assertIn("1. [3:00] 候选 1", event.sent[0][1])
+        self.assertIn("10. [3:00] 候选 10", event.sent[0][1])
+        self.assertNotIn("fixture-up", event.sent[0][1])
         self.assertIn("chat-a", plugin._selection_waits)
         self.assertEqual(len(listen_main.SessionWaiter.instances), 1)
         self.assertTrue(listen_main.SessionWaiter.instances[0].registered.is_set())

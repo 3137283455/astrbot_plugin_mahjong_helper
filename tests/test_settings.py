@@ -33,6 +33,7 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertEqual(settings.preferred_audio_form, "voice")
         self.assertEqual(settings.delivery_reply, DeliveryReply.NONE)
         self.assertFalse(settings.llm_reply_enabled)
+        self.assertFalse(settings.show_uploader)
         self.assertEqual(settings.limits, PluginLimits())
 
     def test_mapping_values_are_parsed(self) -> None:
@@ -41,6 +42,7 @@ class PluginSettingsTests(unittest.TestCase):
                 "media_priority": "audio_only",
                 "audio_form_priority": "file_first",
                 "delivery_reply": "llm",
+                "show_uploader": True,
             }
         )
 
@@ -52,6 +54,7 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertEqual(settings.preferred_audio_form, "file")
         self.assertEqual(settings.delivery_reply, DeliveryReply.LLM)
         self.assertTrue(settings.llm_reply_enabled)
+        self.assertTrue(settings.show_uploader)
 
     def test_custom_limits_are_bounded_and_converted(self) -> None:
         limits = PluginLimits.from_mapping(
