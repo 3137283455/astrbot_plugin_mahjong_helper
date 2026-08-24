@@ -12,7 +12,6 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 from core.settings import (
     AudioFormPreference,
-    DeliveryReply,
     MediaPreference,
     PluginLimits,
     PluginSettings,
@@ -31,8 +30,6 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertTrue(settings.audio_allowed)
         self.assertEqual(settings.default_media, "video")
         self.assertEqual(settings.preferred_audio_form, "voice")
-        self.assertEqual(settings.delivery_reply, DeliveryReply.NONE)
-        self.assertFalse(settings.llm_reply_enabled)
         self.assertFalse(settings.show_uploader)
         self.assertEqual(settings.limits, PluginLimits())
 
@@ -41,7 +38,6 @@ class PluginSettingsTests(unittest.TestCase):
             {
                 "media_priority": "audio_only",
                 "audio_form_priority": "file_first",
-                "delivery_reply": "llm",
                 "show_uploader": True,
             }
         )
@@ -52,8 +48,6 @@ class PluginSettingsTests(unittest.TestCase):
         self.assertTrue(settings.audio_allowed)
         self.assertEqual(settings.default_media, "audio")
         self.assertEqual(settings.preferred_audio_form, "file")
-        self.assertEqual(settings.delivery_reply, DeliveryReply.LLM)
-        self.assertTrue(settings.llm_reply_enabled)
         self.assertTrue(settings.show_uploader)
 
     def test_custom_limits_are_bounded_and_converted(self) -> None:
@@ -101,11 +95,7 @@ class PluginSettingsTests(unittest.TestCase):
         )
         self.assertEqual(schema["media_priority"]["default"], "video_first")
         self.assertEqual(schema["audio_form_priority"]["default"], "voice_first")
-        self.assertEqual(
-            schema["delivery_reply"]["options"],
-            [item.value for item in DeliveryReply],
-        )
-        self.assertEqual(schema["delivery_reply"]["default"], "none")
+        self.assertNotIn("delivery_reply", schema)
         self.assertEqual(schema["voice_size_mb"]["default"], 25)
         self.assertEqual(schema["video_size_mb"]["default"], 50)
         self.assertEqual(schema["download_size_mb"]["default"], 50)

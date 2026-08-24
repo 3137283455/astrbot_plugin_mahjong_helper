@@ -352,19 +352,11 @@ class DeliverMediaTool(FunctionTool):
     """Deliver a chosen candidate, automatically or via a user-owned pick."""
 
     def __init__(self, plugin: "ListenMusicPlugin") -> None:
-        settings = getattr(plugin, "_settings", None) or PluginSettings()
-        if settings.llm_reply_enabled:
-            reply_rule = (
-                "调用本工具前，先回复一句简短自然的开场白（如“好的，正在为你播放”），"
-                "说明正在处理即可，不要描述过程细节；调用后媒体由本工具发送，"
-                "成功后不返回内容，本轮立即结束，不得再追加任何文字。"
-                "失败时返回 error，由你转述，不要输出 JSON。"
-            )
-        else:
-            reply_rule = (
-                "直接交付成功后本工具不返回内容，AstrBot 会直接结束本轮；"
-                "失败时返回 error，由你用自然语言向用户转述，不要输出 JSON。"
-            )
+        reply_rule = (
+            "插件会在下载、转码前主动发送一条准备提示；你不要自行输出预告、过程或确认文字。"
+            "直接交付成功后本工具不返回内容，AstrBot 会直接结束本轮；"
+            "失败时返回 error，由你用自然语言向用户转述，不要输出 JSON。"
+        )
         super().__init__(
             name="deliver_media",
             description=(
@@ -798,9 +790,9 @@ class ListenMusicPlugin(Star):
             # delivery keeps the snapshot so the model can retry once.
             self._consume_llm_search(session_id, lease)
             # None is the only AstrBot signal for "already sent; end loop".
-            # The model's preface (delivery_reply=llm) was already spoken
-            # before this tool call, so no closing line is requested after
-            # media delivery. All failure paths return an error string instead.
+            # The plugin already sent preparation feedback before download, and
+            # no closing line is sent after media delivery. All failure paths
+            # return an error string instead.
             return None
         except _StaleLlmDelivery as exc:
             # The originating user request has already moved on.  Do not leak
@@ -843,8 +835,9 @@ class ListenMusicPlugin(Star):
         candidate: BilibiliCandidate,
         action: _DeliveryMode,
     ) -> None:
-        """Prepare and send only the media; no preface or follow-up text."""
+        """Send preparation feedback, then materialize and deliver one item."""
 
+        await event.send(event.plain_result(_delivery_preparation_message(action)))
         preparation = asyncio.create_task(
             self._deliver_candidate(candidate, action),
             name=f"bili-player-delivery-{candidate.candidate_id}",
@@ -986,8 +979,7 @@ class ListenMusicPlugin(Star):
                 await reply.send(reply.plain_result(hint))
                 stop_wait = False
                 return
-            result = await self._deliver_candidate(candidate, action)
-            await self._send_delivery(reply, result, action)
+            await self._deliver_media(reply, candidate=candidate, action=action)
         except (DeliveryError, FfmpegUnavailableError, MediaError) as exc:
             await reply.send(reply.plain_result(str(exc)))
         except Exception:
@@ -1604,6 +1596,16 @@ def _selection_requires_download(
         and voice_limit.max_duration_ms is not None
         and candidate.duration_ms > voice_limit.max_duration_ms
     )
+
+
+def _delivery_preparation_message(action: _DeliveryMode) -> str:
+    """Return the sole user-visible status message before media preparation."""
+
+    if action is _DeliveryMode.VIDEO:
+        return "正在准备视频，请稍候。"
+    if action is _DeliveryMode.DOWNLOAD:
+        return "正在准备音频文件，请稍候。"
+    return "正在准备音频，请稍候。"
 
 
 def _public_login_snapshot(

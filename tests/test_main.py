@@ -209,7 +209,6 @@ DOWNLOAD_MEDIA_LIMITS = core_media.DOWNLOAD_MEDIA_LIMITS
 VIDEO_MEDIA_LIMITS = core_media.VIDEO_MEDIA_LIMITS
 VOICE_MEDIA_LIMITS = core_media.VOICE_MEDIA_LIMITS
 AudioFormPreference = core_settings.AudioFormPreference
-DeliveryReply = core_settings.DeliveryReply
 MediaPreference = core_settings.MediaPreference
 
 
@@ -581,6 +580,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         class FakeDelivery:
             async def deliver(self, selected, *, limits, prefer_highest=False):
+                self.messages_at_start = list(event.sent)
                 self.selected = selected
                 self.limits = limits
                 return result
@@ -608,8 +608,15 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(delivery.selected, candidate)
         self.assertEqual(delivery.limits, VOICE_MEDIA_LIMITS)
         self.assertEqual(
+            delivery.messages_at_start,
+            [("plain", "正在准备音频，请稍候。")],
+        )
+        self.assertEqual(
             event.sent,
-            [listen_main.MessageChain([("record", Path("/tmp/fixture.m4a"))])],
+            [
+                ("plain", "正在准备音频，请稍候。"),
+                listen_main.MessageChain([("record", Path("/tmp/fixture.m4a"))]),
+            ],
         )
         self.assertEqual(released, [media])
 
@@ -656,57 +663,29 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(second)
         self.assertEqual(plugin._llm_searches, {})
 
-    async def test_llm_reply_mode_ends_loop_silently_after_media_only(self) -> None:
-        candidate = _Candidate("BV1fixture:1", "晴天")
-        snapshot = _Snapshot((candidate,))
-        media = types.SimpleNamespace(
-            path=Path("/tmp/fixture.mp4"), filename="fixture.mp4"
-        )
-        result = types.SimpleNamespace(candidate=candidate, media=media)
-
-        class FakeDelivery:
-            async def deliver_video(self, _candidate, *, limits):
-                return result
-
-        class FakeMedia:
-            async def release(self, _media):
-                pass
-
-        plugin = object.__new__(listen_main.ListenMusicPlugin)
-        _configure_selection_waits(plugin)
-        plugin._settings = listen_main.PluginSettings(delivery_reply=DeliveryReply.LLM)
-        plugin._search = types.SimpleNamespace(snapshot=lambda **_kwargs: snapshot)
-        plugin._delivery = FakeDelivery()
-        plugin._media = FakeMedia()
-        _set_llm_search(plugin, "chat-a", snapshot.search_id, delivery="video")
-        event = _SendingEvent("chat-a")
-
-        result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
-
-        # The preface is spoken before the tool call; after media delivery the
-        # tool returns None so AstrBot ends the agent loop without a closing
-        # line.
-        self.assertIsNone(result)
+    def test_delivery_preparation_messages_match_the_transport(self) -> None:
         self.assertEqual(
-            event.sent,
-            [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
+            listen_main._delivery_preparation_message(listen_main._DeliveryMode.VOICE),
+            "正在准备音频，请稍候。",
+        )
+        self.assertEqual(
+            listen_main._delivery_preparation_message(
+                listen_main._DeliveryMode.DOWNLOAD
+            ),
+            "正在准备音频文件，请稍候。",
+        )
+        self.assertEqual(
+            listen_main._delivery_preparation_message(listen_main._DeliveryMode.VIDEO),
+            "正在准备视频，请稍候。",
         )
 
-    def test_deliver_tool_description_follows_reply_mode(self) -> None:
-        silent = listen_main.PluginSettings()
-        llm_reply = listen_main.PluginSettings(delivery_reply=DeliveryReply.LLM)
+    def test_deliver_tool_description_assigns_feedback_to_the_plugin(self) -> None:
+        tool = listen_main.DeliverMediaTool(types.SimpleNamespace())
 
-        silent_tool = listen_main.DeliverMediaTool(
-            types.SimpleNamespace(_settings=silent)
-        )
-        llm_tool = listen_main.DeliverMediaTool(
-            types.SimpleNamespace(_settings=llm_reply)
-        )
-
-        self.assertIn("不返回内容", silent_tool.description)
-        self.assertIn("开场白", llm_tool.description)
-        self.assertIn("正在为你播放", llm_tool.description)
-        self.assertNotIn("收尾", llm_tool.description)
+        self.assertIn("插件会在下载、转码前主动发送", tool.description)
+        self.assertIn("不返回内容", tool.description)
+        self.assertNotIn("开场白", tool.description)
+        self.assertNotIn("收尾", tool.description)
 
     async def test_llm_auto_delivery_defaults_to_video(self) -> None:
         candidate = _Candidate("BV1fixture:1", "温奕心 - 一路生花")
@@ -748,7 +727,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivery.limits, core_settings.PluginLimits().video)
         self.assertEqual(
             event.sent,
-            [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
+            [
+                ("plain", "正在准备视频，请稍候。"),
+                listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))]),
+            ],
         )
 
     async def test_llm_auto_listen_long_audio_falls_back_to_file(self) -> None:
@@ -791,10 +773,14 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertIs(delivery.selected, candidate)
         self.assertEqual(delivery.limits, core_settings.PluginLimits().download)
-        self.assertEqual(len(event.sent), 1)
-        self.assertIsInstance(event.sent[0][0], listen_main.File)
         self.assertEqual(
-            event.sent[0][0].kwargs,
+            event.sent[0],
+            ("plain", "正在准备音频文件，请稍候。"),
+        )
+        self.assertEqual(len(event.sent), 2)
+        self.assertIsInstance(event.sent[1][0], listen_main.File)
+        self.assertEqual(
+            event.sent[1][0].kwargs,
             {"name": "fixture.m4a", "file": "/tmp/fixture.m4a"},
         )
 
@@ -1404,7 +1390,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(delivery.selected, candidate)
         self.assertEqual(
             event.sent,
-            [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
+            [
+                ("plain", "正在准备视频，请稍候。"),
+                listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))]),
+            ],
         )
 
     async def test_search_song_uses_the_same_selection_session(self) -> None:
@@ -1474,7 +1463,11 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(delivery.selected, candidate)
         self.assertEqual(delivery.limits, core_settings.PluginLimits().download)
         self.assertTrue(controller.stopped)
-        component = reply.sent[0][0]
+        self.assertEqual(
+            reply.sent[0],
+            ("plain", "正在准备音频文件，请稍候。"),
+        )
+        component = reply.sent[1][0]
         self.assertEqual(component.kwargs["name"], "fixture.m4a")
         self.assertEqual(component.kwargs["file"], "/tmp/fixture.m4a")
         self.assertEqual(released, [media])

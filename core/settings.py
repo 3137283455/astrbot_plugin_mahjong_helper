@@ -34,17 +34,6 @@ class AudioFormPreference(str, Enum):
     FILE_FIRST = "file_first"
 
 
-class DeliveryReply(str, Enum):
-    """Whether the LLM speaks one short preface before the delivery tool call.
-
-    The preface is sent before media is prepared, so the user gets immediate
-    feedback; the tool then ends the agent loop silently.
-    """
-
-    NONE = "none"
-    LLM = "llm"
-
-
 @dataclass(frozen=True, slots=True)
 class PluginLimits:
     """Configured delivery budgets with the same shape as ``MediaLimits``."""
@@ -119,7 +108,6 @@ class PluginSettings:
 
     media_preference: MediaPreference = MediaPreference.VIDEO_FIRST
     audio_form_preference: AudioFormPreference = AudioFormPreference.VOICE_FIRST
-    delivery_reply: DeliveryReply = DeliveryReply.NONE
     show_uploader: bool = False
     limits: PluginLimits = field(default_factory=PluginLimits)
 
@@ -137,11 +125,6 @@ class PluginSettings:
                 AudioFormPreference,
                 config.get("audio_form_priority"),
                 AudioFormPreference.VOICE_FIRST,
-            ),
-            delivery_reply=_enum_value(
-                DeliveryReply,
-                config.get("delivery_reply"),
-                DeliveryReply.NONE,
             ),
             show_uploader=bool(config.get("show_uploader", False)),
             limits=PluginLimits.from_mapping(config),
@@ -171,10 +154,6 @@ class PluginSettings:
             else "file"
         )
 
-    @property
-    def llm_reply_enabled(self) -> bool:
-        return self.delivery_reply is DeliveryReply.LLM
-
 
 def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:
     try:
@@ -198,7 +177,6 @@ def _enum_value(enum_type: Any, value: object, default: Any) -> Any:
 
 __all__ = [
     "AudioFormPreference",
-    "DeliveryReply",
     "MediaPreference",
     "PluginLimits",
     "PluginSettings",
