@@ -208,13 +208,15 @@ class QrLoginFixtureBilibiliClient(BilibiliClient):
 
 
 class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
-    def test_video_track_selection_stays_at_or_below_480p(self) -> None:
-        def track(stream_id: int, codecs: str) -> _DashVideoTrack:
+    def test_video_track_selection_prefers_lowest_quality(self) -> None:
+        def track(
+            stream_id: int, codecs: str, *, bandwidth: int = 1_000_000
+        ) -> _DashVideoTrack:
             return _DashVideoTrack(
                 stream_id=stream_id,
                 url=f"https://cdn.example.test/{stream_id}.m4s",
                 backup_urls=(),
-                bandwidth=1_000_000,
+                bandwidth=bandwidth,
                 mime_type="video/mp4",
                 codecs=codecs,
             )
@@ -228,12 +230,20 @@ class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIsNotNone(selected)
-        self.assertEqual((selected.stream_id, selected.codecs), (32, "avc1.64001f"))
+        self.assertEqual((selected.stream_id, selected.codecs), (16, "avc1.64001f"))
 
         fallback = BilibiliClient._select_dash_video_track(
             (track(64, "avc1.640028"), track(80, "avc1.64002a"))
         )
         self.assertEqual(fallback.stream_id, 64)
+
+        prefer_lowest_bitrate = BilibiliClient._select_dash_video_track(
+            (
+                track(32, "avc1.64001f", bandwidth=500_000),
+                track(32, "avc1.64001f", bandwidth=300_000),
+            )
+        )
+        self.assertEqual(prefer_lowest_bitrate.bandwidth, 300_000)
 
     def test_wbi_signing_fixture_filters_reserved_characters(self) -> None:
         key = derive_wbi_mixin_key(

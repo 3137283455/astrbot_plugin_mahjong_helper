@@ -42,8 +42,9 @@ _WBI_KEY_TTL_SECONDS = 10 * 60
 _QR_SESSION_TTL_SECONDS = 180
 _WBI_RETRY_CODES = frozenset({-403, -352})
 _TARGET_AUDIO_BANDWIDTH = 192_000
-# Bilibili quality id (qn) for 480P; video delivery prefers 480P or lower so a
-# phone-friendly file stays small and broadly playable.
+# Bilibili quality id (qn) for 480P; the request ceiling stays low so the
+# returned track set always contains small phone-friendly options, while
+# selection below picks the very lowest track for fast delivery.
 _TARGET_VIDEO_QUALITY = 32
 
 # Bilibili's documented mixin permutation.  Keeping it as data makes the
@@ -614,13 +615,13 @@ class BilibiliClient:
         raise BilibiliError("Bilibili did not return a playable audio stream")
 
     async def resolve_video(self, bvid: str, cid: int) -> ResolvedVideo:
-        """Resolve one Bilibili page to a 480P-or-lower video stream.
+        """Resolve one Bilibili page to its lowest-quality video stream.
 
-        DASH video is tried first with a companion DASH audio track so the page
-        can be muxed into a single MP4.  When Bilibili does not expose DASH
-        video, a single progressive MP4 segment is kept as a compatibility
-        fallback (``needs_remux`` stays false because it already contains both
-        picture and sound).
+        Chat delivery values speed over fidelity, so the lowest DASH video
+        track is selected.  When Bilibili does not expose DASH video, a single
+        progressive MP4 segment is kept as a compatibility fallback
+        (``needs_remux`` stays false because it already contains both picture
+        and sound).
         """
         normalized_bvid = _normalise_bvid(bvid)
         if cid <= 0:
@@ -996,25 +997,22 @@ class BilibiliClient:
     def _select_dash_video_track(
         tracks: tuple[_DashVideoTrack, ...],
     ) -> _DashVideoTrack | None:
+        """Pick the lowest-quality DASH video track for fast chat delivery.
+
+        AVC (H.264) is preferred over HEVC for broad player compatibility;
+        among equivalent candidates the lowest bitrate wins.
+        """
         if not tracks:
             return None
-        below_target = [
-            track for track in tracks if track.stream_id <= _TARGET_VIDEO_QUALITY
-        ]
-        pool = below_target if below_target else tracks
-        best_id = (
-            max(track.stream_id for track in pool)
-            if below_target
-            else min(track.stream_id for track in pool)
-        )
-        same_quality = [track for track in pool if track.stream_id == best_id]
+        lowest_id = min(track.stream_id for track in tracks)
+        same_quality = [track for track in tracks if track.stream_id == lowest_id]
         avc = [track for track in same_quality if BilibiliClient._is_avc_codec(track)]
         if avc:
-            return max(avc, key=lambda track: (track.bandwidth, track.stream_id))
+            return min(avc, key=lambda track: (track.bandwidth, track.stream_id))
         with_codec = [track for track in same_quality if track.codecs]
         if with_codec:
-            return max(with_codec, key=lambda track: (track.bandwidth, track.stream_id))
-        return max(same_quality, key=lambda track: (track.bandwidth, track.stream_id))
+            return min(with_codec, key=lambda track: (track.bandwidth, track.stream_id))
+        return min(same_quality, key=lambda track: (track.bandwidth, track.stream_id))
 
     @staticmethod
     def _is_avc_codec(track: _DashVideoTrack) -> bool:
