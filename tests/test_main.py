@@ -699,7 +699,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
 
         self.assertIs(delivery.selected, candidate)
-        self.assertEqual(delivery.limits, VIDEO_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, core_settings.PluginLimits().video)
         self.assertEqual(
             event.sent,
             [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
@@ -744,7 +744,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertIs(delivery.selected, candidate)
-        self.assertEqual(delivery.limits, DOWNLOAD_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, core_settings.PluginLimits().download)
         self.assertEqual(len(event.sent), 1)
         self.assertIsInstance(event.sent[0][0], listen_main.File)
         self.assertEqual(
@@ -1425,7 +1425,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             [{"search_id": "fixture-search", "session_id": "chat-a"}],
         )
         self.assertIs(delivery.selected, candidate)
-        self.assertEqual(delivery.limits, DOWNLOAD_MEDIA_LIMITS)
+        self.assertEqual(delivery.limits, core_settings.PluginLimits().download)
         self.assertTrue(controller.stopped)
         component = reply.sent[0][0]
         self.assertEqual(component.kwargs["name"], "fixture.m4a")

@@ -103,10 +103,10 @@ class PluginSettingsTests(unittest.TestCase):
             [item.value for item in DeliveryReply],
         )
         self.assertEqual(schema["delivery_reply"]["default"], "none")
-        self.assertEqual(schema["limits"]["items"]["voice_size_mb"]["default"], 25)
-        self.assertEqual(
-            schema["limits"]["items"]["video_duration_minutes"]["default"], 0
-        )
+        self.assertEqual(schema["voice_size_mb"]["default"], 25)
+        self.assertEqual(schema["video_size_mb"]["default"], 50)
+        self.assertEqual(schema["download_size_mb"]["default"], 50)
+        self.assertEqual(schema["video_duration_minutes"]["default"], 0)
 
 
 if __name__ == "__main__":

@@ -46,8 +46,16 @@ class PluginLimits:
     """Configured delivery budgets with the same shape as ``MediaLimits``."""
 
     voice: MediaLimits = VOICE_MEDIA_LIMITS
-    video: MediaLimits = VIDEO_MEDIA_LIMITS
-    download: MediaLimits = DOWNLOAD_MEDIA_LIMITS
+    video: MediaLimits = MediaLimits(
+        max_bytes=50 * 1024 * 1024,
+        max_duration_ms=None,
+        download_timeout_seconds=VIDEO_MEDIA_LIMITS.download_timeout_seconds,
+    )
+    download: MediaLimits = MediaLimits(
+        max_bytes=50 * 1024 * 1024,
+        max_duration_ms=None,
+        download_timeout_seconds=DOWNLOAD_MEDIA_LIMITS.download_timeout_seconds,
+    )
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any] | None) -> "PluginLimits":
@@ -60,11 +68,11 @@ class PluginLimits:
         video_duration_minutes = _bounded_int(
             config.get("video_duration_minutes"), 0, 0, 600
         )
-        video_size_mb = _bounded_int(config.get("video_size_mb"), 150, 1, 500)
+        video_size_mb = _bounded_int(config.get("video_size_mb"), 50, 1, 500)
         download_duration_minutes = _bounded_int(
             config.get("download_duration_minutes"), 0, 0, 600
         )
-        download_size_mb = _bounded_int(config.get("download_size_mb"), 100, 1, 500)
+        download_size_mb = _bounded_int(config.get("download_size_mb"), 50, 1, 500)
 
         return cls(
             voice=MediaLimits(
@@ -130,9 +138,7 @@ class PluginSettings:
                 config.get("delivery_reply"),
                 DeliveryReply.NONE,
             ),
-            limits=PluginLimits.from_mapping(
-                config.get("limits") if isinstance(config, Mapping) else None
-            ),
+            limits=PluginLimits.from_mapping(config),
         )
 
     @property
