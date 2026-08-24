@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bili播放器 - 音乐账号</title>
+    <title>bili播放器 - 账号与运行状态</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -11,19 +11,19 @@
       <header class="page-header">
         <div>
           <p class="eyebrow">bili播放器</p>
-          <h1>音乐账号</h1>
+          <h1>账号与运行状态</h1>
         </div>
         <button class="secondary-button" id="refresh" type="button">刷新状态</button>
       </header>
 
       <p class="page-message" id="page-message" role="status" hidden></p>
 
-      <section class="account-section" aria-label="Bilibili 账号">
+      <section class="account-section" aria-label="Bilibili 账号与运行状态">
         <article class="account-card">
           <div class="account-heading">
             <div>
-              <p class="platform-label">音乐账号</p>
-              <h2>Bilibili</h2>
+              <p class="platform-label">Bilibili 账号</p>
+              <h2>登录状态</h2>
             </div>
             <span class="status-badge" data-role="state">加载中</span>
           </div>
@@ -32,15 +32,24 @@
             <button class="primary-button" data-action="login" type="button">扫码登录</button>
             <button class="danger-button" data-action="logout" type="button" hidden>退出登录</button>
           </div>
-        </article>
-      </section>
 
-      <section class="runtime-status" aria-labelledby="runtime-heading">
-        <div>
-          <p class="platform-label">运行状态</p>
-          <h2 id="runtime-heading">媒体处理</h2>
-        </div>
-        <p id="ffmpeg-status">加载中</p>
+          <div class="card-divider"></div>
+
+          <div class="runtime-status" aria-labelledby="runtime-heading">
+            <div>
+              <p class="platform-label">媒体处理</p>
+              <h3 id="runtime-heading">运行状态</h3>
+            </div>
+            <p id="ffmpeg-status">加载中</p>
+          </div>
+
+          <dl class="delivery-summary">
+            <div><dt>默认媒体</dt><dd data-role="media">加载中</dd></div>
+            <div><dt>音频形式</dt><dd data-role="audio-form">加载中</dd></div>
+            <div><dt>视频上限</dt><dd data-role="video-size">加载中</dd></div>
+            <div><dt>音频文件上限</dt><dd data-role="download-size">加载中</dd></div>
+          </dl>
+        </article>
       </section>
     </main>
 

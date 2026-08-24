@@ -1020,16 +1020,27 @@ class ListenMusicPlugin(Star):
     async def account_status(self):
         owner = self._dashboard_owner()
         if owner is None:
-            return error_response("仅 Dashboard 管理员可管理音乐账号", status_code=403)
+            return error_response(
+                "仅 Dashboard 管理员可管理账号与运行状态", status_code=403
+            )
         accounts, media = self._require_accounts(), self._require_media()
         payload = await accounts.status_payload()
         payload["health"] = media.health.as_payload()
+        settings = getattr(self, "_settings", None) or PluginSettings()
+        payload["delivery"] = {
+            "default_media": settings.default_media,
+            "audio_form": settings.preferred_audio_form,
+            "video_size_mb": settings.limits.video.max_bytes // (1024 * 1024),
+            "download_size_mb": settings.limits.download.max_bytes // (1024 * 1024),
+        }
         return json_response(payload)
 
     async def account_login(self):
         owner = self._dashboard_owner()
         if owner is None:
-            return error_response("仅 Dashboard 管理员可管理音乐账号", status_code=403)
+            return error_response(
+                "仅 Dashboard 管理员可管理账号与运行状态", status_code=403
+            )
         try:
             snapshot = await self._require_accounts().start_login(owner)
             try:
@@ -1048,7 +1059,9 @@ class ListenMusicPlugin(Star):
     async def account_events(self, session_id: str):
         owner = self._dashboard_owner()
         if owner is None:
-            return error_response("仅 Dashboard 管理员可管理音乐账号", status_code=403)
+            return error_response(
+                "仅 Dashboard 管理员可管理账号与运行状态", status_code=403
+            )
         events = self._require_accounts().login_events(session_id, owner)
         try:
             first = await anext(events)
@@ -1072,7 +1085,9 @@ class ListenMusicPlugin(Star):
     async def account_cancel(self, session_id: str):
         owner = self._dashboard_owner()
         if owner is None:
-            return error_response("仅 Dashboard 管理员可管理音乐账号", status_code=403)
+            return error_response(
+                "仅 Dashboard 管理员可管理账号与运行状态", status_code=403
+            )
         try:
             await self._require_accounts().cancel_login(session_id, owner)
             return json_response({"session_id": session_id, "state": "cancelled"})
@@ -1086,7 +1101,9 @@ class ListenMusicPlugin(Star):
     async def account_logout(self):
         owner = self._dashboard_owner()
         if owner is None:
-            return error_response("仅 Dashboard 管理员可管理音乐账号", status_code=403)
+            return error_response(
+                "仅 Dashboard 管理员可管理账号与运行状态", status_code=403
+            )
         try:
             await self._require_accounts().logout()
             return json_response({"state": "anonymous"})

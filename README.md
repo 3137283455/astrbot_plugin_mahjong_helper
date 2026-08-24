@@ -32,7 +32,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 | 交付后文字 | 不回复，只发媒体 | `llm` 模式会让 LLM 补一句简短自然收尾；默认保持安静 |
 | 交付限制 | 语音 15 分钟/25 MiB，视频 50 MiB，音频文件 50 MiB | 可在安全范围内调整；时长 0 表示不限，超时与并发仍固定 |
 
-保存后 AstrBot 会自动重载插件。登录状态、二维码与 `ffmpeg` 健康检查在插件 Page“音乐账号”中查看。
+保存后 AstrBot 会自动重载插件。登录状态、二维码与 `ffmpeg` 健康检查在插件 Page“账号与运行状态”中查看。
 
 ## 使用
 
@@ -79,7 +79,7 @@ https://github.com/57Darling02/astrbot_plugin_bili_player
 
 ## 管理与安全
 
-插件 Page“音乐账号”仅 Dashboard 主账号可访问：
+插件 Page“账号与运行状态”仅 Dashboard 主账号可访问：
 
 - 查看 `ffmpeg` 健康状态。
 - Bilibili 扫码登录、取消或退出；退出只删除本地凭证。

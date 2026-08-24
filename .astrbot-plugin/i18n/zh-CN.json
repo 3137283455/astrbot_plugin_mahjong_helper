@@ -1,8 +1,8 @@
 {
   "pages": {
     "accounts": {
-      "title": "音乐账号",
-      "description": "查看 Bilibili 登录状态、二维码登录与 ffmpeg 健康状态。"
+      "title": "账号与运行状态",
+      "description": "Bilibili 登录、媒体处理与交付预算概览。"
     }
   }
 }

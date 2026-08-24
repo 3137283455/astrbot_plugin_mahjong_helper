@@ -13,10 +13,26 @@ const stateLabels = {
 
 const terminalStates = new Set(["confirmed", "expired", "failed", "cancelled"]);
 
+const mediaLabels = {
+  video_first: "视频优先",
+  audio_first: "音频优先",
+  video_only: "仅视频",
+  audio_only: "仅音频",
+};
+
+const audioFormLabels = {
+  voice_first: "语音优先",
+  file_first: "文件优先",
+};
+
 const elements = {
   refresh: document.getElementById("refresh"),
   message: document.getElementById("page-message"),
   ffmpeg: document.getElementById("ffmpeg-status"),
+  media: document.querySelector('[data-role="media"]'),
+  audioForm: document.querySelector('[data-role="audio-form"]'),
+  videoSize: document.querySelector('[data-role="video-size"]'),
+  downloadSize: document.querySelector('[data-role="download-size"]'),
   dialog: document.getElementById("login-dialog"),
   loginState: document.getElementById("login-state"),
   qrCode: document.getElementById("qr-code"),
@@ -73,9 +89,18 @@ function renderHealth(health) {
   elements.ffmpeg.dataset.state = state;
 }
 
+function renderDelivery(delivery) {
+  if (!delivery) return;
+  elements.media.textContent = mediaLabels[delivery.default_media] || delivery.default_media;
+  elements.audioForm.textContent = audioFormLabels[delivery.audio_form] || delivery.audio_form;
+  elements.videoSize.textContent = `${delivery.video_size_mb} MiB`;
+  elements.downloadSize.textContent = `${delivery.download_size_mb} MiB`;
+}
+
 function renderStatus(payload) {
   renderAccount(payload?.account || { state: "anonymous" });
   renderHealth(payload?.health);
+  renderDelivery(payload?.delivery);
 
   if (payload?.storage?.state === "error") {
     showMessage("账号凭证文件不可读取，请在服务器上检查数据目录。", "error");
@@ -241,7 +266,7 @@ async function boot() {
   }
   try {
     const context = await bridge.ready();
-    document.title = context?.pageTitle || "bili播放器 - 音乐账号";
+    document.title = context?.pageTitle || "bili播放器 - 账号与运行状态";
     bindActions();
     await refreshStatus();
   } catch (error) {
