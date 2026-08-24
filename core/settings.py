@@ -35,7 +35,11 @@ class AudioFormPreference(str, Enum):
 
 
 class DeliveryReply(str, Enum):
-    """Whether a successful direct delivery asks the LLM for one closing line."""
+    """Whether the LLM speaks one short preface before the delivery tool call.
+
+    The preface is sent before media is prepared, so the user gets immediate
+    feedback; the tool then ends the agent loop silently.
+    """
 
     NONE = "none"
     LLM = "llm"

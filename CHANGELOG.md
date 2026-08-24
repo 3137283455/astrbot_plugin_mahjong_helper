@@ -2,6 +2,7 @@
 
 ## 0.2.4 - 2026-08-24
 
+- `delivery_reply` 的 `llm` 模式改为“发送前开场白”：LLM 在调用交付工具前先说一句简短反馈（如“好的，正在为你播放”），媒体发送后本轮立即结束，不再等待结尾收尾，反馈更及时。
 - 扫码登录兼容 B 站更新后的凭证下发：确认后从跳转 URL 的查询参数提取 `SESSDATA` 等凭证，并保留 Set-Cookie 兼容路径。
 - WebUI 新增“手动粘贴 Cookie 登录”：凭证即时校验，无效会被拒绝；README 文档化 `accounts.json` 格式。
 - aiocqhttp 部署的语音改为直接向 OneBot 传本地 `file://` URI，由 NapCat 自行读取，避免完整歌曲转 Base64 后超出 WebSocket 消息上限导致断连；失败仍降级为文件。

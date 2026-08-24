@@ -53,7 +53,7 @@ from .core.media import (
 )
 from .core.models import BilibiliCandidate, LocalMedia, SearchSnapshot
 from .core.selection import SearchSnapshotStore
-from .core.settings import DeliveryReply, PluginLimits, PluginSettings
+from .core.settings import PluginLimits, PluginSettings
 from .core.services import (
     SEARCH_LIMIT,
     DeliveryError,
@@ -181,19 +181,6 @@ def _tool_error(message: str) -> str:
 
     return json.dumps(
         {"status": "error", "message": message},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
-
-def _llm_followup_result() -> str:
-    """Ask the LLM for exactly one closing line after media was delivered."""
-
-    return json.dumps(
-        {
-            "status": "delivered",
-            "message": "媒体已发送。请只回复一句简短自然的收尾，不要复述歌名或发送过程。",
-        },
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -368,8 +355,10 @@ class DeliverMediaTool(FunctionTool):
         settings = getattr(plugin, "_settings", None) or PluginSettings()
         if settings.llm_reply_enabled:
             reply_rule = (
-                "直接交付成功后本工具返回 delivered 状态；你只能回复一句简短自然的收尾，"
-                "不得复述歌名、媒体类型或发送过程。失败时返回 error，由你转述，不要输出 JSON。"
+                "调用本工具前，先回复一句简短自然的开场白（如“好的，正在为你播放”），"
+                "说明正在处理即可，不要描述过程细节；调用后媒体由本工具发送，"
+                "成功后不返回内容，本轮立即结束，不得再追加任何文字。"
+                "失败时返回 error，由你转述，不要输出 JSON。"
             )
         else:
             reply_rule = (
@@ -808,10 +797,10 @@ class ListenMusicPlugin(Star):
             # Consume the lease only after delivery succeeded; a failed
             # delivery keeps the snapshot so the model can retry once.
             self._consume_llm_search(session_id, lease)
-            if settings.delivery_reply is DeliveryReply.LLM:
-                return _llm_followup_result()
             # None is the only AstrBot signal for "already sent; end loop".
-            # All failure paths above return an error string instead.
+            # The model's preface (delivery_reply=llm) was already spoken
+            # before this tool call, so no closing line is requested after
+            # media delivery. All failure paths return an error string instead.
             return None
         except _StaleLlmDelivery as exc:
             # The originating user request has already moved on.  Do not leak

@@ -32,7 +32,7 @@
     "hint": "语音最长 15 分钟、25 MiB；文件最长不限、100 MiB。"
   },
   "delivery_reply": {
-    "description": "直接点播成功后是否让 LLM 补一句自然收尾",
+    "description": "LLM 是否在发送媒体前先说一句开场白",
     "type": "string",
     "default": "none",
     "options": [
@@ -41,9 +41,9 @@
     ],
     "labels": [
       "不回复，只发媒体",
-      "让 LLM 自然收尾一句"
+      "发送前先回一句开场白"
     ],
-    "hint": "llm 模式会让工具返回状态并继续 Agent Loop；LLM 被要求只回一句，不复述歌名或发送过程。"
+    "hint": "llm 模式让 LLM 在调用交付工具前先说一句简短自然的话（如“好的，正在为你播放”），媒体发送后本轮直接结束，不再等待结尾收尾。"
   },
   "voice_duration_minutes": {
     "description": "语音最长分钟数",

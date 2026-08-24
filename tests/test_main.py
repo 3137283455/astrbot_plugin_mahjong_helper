@@ -656,7 +656,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(second)
         self.assertEqual(plugin._llm_searches, {})
 
-    async def test_llm_reply_mode_returns_status_after_media_only(self) -> None:
+    async def test_llm_reply_mode_ends_loop_silently_after_media_only(self) -> None:
         candidate = _Candidate("BV1fixture:1", "晴天")
         snapshot = _Snapshot((candidate,))
         media = types.SimpleNamespace(
@@ -683,9 +683,10 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
 
         result = await plugin.deliver_media_for_llm(event, snapshot.search_id, 1)
 
-        payload = json.loads(result)
-        self.assertEqual(payload["status"], "delivered")
-        self.assertIn("不要复述歌名", payload["message"])
+        # The preface is spoken before the tool call; after media delivery the
+        # tool returns None so AstrBot ends the agent loop without a closing
+        # line.
+        self.assertIsNone(result)
         self.assertEqual(
             event.sent,
             [listen_main.MessageChain([("video", Path("/tmp/fixture.mp4"))])],
@@ -703,7 +704,9 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("不返回内容", silent_tool.description)
-        self.assertIn("一句简短自然的收尾", llm_tool.description)
+        self.assertIn("开场白", llm_tool.description)
+        self.assertIn("正在为你播放", llm_tool.description)
+        self.assertNotIn("收尾", llm_tool.description)
 
     async def test_llm_auto_delivery_defaults_to_video(self) -> None:
         candidate = _Candidate("BV1fixture:1", "温奕心 - 一路生花")
