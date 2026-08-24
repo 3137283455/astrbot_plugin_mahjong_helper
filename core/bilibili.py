@@ -563,12 +563,16 @@ class BilibiliClient:
             pages=tuple(pages),
         )
 
-    async def resolve_audio(self, bvid: str, cid: int) -> ResolvedAudio:
+    async def resolve_audio(
+        self, bvid: str, cid: int, *, prefer_highest: bool = False
+    ) -> ResolvedAudio:
         """Resolve one Bilibili page to its preferred DASH audio stream.
 
-        Normal DASH audio is preferred at or below 192 kbps.  A single
-        progressive MP4 segment is retained as a narrow compatibility fallback
-        when Bilibili does not expose DASH audio for that page.
+        Normal DASH audio prefers the top track at or below 192 kbps, which is
+        ideal for chat voice delivery. ``prefer_highest`` instead picks the
+        highest available track so a file download keeps the best fidelity.
+        A single progressive MP4 segment is retained as a narrow compatibility
+        fallback when Bilibili does not expose DASH audio for that page.
         """
         normalized_bvid = _normalise_bvid(bvid)
         if cid <= 0:
@@ -590,7 +594,7 @@ class BilibiliClient:
         headers = await self.stream_headers(normalized_bvid)
         dash = data.get("dash")
         tracks = self._dash_audio_tracks(dash)
-        track = self._select_dash_track(tracks)
+        track = self._select_dash_track(tracks, prefer_highest=prefer_highest)
         if track is not None:
             return ResolvedAudio(
                 url=track.url,
@@ -932,9 +936,13 @@ class BilibiliClient:
     @staticmethod
     def _select_dash_track(
         tracks: tuple[_DashAudioTrack, ...],
+        *,
+        prefer_highest: bool = False,
     ) -> _DashAudioTrack | None:
         if not tracks:
             return None
+        if prefer_highest:
+            return max(tracks, key=lambda track: (track.bandwidth, track.stream_id))
         below_target = [
             track for track in tracks if track.bandwidth <= _TARGET_AUDIO_BANDWIDTH
         ]

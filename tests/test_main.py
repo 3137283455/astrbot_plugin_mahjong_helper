@@ -580,7 +580,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return snapshot
 
         class FakeDelivery:
-            async def deliver(self, selected, *, limits):
+            async def deliver(self, selected, *, limits, prefer_highest=False):
                 self.selected = selected
                 self.limits = limits
                 return result
@@ -765,7 +765,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return snapshot
 
         class FakeDelivery:
-            async def deliver(self, selected, *, limits):
+            async def deliver(self, selected, *, limits, prefer_highest=False):
                 self.selected = selected
                 self.limits = limits
                 return result
@@ -1151,7 +1151,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("hallucinated search ID must not reach the store")
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("hallucinated search ID must not deliver")
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)
@@ -1176,7 +1176,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return snapshot
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("a position outside the snapshot must not deliver")
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)
@@ -1199,7 +1199,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("expired search must not deliver")
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)
@@ -1224,7 +1224,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 raise AssertionError("another session must not access this search")
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("another session must not deliver")
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)
@@ -1286,7 +1286,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         snapshot = _Snapshot((_Candidate("BV1fixture:1", "晴天"),))
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("download must not auto-deliver")
 
             async def deliver_video(self, _candidate, *, limits):
@@ -1449,7 +1449,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return snapshot
 
         class FakeDelivery:
-            async def deliver(self, selected, *, limits):
+            async def deliver(self, selected, *, limits, prefer_highest=False):
                 self.selected = selected
                 self.limits = limits
                 return result
@@ -1489,7 +1489,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return snapshot
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("long voice must not start a delivery")
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)
@@ -1522,7 +1522,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         class FailingDelivery:
-            async def deliver(self, _candidate, *, limits):
+            async def deliver(self, _candidate, *, limits, prefer_highest=False):
                 raise AssertionError("expired selection must not deliver")
 
         plugin = object.__new__(listen_main.ListenMusicPlugin)

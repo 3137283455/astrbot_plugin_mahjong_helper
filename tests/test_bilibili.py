@@ -18,6 +18,7 @@ ensure_aiohttp()
 from core.bilibili import (
     BilibiliClient,
     BilibiliVideoRef,
+    _DashAudioTrack,
     _DashVideoTrack,
     derive_wbi_mixin_key,
     parse_bilibili_video_ref,
@@ -260,6 +261,37 @@ class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "w_rid": "abf34e0c2c2b5a3596151bdd92efafce",
             },
         )
+
+    def test_audio_track_selection_prefers_highest_when_requested(self) -> None:
+        tracks = (
+            _DashAudioTrack(
+                stream_id=30280,
+                url="https://cdn.example.test/low.m4s",
+                backup_urls=(),
+                bandwidth=128_000,
+                mime_type="audio/mp4",
+            ),
+            _DashAudioTrack(
+                stream_id=30216,
+                url="https://cdn.example.test/mid.m4s",
+                backup_urls=(),
+                bandwidth=192_000,
+                mime_type="audio/mp4",
+            ),
+            _DashAudioTrack(
+                stream_id=30232,
+                url="https://cdn.example.test/high.m4s",
+                backup_urls=(),
+                bandwidth=256_000,
+                mime_type="audio/mp4",
+            ),
+        )
+
+        default = BilibiliClient._select_dash_track(tracks)
+        highest = BilibiliClient._select_dash_track(tracks, prefer_highest=True)
+
+        self.assertEqual(default.stream_id, 30216)
+        self.assertEqual(highest.stream_id, 30232)
 
     async def test_search_pages_dash_selection_and_headers(self) -> None:
         client = FixtureBilibiliClient(session=object())

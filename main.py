@@ -1194,7 +1194,11 @@ class ListenMusicPlugin(Star):
         limits = _media_limits_for(action, settings.limits)
         if action is _DeliveryMode.VIDEO:
             return await delivery.deliver_video(candidate, limits=limits)
-        return await delivery.deliver(candidate, limits=limits)
+        return await delivery.deliver(
+            candidate,
+            limits=limits,
+            prefer_highest=action is _DeliveryMode.DOWNLOAD,
+        )
 
     async def _send_delivery(
         self,

@@ -86,6 +86,7 @@ class FakeBilibili:
         self.video_calls: list[str] = []
         self.aid_calls: list[int] = []
         self.resolve_calls: list[tuple[str, int]] = []
+        self.resolve_quality: list[tuple[str, int, bool]] = []
         self.video_resolve_calls: list[tuple[str, int]] = []
 
     async def search_videos(self, query: str, *, limit: int = 12):
@@ -115,8 +116,11 @@ class FakeBilibili:
             raise self._reference_error
         return self._reference_videos[aid]
 
-    async def resolve_audio(self, bvid: str, cid: int) -> ResolvedAudio:
+    async def resolve_audio(
+        self, bvid: str, cid: int, *, prefer_highest: bool = False
+    ) -> ResolvedAudio:
         self.resolve_calls.append((bvid, cid))
+        self.resolve_quality.append((bvid, cid, prefer_highest))
         if self._resolve_error is not None:
             raise self._resolve_error
         return self._audio
@@ -637,8 +641,23 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.candidate, selected)
         self.assertEqual(bilibili.resolve_calls, [("BV2", 1)])
+        self.assertEqual(bilibili.resolve_quality, [("BV2", 1, False)])
         self.assertEqual(len(media.prepared), 1)
         self.assertEqual(media.limits, [VOICE_MEDIA_LIMITS])
+
+    async def test_delivery_prefers_highest_audio_track_for_file_download(self) -> None:
+        search, delivery, bilibili, _ = await self._workflow((video("BV1"),))
+        snapshot = await search.search(session_id="chat-a", query="晴天")
+        selected = snapshot.candidates[0]
+
+        result = await delivery.deliver(
+            selected,
+            limits=DOWNLOAD_MEDIA_LIMITS,
+            prefer_highest=True,
+        )
+
+        self.assertEqual(result.candidate, selected)
+        self.assertEqual(bilibili.resolve_quality, [("BV1", 1, True)])
 
     async def test_video_duration_limit_rejects_before_resolving_streams(self) -> None:
         search, delivery, bilibili, _ = await self._workflow(

@@ -77,7 +77,9 @@ class _BilibiliClient(Protocol):
 
     async def get_video_by_aid(self, aid: int) -> Any: ...
 
-    async def resolve_audio(self, bvid: str, cid: int) -> Any: ...
+    async def resolve_audio(
+        self, bvid: str, cid: int, *, prefer_highest: bool = False
+    ) -> Any: ...
 
     async def resolve_video(self, bvid: str, cid: int) -> Any: ...
 
@@ -286,15 +288,24 @@ class DeliveryService:
         candidate: BilibiliCandidate,
         *,
         limits: MediaLimits = VOICE_MEDIA_LIMITS,
+        prefer_highest: bool = False,
     ) -> DeliveryResult:
-        """Materialize one selected page within its delivery-mode limits."""
+        """Materialize one selected page within its delivery-mode limits.
+
+        ``prefer_highest`` requests the highest available audio track, which
+        fits a file download; voice delivery keeps the 192 kbps ceiling.
+        """
 
         if _duration_exceeds_limit(candidate.duration_ms, limits):
             raise DeliveryError(_delivery_duration_error(limits, "歌曲"))
         if not self._media.ffmpeg_available:
             raise FfmpegUnavailableError("宿主机未安装 ffmpeg，暂时无法听歌或下载歌曲")
         try:
-            audio = await self._bilibili.resolve_audio(candidate.bvid, candidate.cid)
+            audio = await self._bilibili.resolve_audio(
+                candidate.bvid,
+                candidate.cid,
+                prefer_highest=prefer_highest,
+            )
             if _duration_exceeds_limit(audio.duration_ms, limits):
                 raise DeliveryError(_delivery_duration_error(limits))
             media = await self._media.prepare(
