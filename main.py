@@ -324,13 +324,12 @@ class FindInBilibiliTool(FunctionTool):
         super().__init__(
             name="find_in_bilibili",
             description=(
-                "统一前置搜索：点歌、听歌、看视频、下载音频前先调用。title 必须是纯作品名——去掉“我要看/我要听/播放”等指令词，"
-                "也不要附加“原版/无损”等偏好词；可选传歌手和版本偏好。“唱首歌”时先选定一首。用户一条消息包含多个作品/命令时不要批量搜索，请让用户逐条发送。"
+                "本插件是 Bilibili 视频/音频输出工具。当用户想通过聊天看视频、听歌、点歌、播放某首歌或下载音频时，必须先调用本工具；不要自己发送链接或仅用文字描述媒体。"
+                "适用示例：我要看晴天、我想听周杰伦、来一首、唱首歌、下载这首歌。title 必须是纯作品名——去掉“我要看/我要听/播放”等指令词，也不要附加“原版/无损”等偏好词；可选传歌手和版本偏好。"
                 "delivery：auto=用户未明确看/听/下载（如只说“播放/来一首”），交给插件配置；video=明确要看/视频；audio=明确要听/唱/音频；download=下载音频，后续必须让用户选择。"
-                "返回候选供交付判断，不向用户发送内容；只能从返回的 search_id 和 position 中选。"
+                "本工具只搜索候选，不向用户发送内容；成功后调用 deliver_media 完成实际发送。只能使用返回的 search_id 和 position。"
                 "候选评估：作品名精确或完整匹配优先，歌手线索佐证，必须遵守版本偏好；Live/翻唱/AI/DJ/伴奏/MV 等标签仅作证据。"
-                "没有可信候选时不要猜测或发送，简短请求用户补充作品名。成功后调用 deliver_media 完成交付，不输出过程文字。"
-                "本工具失败时只返回 error 信息，由你用自然语言向用户转述，不要直接输出 JSON。"
+                "没有可信候选时不要猜测或发送，简短请求用户补充作品名。本工具失败时只返回 error 信息，由你用自然语言向用户转述，不要直接输出 JSON。"
             ),
             parameters={
                 "type": "object",
@@ -379,7 +378,8 @@ class DeliverMediaTool(FunctionTool):
         super().__init__(
             name="deliver_media",
             description=(
-                "仅在 find_in_bilibili 成功后调用，只能用其返回的 search_id 和 position 完成交付并结束本轮。"
+                "本工具把 find_in_bilibili 选中的 Bilibili 候选实际发送为视频、语音或文件。不要绕过它自行发送链接、标题或内容简介。"
+                "只能在 find_in_bilibili 成功后调用，并使用其返回的 search_id 和 position。"
                 "交付媒体类型由 find_in_bilibili 的 delivery 和插件配置决定，本工具不再接收 delivery。"
                 "直接交付（let_user_choose=false）：自动发送；视频请求固定发第一个候选，精确 AV/BV 多分 P 时展示候选。"
                 + reply_rule
