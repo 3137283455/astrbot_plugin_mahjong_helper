@@ -50,12 +50,14 @@ class MahjongHelperPlugin(Star):
         self._tasks: list[asyncio.Task] = []
         self._protocol_process: asyncio.subprocess.Process | None = None
         self.plugin_dir = Path(__file__).resolve().parent
+        self.state_dir: Path | None = None
         self.timezone = ZoneInfo(self.config.get("timezone", "Asia/Shanghai"))
 
     async def initialize(self):
         self.questions = QuestionStore(self.plugin_dir / "data")
         state_dir = self.config.get("state_dir") or "data/plugin_data/astrbot_plugin_mahjong_helper"
-        database_path = Path(state_dir) / "mahjong_helper.db"
+        self.state_dir = Path(state_dir)
+        database_path = self.state_dir / "mahjong_helper.db"
         self.state = StateStore(database_path, self.questions.by_id)
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
@@ -119,12 +121,64 @@ class MahjongHelperPlugin(Star):
         logger.exception("日麻助手命令执行失败")
         return f"操作失败：{exc}"
 
+    @staticmethod
+    def _help_text(event: AstrMessageEvent) -> str:
+        lines = [
+            "🀄 日麻助手使用帮助",
+            "内置 601 道何切题；玩家查询、战绩和订阅需要管理员先配置牌谱屋 Token。",
+            "",
+            "【何切练习】",
+            "/何切 [题号]｜随机出题或查看指定题",
+            "/何切答案 [题号]｜查看原书答案",
+            "/何切状态｜查看当前题和本轮进度",
+            "",
+            "【雀魂玩家】",
+            "/雀魂搜索 玩家名｜搜索 UID",
+            "/雀魂绑定 UID｜绑定自己的账号",
+            "/雀魂我的绑定｜查看绑定",
+            "/雀魂切换 UID｜切换主账号",
+            "/雀魂解绑 [UID]｜解除绑定",
+            "",
+            "【战绩与对局】",
+            "/雀魂查询 [玩家] [金|玉|王座]｜四麻战绩",
+            "/查询三麻 [玩家] [金|玉|王座]｜三麻战绩",
+            "/雀魂对局 [玩家] [金|玉|王座]｜最近四麻",
+            "/三麻对局 [玩家] [金|玉|王座]｜最近三麻",
+            "不填写玩家时使用自己的主绑定账号。",
+            "",
+            "【其他功能】",
+            "/雀魂订阅状态、/三麻订阅状态｜查看当前会话订阅",
+            "/雀魂API状态｜检查本地雀魂服务",
+            "/牌谱Review 牌谱链接 [座位]｜可选牌谱分析",
+            "/雀魂场况 牌谱链接 局数 [巡目]｜可选场况生成",
+        ]
+        if event.role == "admin":
+            lines.extend(
+                [
+                    "",
+                    "【管理员功能】",
+                    "/何切自动 开启 HH:MM｜当前会话每日出题",
+                    "/何切自动 关闭、/何切重置",
+                    "/雀魂订阅 玩家、/三麻订阅 玩家｜管理自动播报",
+                    "/开启雀魂订阅、/关闭雀魂订阅、/删除雀魂订阅",
+                    "/设置牌谱屋Token TOKEN｜必须私聊",
+                    "/雀魂登录 账号 密码｜必须私聊",
+                    "/雀魂取谱测试 牌谱链接",
+                ]
+            )
+        else:
+            lines.extend(["", "每日出题、订阅管理、Token 与登录功能仅限管理员。"])
+        lines.extend(["", "再次查看：/help 或 /雀魂帮助"])
+        return "\n".join(lines)
+
     def _question_chain(self, event: AstrMessageEvent, question: Question, prefix="🀄 何切"):
         questions, _, _, _ = self._ready()
         return event.chain_result(
             [
                 Comp.Plain(f"{prefix} #{question.global_id}\n{self._source(question)}"),
-                Comp.Image.fromFileSystem(str(questions.image_path(question.question_image))),
+                Comp.Image.fromFileSystem(
+                    str(self._enhanced_image_path(questions.image_path(question.question_image)))
+                ),
                 Comp.Plain("想好后使用：/何切答案"),
             ]
         )
@@ -134,10 +188,40 @@ class MahjongHelperPlugin(Star):
         return event.chain_result(
             [
                 Comp.Plain(f"✅ 何切 #{question.global_id} 原书答案\n{self._source(question)}"),
-                Comp.Image.fromFileSystem(str(questions.image_path(question.answer_image))),
+                Comp.Image.fromFileSystem(
+                    str(self._enhanced_image_path(questions.image_path(question.answer_image)))
+                ),
                 Comp.Plain("继续随机：/何切　指定题号：/何切 123"),
             ]
         )
+
+    def _enhanced_image_path(self, source: Path) -> Path:
+        """放大并锐化低清题图，使用 PNG 缓存以减少 QQ 的 JPEG 二次损失。"""
+        if not self.config.get("enhance_images", True) or self.state_dir is None:
+            return source
+        scale = max(2, min(4, int(self.config.get("image_scale", 2) or 2)))
+        cache_dir = self.state_dir / "hd_images"
+        target = cache_dir / f"{source.stem}-v1-{scale}x.png"
+        try:
+            if target.is_file() and target.stat().st_mtime >= source.stat().st_mtime:
+                return target
+            from PIL import Image, ImageFilter
+
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            with Image.open(source) as original:
+                image = original.convert("RGB")
+                image = image.resize(
+                    (image.width * scale, image.height * scale),
+                    Image.Resampling.LANCZOS,
+                )
+                image = image.filter(
+                    ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=3)
+                )
+                image.save(target, "PNG", optimize=True)
+            return target
+        except Exception:
+            logger.exception("高清题图生成失败，将发送原图：%s", source)
+            return source
 
     @filter.command("何切")
     async def nanikiru(self, event: AstrMessageEvent, question_id: int = 0):
@@ -603,18 +687,15 @@ class MahjongHelperPlugin(Star):
         except Exception as exc:
             yield event.plain_result(f"场况生成失败：{exc}")
 
+    @filter.command("help")
+    async def help_command(self, event: AstrMessageEvent):
+        """显示日麻助手功能、用法和当前用户可用的管理命令。"""
+        yield event.plain_result(self._help_text(event))
+
     @filter.command("雀魂帮助")
-    async def help(self, event: AstrMessageEvent):
-        """显示日麻助手命令。"""
-        yield event.plain_result(
-            "日麻助手\n"
-            "何切：/何切、/何切答案、/何切状态、/何切自动\n"
-            "账号：/雀魂搜索、/雀魂绑定、/雀魂切换、/雀魂解绑、/雀魂我的绑定\n"
-            "战绩：/雀魂查询、/查询三麻、/雀魂对局、/三麻对局\n"
-            "订阅：/雀魂订阅、/三麻订阅、/雀魂订阅状态、/三麻订阅状态\n"
-            "本地服务：/雀魂API状态、/雀魂取谱测试、/雀魂登录\n"
-            "可选分析：/牌谱Review、/雀魂场况"
-        )
+    async def mahjong_help(self, event: AstrMessageEvent):
+        """显示日麻助手功能、用法和当前用户可用的管理命令。"""
+        yield event.plain_result(self._help_text(event))
 
     def _protocol_executable(self) -> Path | None:
         configured = str(self.config.get("protocol_executable", "") or "").strip()

@@ -9,6 +9,16 @@
     "type": "string",
     "default": ""
   },
+  "enhance_images": {
+    "description": "发送何切题图前生成高清 PNG 缓存，减少 QQ 压缩造成的模糊",
+    "type": "bool",
+    "default": true
+  },
+  "image_scale": {
+    "description": "何切图片放大倍数（2-4，默认 2）",
+    "type": "int",
+    "default": 2
+  },
   "koromo_token": {
     "description": "牌谱屋 API Token；也可由管理员私聊机器人设置",
     "type": "string",
