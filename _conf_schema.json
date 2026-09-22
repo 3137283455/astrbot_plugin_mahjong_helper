@@ -1,0 +1,55 @@
+{
+  "timezone": {
+    "description": "每日何切使用的时区",
+    "type": "string",
+    "default": "Asia/Shanghai"
+  },
+  "state_dir": {
+    "description": "SQLite 状态目录；留空时使用 AstrBot 的 data/plugin_data 目录",
+    "type": "string",
+    "default": ""
+  },
+  "koromo_token": {
+    "description": "牌谱屋 API Token；也可由管理员私聊机器人设置",
+    "type": "string",
+    "default": "",
+    "obvious_hint": true
+  },
+  "records_limit": {
+    "description": "最近对局命令返回的条数（1-20）",
+    "type": "int",
+    "default": 5
+  },
+  "subscribe_interval_4": {
+    "description": "四麻订阅轮询间隔（秒，最低60）",
+    "type": "int",
+    "default": 180
+  },
+  "subscribe_interval_3": {
+    "description": "三麻订阅轮询间隔（秒，最低60）",
+    "type": "int",
+    "default": 300
+  },
+  "protocol_base_url": {
+    "description": "可选的 Majsoul.ProtocolLogin.Api 地址",
+    "type": "string",
+    "default": "http://127.0.0.1:5088"
+  },
+  "protocol_api_key": {
+    "description": "可选的本地协议服务 API Key",
+    "type": "string",
+    "default": "",
+    "obvious_hint": true
+  },
+  "review_gateway_url": {
+    "description": "可选的牌谱分析网关地址",
+    "type": "string",
+    "default": ""
+  },
+  "review_gateway_token": {
+    "description": "可选的牌谱分析网关 Token",
+    "type": "string",
+    "default": "",
+    "obvious_hint": true
+  }
+}
