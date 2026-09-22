@@ -4,7 +4,7 @@ from pathlib import Path
 
 from database import MahjongDatabase
 from formatters import format_record, format_stats, room_modes
-from majsoul_api import KoromoClient
+from majsoul_api import KoromoClient, ProtocolClient, extract_paipu_id
 from nanikiru_core import StateStore
 
 
@@ -101,6 +101,26 @@ class KoromoClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/pl3/player_stats/10001/", calls[0][0])
         self.assertEqual(calls[1][1]["mode"], "24.23")
         self.assertEqual(calls[1][1]["tag"], 42)
+
+    async def test_protocol_fetch_record_contract(self):
+        client = ProtocolClient("http://127.0.0.1:5088")
+        calls = []
+
+        async def fake_request(method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return {"dataBase64": "AA=="}
+
+        client._request = fake_request
+        result = await client.fetch_record("game-id")
+        self.assertEqual(result["dataBase64"], "AA==")
+        self.assertEqual(calls[0][0:2], ("POST", "/api/records/fetch"))
+        self.assertEqual(calls[0][2]["json"]["paipu"], "game-id")
+        self.assertTrue(calls[0][2]["json"]["includeDataBase64"])
+
+    def test_extract_paipu_id(self):
+        url = "https://game.maj-soul.net/1/?paipu=game-id_a123"
+        self.assertEqual(extract_paipu_id(url), "game-id_a123")
+        self.assertEqual(extract_paipu_id("plain-id"), "plain-id")
 
 
 if __name__ == "__main__":

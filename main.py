@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import subprocess
+import sys
 import time
 from contextlib import suppress
 from datetime import datetime
@@ -25,7 +27,7 @@ from .formatters import (
     record_uuid,
     room_modes,
 )
-from .majsoul_api import KoromoClient, MajsoulApiError, ProtocolClient
+from .majsoul_api import KoromoClient, MajsoulApiError, ProtocolClient, extract_paipu_id
 from .nanikiru_core import Question, QuestionStore, StateStore
 from .review_gateway import ReviewGateway
 
@@ -46,11 +48,12 @@ class MahjongHelperPlugin(Star):
         self.review_gateway: ReviewGateway | None = None
         self._lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
+        self._protocol_process: asyncio.subprocess.Process | None = None
+        self.plugin_dir = Path(__file__).resolve().parent
         self.timezone = ZoneInfo(self.config.get("timezone", "Asia/Shanghai"))
 
     async def initialize(self):
-        plugin_dir = Path(__file__).resolve().parent
-        self.questions = QuestionStore(plugin_dir / "data")
+        self.questions = QuestionStore(self.plugin_dir / "data")
         state_dir = self.config.get("state_dir") or "data/plugin_data/astrbot_plugin_mahjong_helper"
         database_path = Path(state_dir) / "mahjong_helper.db"
         self.state = StateStore(database_path, self.questions.by_id)
@@ -68,6 +71,8 @@ class MahjongHelperPlugin(Star):
             asyncio.create_task(self._question_scheduler()),
             asyncio.create_task(self._subscription_scheduler()),
         ]
+        if self.config.get("protocol_auto_launch", True):
+            self._tasks.append(asyncio.create_task(self._auto_start_protocol()))
         logger.info("日麻助手已加载，共 %d 道何切题", len(self.questions.questions))
 
     async def terminate(self):
@@ -76,6 +81,13 @@ class MahjongHelperPlugin(Star):
         for task in self._tasks:
             with suppress(asyncio.CancelledError):
                 await task
+        if self._protocol_process and self._protocol_process.returncode is None:
+            self._protocol_process.terminate()
+            try:
+                await asyncio.wait_for(self._protocol_process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                self._protocol_process.kill()
+                await self._protocol_process.wait()
 
     def _ready(self) -> tuple[QuestionStore, StateStore, MahjongDatabase, KoromoClient]:
         if not all((self.questions, self.state, self.db, self.koromo)):
@@ -248,6 +260,16 @@ class MahjongHelperPlugin(Star):
             return
         _, _, _, api = self._ready()
         try:
+            if name.isdigit() and self.protocol:
+                try:
+                    player = await self.protocol.resolve_friend_id(name)
+                    if isinstance(player, dict) and player_uid(player):
+                        yield event.plain_result(
+                            "好友码查询结果：\n" + format_search([player], 4).split("：\n", 1)[-1]
+                        )
+                        return
+                except Exception:
+                    pass
             results = await asyncio.gather(api.search_player(name, 4), api.search_player(name, 3))
             parts = [format_search(rows, mode) for rows, mode in zip(results, (4, 3)) if rows]
             yield event.plain_result("\n\n".join(parts) if parts else "没有找到该玩家。")
@@ -482,8 +504,14 @@ class MahjongHelperPlugin(Star):
     @filter.command("雀魂API状态")
     async def protocol_status(self, event: AstrMessageEvent):
         """检查可选的本地雀魂协议服务。"""
-        ok = bool(self.protocol and await self.protocol.health())
-        yield event.plain_result("本地雀魂协议服务可用。" if ok else "本地雀魂协议服务未连接。")
+        try:
+            profiles = await self.protocol.profiles()
+            count = len(profiles) if isinstance(profiles, list) else 0
+            yield event.plain_result(f"本地雀魂协议服务可用，已保存 {count} 个登录档案。")
+        except Exception:
+            executable = self._protocol_executable()
+            hint = f"\n预期程序位置：{executable}" if executable else ""
+            yield event.plain_result(f"本地雀魂协议服务未连接。{hint}")
 
     @filter.command("雀魂登录")
     async def protocol_login(self, event: AstrMessageEvent, account: str = "", password: str = ""):
@@ -504,6 +532,34 @@ class MahjongHelperPlugin(Star):
             yield event.plain_result(message or "登录请求已完成，请用 /雀魂API状态 检查服务。")
         except Exception as exc:
             yield event.plain_result(f"本地协议服务登录失败：{exc}")
+
+    @filter.command("雀魂取谱测试")
+    async def protocol_fetch_test(self, event: AstrMessageEvent, paipu_url: str = ""):
+        """管理员测试本地 API 是否能取回牌谱原始数据。"""
+        error = self._admin_error(event)
+        if error:
+            yield event.plain_result(error)
+            return
+        paipu = extract_paipu_id(paipu_url)
+        if not paipu:
+            yield event.plain_result("用法：/雀魂取谱测试 牌谱链接")
+            return
+        try:
+            result = await self.protocol.fetch_record(paipu)
+            if not isinstance(result, dict):
+                raise RuntimeError("本地 API 返回格式不正确")
+            encoded = result.get("dataBase64") or ""
+            reference = result.get("reference") or ""
+            if not encoded and not reference:
+                raise RuntimeError("本地 API 没有返回牌谱数据")
+            details = []
+            if encoded:
+                details.append(f"原始牌谱约 {len(encoded) * 3 // 4:,} 字节")
+            if reference:
+                details.append("已返回牌谱引用")
+            yield event.plain_result("本地 API 取谱成功：" + "，".join(details) + "。")
+        except Exception as exc:
+            yield event.plain_result(f"本地 API 取谱失败：{exc}")
 
     def _gateway_result(self, event: AstrMessageEvent, result: Any):
         if not isinstance(result, dict):
@@ -556,8 +612,55 @@ class MahjongHelperPlugin(Star):
             "账号：/雀魂搜索、/雀魂绑定、/雀魂切换、/雀魂解绑、/雀魂我的绑定\n"
             "战绩：/雀魂查询、/查询三麻、/雀魂对局、/三麻对局\n"
             "订阅：/雀魂订阅、/三麻订阅、/雀魂订阅状态、/三麻订阅状态\n"
-            "可选服务：/雀魂API状态、/牌谱Review、/雀魂场况"
+            "本地服务：/雀魂API状态、/雀魂取谱测试、/雀魂登录\n"
+            "可选分析：/牌谱Review、/雀魂场况"
         )
+
+    def _protocol_executable(self) -> Path | None:
+        configured = str(self.config.get("protocol_executable", "") or "").strip()
+        if configured:
+            path = Path(configured).expanduser()
+            return path if path.is_absolute() else (self.plugin_dir / path).resolve()
+        if sys.platform == "win32":
+            name = "Majsoul.ProtocolLogin.Api-win-x64.exe"
+        elif sys.platform.startswith("linux"):
+            name = "Majsoul.ProtocolLogin.Api-linux-x64"
+        else:
+            return None
+        return self.plugin_dir / "api" / name
+
+    async def _auto_start_protocol(self):
+        if not self.protocol or await self.protocol.health():
+            return
+        executable = self._protocol_executable()
+        if executable is None or not executable.is_file():
+            logger.info("未发现本地雀魂 API 程序；查询和何切功能不受影响")
+            return
+        options: dict[str, Any] = {
+            "cwd": str(executable.parent),
+            "stdout": asyncio.subprocess.DEVNULL,
+            "stderr": asyncio.subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            options["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            self._protocol_process = await asyncio.create_subprocess_exec(
+                str(executable), **options
+            )
+            for _ in range(20):
+                await asyncio.sleep(0.5)
+                if self._protocol_process.returncode is not None:
+                    raise RuntimeError(
+                        f"程序提前退出，退出码 {self._protocol_process.returncode}"
+                    )
+                if await self.protocol.health():
+                    logger.info("本地雀魂 API 已启动：%s", executable)
+                    return
+            logger.warning("本地雀魂 API 已启动，但 10 秒内没有通过健康检查")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("自动启动本地雀魂 API 失败：%s", exc)
 
     async def _question_scheduler(self):
         while True:

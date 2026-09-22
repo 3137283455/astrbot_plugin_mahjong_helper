@@ -35,6 +35,16 @@
     "type": "string",
     "default": "http://127.0.0.1:5088"
   },
+  "protocol_auto_launch": {
+    "description": "插件启动时自动启动 api 目录中的本地雀魂协议程序",
+    "type": "bool",
+    "default": true
+  },
+  "protocol_executable": {
+    "description": "本地雀魂协议程序路径；留空时按当前系统从插件 api 目录查找",
+    "type": "string",
+    "default": ""
+  },
   "protocol_api_key": {
     "description": "可选的本地协议服务 API Key",
     "type": "string",

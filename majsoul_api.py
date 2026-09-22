@@ -3,13 +3,26 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 
 
 class MajsoulApiError(RuntimeError):
     pass
+
+
+def extract_paipu_id(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+        if parsed.scheme and parsed.netloc:
+            return parse_qs(parsed.query).get("paipu", [""])[0]
+    except ValueError:
+        pass
+    return value
 
 
 class KoromoClient:
@@ -170,3 +183,21 @@ class ProtocolClient:
             "GET", "/api/players/resolve", params={"friendId": friend_id}
         )
 
+    async def player_brief(self, account_id: str):
+        return await self._request("GET", f"/api/players/{quote(str(account_id), safe='')}")
+
+    async def player_statistics(self, account_id: str):
+        account_id = quote(str(account_id), safe="")
+        return await self._request("GET", f"/api/players/{account_id}/statistics")
+
+    async def fetch_record(self, paipu: str):
+        return await self._request(
+            "POST",
+            "/api/records/fetch",
+            json={
+                "paipu": paipu,
+                "downloadAvatars": False,
+                "exportFiles": False,
+                "includeDataBase64": True,
+            },
+        )

@@ -20,8 +20,8 @@ class ReviewGateway:
     async def _post(self, path: str, payload: dict):
         if not self.base_url:
             raise RuntimeError(
-                "尚未配置牌谱分析网关。玩家查询和订阅不受影响；"
-                "请在插件配置中填写 review_gateway_url。"
+                "本地 API 只能登录和取回原始牌谱，不能单独完成 Mortal 分析。"
+                "请另行配置 review_gateway_url；玩家查询和订阅不受影响。"
             )
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         async with httpx.AsyncClient(timeout=self.timeout, headers=headers) as client:

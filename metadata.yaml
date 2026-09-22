@@ -1,6 +1,6 @@
 name: astrbot_plugin_mahjong_helper
 display_name: 日麻助手
 desc: 601道何切题、雀魂玩家查询、战绩、最近对局与自动订阅。
-version: 0.2.0
+version: 0.2.1
 author: 3137283455
 repo: https://github.com/3137283455/astrbot_plugin_mahjong_helper
