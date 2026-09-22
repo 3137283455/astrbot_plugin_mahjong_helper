@@ -102,4 +102,5 @@ https://github.com/3137283455/astrbot_plugin_mahjong_helper
 
 ## 许可
 
-代码使用 [AGPL-3.0](LICENSE)。题库图片的使用范围见 [NOTICE.md](NOTICE.md)。
+代码使用 [AGPL-3.0](LICENSE)。题库图片的使用范围见 [NOTICE.md](NOTICE.md)，
+上游来源和参考范围见 [参考项目.md](参考项目.md)。
