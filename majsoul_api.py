@@ -53,18 +53,19 @@ class KoromoClient:
                 await asyncio.sleep(wait)
             self._last_request = time.monotonic()
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None):
-        token = (self.token_getter() or "").strip()
-        if not token:
-            raise MajsoulApiError(
-                "尚未配置牌谱屋 Token。请管理员私聊机器人发送：/设置牌谱屋Token TOKEN"
-            )
-        last_error: Exception | None = None
+    def _headers(self) -> dict[str, str]:
         headers = {
-            "Authorization": f"Bearer {token}",
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-mahjong-helper/0.2",
+            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.4",
         }
+        token = (self.token_getter() or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def _get(self, path: str, params: dict[str, Any] | None = None):
+        last_error: Exception | None = None
+        headers = self._headers()
         for host in self.hosts:
             await self._limit()
             try:

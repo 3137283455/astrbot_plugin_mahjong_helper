@@ -125,7 +125,7 @@ class MahjongHelperPlugin(Star):
     def _help_text(event: AstrMessageEvent) -> str:
         lines = [
             "🀄 日麻助手使用帮助",
-            "内置 601 道何切题；玩家查询、战绩和订阅需要管理员先配置牌谱屋 Token。",
+            "内置 601 道何切题；玩家查询、战绩和订阅使用牌谱屋公开数据，无需 Token。",
             "",
             "【何切练习】",
             "/何切 [题号]｜随机出题或查看指定题",
@@ -161,13 +161,13 @@ class MahjongHelperPlugin(Star):
                     "/何切自动 关闭、/何切重置",
                     "/雀魂订阅 玩家、/三麻订阅 玩家｜管理自动播报",
                     "/开启雀魂订阅、/关闭雀魂订阅、/删除雀魂订阅",
-                    "/设置牌谱屋Token TOKEN｜必须私聊",
+                    "/设置牌谱屋Token TOKEN｜可选，必须私聊",
                     "/雀魂登录 账号 密码｜必须私聊",
                     "/雀魂取谱测试 牌谱链接",
                 ]
             )
         else:
-            lines.extend(["", "每日出题、订阅管理、Token 与登录功能仅限管理员。"])
+            lines.extend(["", "每日出题、订阅管理、可选 Token 与登录功能仅限管理员。"])
         lines.extend(["", "再次查看：/help 或 /雀魂帮助"])
         return "\n".join(lines)
 

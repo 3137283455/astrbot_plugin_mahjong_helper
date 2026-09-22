@@ -20,7 +20,7 @@
     "default": 2
   },
   "koromo_token": {
-    "description": "牌谱屋 API Token；也可由管理员私聊机器人设置",
+    "description": "可选的牌谱屋 API Token；公开查询无需填写",
     "type": "string",
     "default": "",
     "obvious_hint": true

@@ -85,6 +85,13 @@ class FormatterTests(unittest.TestCase):
 
 
 class KoromoClientTests(unittest.IsolatedAsyncioTestCase):
+    def test_public_api_does_not_require_token(self):
+        self.assertNotIn("Authorization", KoromoClient(lambda: None)._headers())
+        self.assertEqual(
+            KoromoClient(lambda: "secret")._headers()["Authorization"],
+            "Bearer secret",
+        )
+
     async def test_recent_records_uses_stats_count_and_correct_mode(self):
         client = KoromoClient(lambda: "token")
         calls = []
