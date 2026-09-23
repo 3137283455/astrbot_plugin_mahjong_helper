@@ -11,8 +11,6 @@
 - 菜单：`/雀` 快捷菜单与 `/help` 完整帮助默认发送分类卡片，普通用户和管理员看到的内容不同。
 - 对局：最近牌谱链接与名次结果。
 - 订阅：按群或私聊会话自动播报新对局。
-- 可选接入本地 `Majsoul.ProtocolLogin.Api`。
-- 可选接入牌谱 Review/场况生成 HTTP 网关。
 
 ## 安装
 
@@ -103,39 +101,10 @@ https://github.com/3137283455/astrbot_plugin_mahjong_helper
 ## 权限与凭据
 
 - 普通用户可以使用何切、玩家绑定、玩家查询、战绩卡片和查看订阅状态；已配置牌谱屋密钥时也可查询对局。
-- 何切重置、每日自动出题、订阅管理、设置可选牌谱屋 Token、本地雀魂登录和取谱测试
+- 何切重置、每日自动出题、订阅管理、设置可选牌谱屋 Token
   只允许 AstrBot 管理员执行。
-- 可选牌谱屋 Token、雀魂账号和密码只能在私聊中提交；插件不会把雀魂登录密码写入
-  插件数据库。
+- 可选牌谱屋 Token 只能在私聊中提交。
 - AstrBot 管理员需要在 AstrBot 配置中的管理员 ID 列表里填写自己的 QQ 号。
-
-## 本地 API 与 Review
-
-本地 API 使用上游项目 Release 发布的 `Majsoul.ProtocolLogin.Api`：
-
-- [下载 Majsoul-Plugin 最新 Release](https://github.com/Xcheng-dada/Majsoul-Plugin/releases/latest)
-- Windows：解压 `MajsoulAPI-*-windows-x64.zip`，把
-  `Majsoul.ProtocolLogin.Api-win-x64.exe` 放入本插件 `api/`。
-- Linux：解压 `MajsoulAPI-*-linux-x64.zip`，把
-  `Majsoul.ProtocolLogin.Api-linux-x64` 放入本插件 `api/`，并赋予执行权限。
-
-插件默认会在未检测到 `127.0.0.1:5088` 服务时自动启动对应程序；可通过
-`protocol_auto_launch` 关闭，也可用 `protocol_executable` 指定其他位置。程序一次
-只能启动一个实例。
-
-使用 `/雀魂API状态` 检查服务，在私聊中使用 `/雀魂登录 账号 密码` 登录；再用
-`/雀魂取谱测试 牌谱链接` 验证是否能取得原始牌谱。登录信息仅转交本地服务，
-不写入插件数据库。建议使用专门的小号。
-
-原项目的 Review 依赖完整雀魂 protobuf 解码、牌谱转换和图片渲染，无法只靠一个
-本地 API 完成：该程序负责登录和取谱，但不负责 Mortal 分析。本插件提供稳定的
-分析网关合同：
-
-- `POST /review`：`{"paipu_url": "...", "seat": "..."}`
-- `POST /scene`：`{"paipu_url": "...", "round": 1, "turn": 8}`
-
-配置 `review_gateway_url` 后可使用 `/牌谱Review` 和 `/雀魂场况`。网关可以返回
-`message`、`summary`、`report_url`、`image_url` 或 `image_urls`。
 
 ## 许可
 

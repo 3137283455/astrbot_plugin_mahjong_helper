@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import quote
 
 import httpx
 
@@ -24,19 +24,6 @@ def koromo_player_url(uid: str, mode: int = 4, room: str = "") -> str:
     }
     game_mode = game_modes[mode][room]
     return f"https://amae-koromo.sapk.ch/player/{quote(uid, safe='')}/{game_mode}/"
-
-
-def extract_paipu_id(value: str) -> str:
-    value = value.strip()
-    if not value:
-        return ""
-    try:
-        parsed = urlparse(value)
-        if parsed.scheme and parsed.netloc:
-            return parse_qs(parsed.query).get("paipu", [""])[0]
-    except ValueError:
-        pass
-    return value
 
 
 class KoromoClient:
@@ -70,7 +57,7 @@ class KoromoClient:
     def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.9",
+            "User-Agent": "astrbot-plugin-mahjong-helper/0.3.0",
         }
         token = (self.token_getter() or "").strip()
         if token:
@@ -201,66 +188,3 @@ class KoromoClient:
             last_time = int(last_time)
             cursor = (last_time * 1000 if last_time < 10_000_000_000 else last_time) - 1
         return result
-
-
-class ProtocolClient:
-    def __init__(self, base_url: str, api_key: str = "", timeout: float = 20):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key.strip()
-        self.timeout = timeout
-
-    def _headers(self) -> dict[str, str]:
-        return {"X-Api-Key": self.api_key} if self.api_key else {}
-
-    async def _request(self, method: str, path: str, **kwargs):
-        async with httpx.AsyncClient(
-            timeout=self.timeout, headers=self._headers()
-        ) as client:
-            response = await client.request(method, self.base_url + path, **kwargs)
-        response.raise_for_status()
-        if not response.content:
-            return None
-        return response.json()
-
-    async def health(self) -> bool:
-        for path in ("/api/profiles", "/health", "/"):
-            try:
-                await self._request("GET", path)
-                return True
-            except Exception:
-                continue
-        return False
-
-    async def profiles(self):
-        return await self._request("GET", "/api/profiles")
-
-    async def login(self, account: str, password: str):
-        return await self._request(
-            "POST",
-            "/api/auth/login",
-            json={"account": account, "password": password, "saveProfile": True},
-        )
-
-    async def resolve_friend_id(self, friend_id: str):
-        return await self._request(
-            "GET", "/api/players/resolve", params={"friendId": friend_id}
-        )
-
-    async def player_brief(self, account_id: str):
-        return await self._request("GET", f"/api/players/{quote(str(account_id), safe='')}")
-
-    async def player_statistics(self, account_id: str):
-        account_id = quote(str(account_id), safe="")
-        return await self._request("GET", f"/api/players/{account_id}/statistics")
-
-    async def fetch_record(self, paipu: str):
-        return await self._request(
-            "POST",
-            "/api/records/fetch",
-            json={
-                "paipu": paipu,
-                "downloadAvatars": False,
-                "exportFiles": False,
-                "includeDataBase64": True,
-            },
-        )

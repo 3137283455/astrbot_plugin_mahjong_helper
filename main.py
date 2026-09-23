@@ -4,13 +4,10 @@ import asyncio
 import hashlib
 import json
 import re
-import subprocess
-import sys
 import time
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import astrbot.api.message_components as Comp
@@ -30,12 +27,8 @@ from .formatters import (
     room_modes,
 )
 from .koromo_views import format_deskmates, format_trend, format_view, parse_player_query
-from .majsoul_api import (
-    KoromoCapRequired, KoromoClient, MajsoulApiError, ProtocolClient,
-    extract_paipu_id, koromo_player_url,
-)
+from .majsoul_api import KoromoCapRequired, KoromoClient, MajsoulApiError, koromo_player_url
 from .nanikiru_core import Question, QuestionStore, StateStore
-from .review_gateway import ReviewGateway
 from .stat_card import (
     CARD_SECTIONS, MENU_CARD_REVISION, render_help_card,
     render_quick_menu_card, render_stats_card,
@@ -54,11 +47,8 @@ class MahjongHelperPlugin(Star):
         self.state: StateStore | None = None
         self.db: MahjongDatabase | None = None
         self.koromo: KoromoClient | None = None
-        self.protocol: ProtocolClient | None = None
-        self.review_gateway: ReviewGateway | None = None
         self._lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
-        self._protocol_process: asyncio.subprocess.Process | None = None
         self.plugin_dir = Path(__file__).resolve().parent
         self.state_dir: Path | None = None
         self.timezone = ZoneInfo(self.config.get("timezone", "Asia/Shanghai"))
@@ -71,20 +61,10 @@ class MahjongHelperPlugin(Star):
         self.state = StateStore(database_path, self.questions.by_id)
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
-        self.protocol = ProtocolClient(
-            self.config.get("protocol_base_url", "http://127.0.0.1:5088"),
-            self.config.get("protocol_api_key", ""),
-        )
-        self.review_gateway = ReviewGateway(
-            self.config.get("review_gateway_url", ""),
-            self.config.get("review_gateway_token", ""),
-        )
         self._tasks = [
             asyncio.create_task(self._question_scheduler()),
             asyncio.create_task(self._subscription_scheduler()),
         ]
-        if self.config.get("protocol_auto_launch", True):
-            self._tasks.append(asyncio.create_task(self._auto_start_protocol()))
         logger.info("日麻助手已加载，共 %d 道何切题", len(self.questions.questions))
 
     async def terminate(self):
@@ -93,13 +73,6 @@ class MahjongHelperPlugin(Star):
         for task in self._tasks:
             with suppress(asyncio.CancelledError):
                 await task
-        if self._protocol_process and self._protocol_process.returncode is None:
-            self._protocol_process.terminate()
-            try:
-                await asyncio.wait_for(self._protocol_process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self._protocol_process.kill()
-                await self._protocol_process.wait()
 
     def _ready(self) -> tuple[QuestionStore, StateStore, MahjongDatabase, KoromoClient]:
         if not all((self.questions, self.state, self.db, self.koromo)):
@@ -159,9 +132,6 @@ class MahjongHelperPlugin(Star):
             "",
             "【其他功能】",
             "/雀魂订阅状态、/三麻订阅状态｜查看当前会话订阅",
-            "/雀魂API状态｜检查本地雀魂服务",
-            "/牌谱Review 牌谱链接 [座位]｜可选牌谱分析",
-            "/雀魂场况 牌谱链接 局数 [巡目]｜可选场况生成",
         ]
         if event.role == "admin":
             lines.extend(
@@ -173,12 +143,10 @@ class MahjongHelperPlugin(Star):
                     "/雀魂订阅 玩家、/三麻订阅 玩家｜管理自动播报",
                     "/开启雀魂订阅、/关闭雀魂订阅、/删除雀魂订阅",
                     "/设置牌谱屋Token TOKEN｜获准后配置，必须私聊",
-                    "/雀魂登录 账号 密码｜必须私聊",
-                    "/雀魂取谱测试 牌谱链接",
                 ]
             )
         else:
-            lines.extend(["", "每日出题、订阅管理、凭据配置与登录功能仅限管理员。"])
+            lines.extend(["", "每日出题、订阅管理与牌谱屋凭据配置仅限管理员。"])
         lines.extend(["", "再次查看：/help 或 /雀魂帮助"])
         return "\n".join(lines)
 
@@ -372,16 +340,6 @@ class MahjongHelperPlugin(Star):
             return
         _, _, _, api = self._ready()
         try:
-            if name.isdigit() and self.protocol:
-                try:
-                    player = await self.protocol.resolve_friend_id(name)
-                    if isinstance(player, dict) and player_uid(player):
-                        yield event.plain_result(
-                            "好友码查询结果：\n" + format_search([player], 4).split("：\n", 1)[-1]
-                        )
-                        return
-                except Exception:
-                    pass
             results = await asyncio.gather(api.search_player(name, 4), api.search_player(name, 3))
             parts = [format_search(rows, mode) for rows, mode in zip(results, (4, 3)) if rows]
             yield event.plain_result("\n\n".join(parts) if parts else "没有找到该玩家。")
@@ -738,108 +696,6 @@ class MahjongHelperPlugin(Star):
     async def status_three(self, event: AstrMessageEvent):
         yield event.plain_result(self._subscription_status(event, 3))
 
-    @filter.command("雀魂API状态")
-    async def protocol_status(self, event: AstrMessageEvent):
-        """检查可选的本地雀魂协议服务。"""
-        try:
-            profiles = await self.protocol.profiles()
-            count = len(profiles) if isinstance(profiles, list) else 0
-            yield event.plain_result(f"本地雀魂协议服务可用，已保存 {count} 个登录档案。")
-        except Exception:
-            executable = self._protocol_executable()
-            hint = f"\n预期程序位置：{executable}" if executable else ""
-            yield event.plain_result(f"本地雀魂协议服务未连接。{hint}")
-
-    @filter.command("雀魂登录")
-    async def protocol_login(self, event: AstrMessageEvent, account: str = "", password: str = ""):
-        """管理员在私聊中登录本地雀魂协议服务。"""
-        error = self._admin_error(event)
-        if error:
-            yield event.plain_result(error)
-            return
-        if event.get_group_id():
-            yield event.plain_result("账号和密码只能在私聊中提交，请撤回群消息。")
-            return
-        if not account or not password:
-            yield event.plain_result("用法：/雀魂登录 账号 密码")
-            return
-        try:
-            result = await self.protocol.login(account, password)
-            message = result.get("message") if isinstance(result, dict) else None
-            yield event.plain_result(message or "登录请求已完成，请用 /雀魂API状态 检查服务。")
-        except Exception as exc:
-            yield event.plain_result(f"本地协议服务登录失败：{exc}")
-
-    @filter.command("雀魂取谱测试")
-    async def protocol_fetch_test(self, event: AstrMessageEvent, paipu_url: str = ""):
-        """管理员测试本地 API 是否能取回牌谱原始数据。"""
-        error = self._admin_error(event)
-        if error:
-            yield event.plain_result(error)
-            return
-        paipu = extract_paipu_id(paipu_url)
-        if not paipu:
-            yield event.plain_result("用法：/雀魂取谱测试 牌谱链接")
-            return
-        try:
-            result = await self.protocol.fetch_record(paipu)
-            if not isinstance(result, dict):
-                raise RuntimeError("本地 API 返回格式不正确")
-            encoded = result.get("dataBase64") or ""
-            reference = result.get("reference") or ""
-            if not encoded and not reference:
-                raise RuntimeError("本地 API 没有返回牌谱数据")
-            details = []
-            if encoded:
-                details.append(f"原始牌谱约 {len(encoded) * 3 // 4:,} 字节")
-            if reference:
-                details.append("已返回牌谱引用")
-            yield event.plain_result("本地 API 取谱成功：" + "，".join(details) + "。")
-        except Exception as exc:
-            yield event.plain_result(f"本地 API 取谱失败：{exc}")
-
-    def _gateway_result(self, event: AstrMessageEvent, result: Any):
-        if not isinstance(result, dict):
-            return event.plain_result(str(result))
-        components: list[Any] = []
-        message = result.get("message") or result.get("summary")
-        if message:
-            components.append(Comp.Plain(str(message)))
-        urls = result.get("image_urls") or []
-        if result.get("image_url"):
-            urls = [result["image_url"], *urls]
-        for url in urls:
-            components.append(Comp.Image.fromURL(str(url)))
-        if result.get("report_url"):
-            components.append(Comp.Plain(f"分析报告：{result['report_url']}"))
-        return event.chain_result(components or [Comp.Plain("分析服务已完成，但没有返回内容。")])
-
-    @filter.command("牌谱Review")
-    async def review(self, event: AstrMessageEvent, paipu_url: str = "", seat: str = ""):
-        """通过可选分析网关进行牌谱 Review。"""
-        if not paipu_url:
-            yield event.plain_result("用法：/牌谱Review 牌谱链接 [座位]")
-            return
-        try:
-            yield self._gateway_result(event, await self.review_gateway.review(paipu_url, seat))
-        except Exception as exc:
-            yield event.plain_result(f"牌谱分析失败：{exc}")
-
-    @filter.command("雀魂场况")
-    async def scene(
-        self, event: AstrMessageEvent, paipu_url: str = "", round_number: int = 0, turn: int = -1
-    ):
-        """通过可选分析网关生成指定场况。"""
-        if not paipu_url or round_number <= 0:
-            yield event.plain_result("用法：/雀魂场况 牌谱链接 局数 [巡目]")
-            return
-        try:
-            selected_turn = None if turn < 0 else turn
-            result = await self.review_gateway.scene(paipu_url, round_number, selected_turn)
-            yield self._gateway_result(event, result)
-        except Exception as exc:
-            yield event.plain_result(f"场况生成失败：{exc}")
-
     @filter.command("help")
     async def help_command(self, event: AstrMessageEvent, style: str = ""):
         """显示日麻助手功能、用法和当前用户可用的管理命令。"""
@@ -859,52 +715,6 @@ class MahjongHelperPlugin(Star):
                 yield card
                 return
         yield event.plain_result(self._help_text(event))
-
-    def _protocol_executable(self) -> Path | None:
-        configured = str(self.config.get("protocol_executable", "") or "").strip()
-        if configured:
-            path = Path(configured).expanduser()
-            return path if path.is_absolute() else (self.plugin_dir / path).resolve()
-        if sys.platform == "win32":
-            name = "Majsoul.ProtocolLogin.Api-win-x64.exe"
-        elif sys.platform.startswith("linux"):
-            name = "Majsoul.ProtocolLogin.Api-linux-x64"
-        else:
-            return None
-        return self.plugin_dir / "api" / name
-
-    async def _auto_start_protocol(self):
-        if not self.protocol or await self.protocol.health():
-            return
-        executable = self._protocol_executable()
-        if executable is None or not executable.is_file():
-            logger.info("未发现本地雀魂 API 程序；查询和何切功能不受影响")
-            return
-        options: dict[str, Any] = {
-            "cwd": str(executable.parent),
-            "stdout": asyncio.subprocess.DEVNULL,
-            "stderr": asyncio.subprocess.DEVNULL,
-        }
-        if sys.platform == "win32":
-            options["creationflags"] = subprocess.CREATE_NO_WINDOW
-        try:
-            self._protocol_process = await asyncio.create_subprocess_exec(
-                str(executable), **options
-            )
-            for _ in range(20):
-                await asyncio.sleep(0.5)
-                if self._protocol_process.returncode is not None:
-                    raise RuntimeError(
-                        f"程序提前退出，退出码 {self._protocol_process.returncode}"
-                    )
-                if await self.protocol.health():
-                    logger.info("本地雀魂 API 已启动：%s", executable)
-                    return
-            logger.warning("本地雀魂 API 已启动，但 10 秒内没有通过健康检查")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("自动启动本地雀魂 API 失败：%s", exc)
 
     async def _question_scheduler(self):
         while True:

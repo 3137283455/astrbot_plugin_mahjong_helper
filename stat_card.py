@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 3
+MENU_CARD_REVISION = 4
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -296,9 +296,9 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
         _menu_tile(draw, 92 + i % 2 * 625, 798 + i // 2 * 130,
                    command, detail, GOLD)
 
-    _menu_section(draw, "牌谱工具", 1122)
+    _menu_section(draw, "对局与网页", 1122)
     _menu_tile(draw, 92, 1187, "/雀 局", "对局列表；受限给网页链接")
-    _menu_tile(draw, 717, 1187, "/牌谱Review", "牌谱分析 · 需配置分析网关")
+    _menu_tile(draw, 717, 1187, "/雀 页", "直接打开牌谱屋玩家页")
 
     if admin:
         _menu_section(draw, "管理员", 1378, RED)
@@ -312,7 +312,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
                        command, detail, RED)
     else:
         draw.rounded_rectangle((92, 1376, 1308, 1459), radius=23, fill="#E1EEEA")
-        draw.text((119, 1395), "管理员功能：每日出题、订阅管理、密钥配置与登录",
+        draw.text((119, 1395), "管理员功能：每日出题、订阅管理、牌谱屋密钥配置",
                   font=_font(28), fill=INK)
 
     draw.text((92, height - 63), "文字版：/help 文    何切题库已内置，无需另外准备",

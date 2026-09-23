@@ -39,37 +39,5 @@
     "description": "三麻订阅轮询间隔（秒，最低60）",
     "type": "int",
     "default": 300
-  },
-  "protocol_base_url": {
-    "description": "可选的 Majsoul.ProtocolLogin.Api 地址",
-    "type": "string",
-    "default": "http://127.0.0.1:5088"
-  },
-  "protocol_auto_launch": {
-    "description": "插件启动时自动启动 api 目录中的本地雀魂协议程序",
-    "type": "bool",
-    "default": true
-  },
-  "protocol_executable": {
-    "description": "本地雀魂协议程序路径；留空时按当前系统从插件 api 目录查找",
-    "type": "string",
-    "default": ""
-  },
-  "protocol_api_key": {
-    "description": "可选的本地协议服务 API Key",
-    "type": "string",
-    "default": "",
-    "obvious_hint": true
-  },
-  "review_gateway_url": {
-    "description": "可选的牌谱分析网关地址",
-    "type": "string",
-    "default": ""
-  },
-  "review_gateway_token": {
-    "description": "可选的牌谱分析网关 Token",
-    "type": "string",
-    "default": "",
-    "obvious_hint": true
   }
 }
