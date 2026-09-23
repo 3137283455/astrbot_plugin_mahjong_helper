@@ -27,6 +27,7 @@ from .formatters import (
     record_uuid,
     room_modes,
 )
+from .koromo_views import SECTIONS, format_deskmates, format_trend, format_view
 from .majsoul_api import KoromoClient, MajsoulApiError, ProtocolClient, extract_paipu_id
 from .nanikiru_core import Question, QuestionStore, StateStore
 from .review_gateway import ReviewGateway
@@ -125,7 +126,7 @@ class MahjongHelperPlugin(Star):
     def _help_text(event: AstrMessageEvent) -> str:
         lines = [
             "🀄 日麻助手使用帮助",
-            "内置 601 道何切题；玩家查询、战绩和订阅使用牌谱屋公开数据，无需 Token。",
+            "内置 601 道何切题；玩家搜索与统计使用牌谱屋公开数据。对局及订阅需牌谱屋授权。",
             "",
             "【何切练习】",
             "/何切 [题号]｜随机出题或查看指定题",
@@ -140,6 +141,11 @@ class MahjongHelperPlugin(Star):
             "/雀魂解绑 [UID]｜解除绑定",
             "",
             "【战绩与对局】",
+            "/雀魂｜查看牌谱屋分栏菜单",
+            "/雀魂 基本|顺位|立直|更多|和铳|血统|大铳 [玩家] [三麻] [金|玉|王座]",
+            "/雀魂 趋势|同桌 [玩家] [三麻] [金|玉|王座]",
+            "/雀魂 对局 [玩家] [三麻] [金|玉|王座] [页码]",
+            "以上分栏可加 近7天/近30天/近90天/近365天；对局数据需牌谱屋授权。",
             "/雀魂查询 [玩家] [金|玉|王座]｜四麻战绩",
             "/查询三麻 [玩家] [金|玉|王座]｜三麻战绩",
             "/雀魂对局 [玩家] [金|玉|王座]｜最近四麻",
@@ -459,6 +465,84 @@ class MahjongHelperPlugin(Star):
             return format_records(uid, mode, records) if records else "没有查到最近对局。"
         except Exception as exc:
             return self._error_text(exc)
+
+    @filter.command("雀魂")
+    async def koromo_menu(
+        self, event: AstrMessageEvent, section: str = "", arg1: str = "",
+        arg2: str = "", arg3: str = "", arg4: str = "", arg5: str = "",
+    ):
+        """按牌谱屋页面栏目查询玩家数据；不填玩家则使用主绑定。"""
+        if section in {"", "帮助", "菜单"}:
+            yield event.plain_result(
+                "🀄 牌谱屋分栏命令\n"
+                "/雀魂 基本｜和牌、放铳、平均打点等\n"
+                "/雀魂 顺位｜一至四位率\n"
+                "/雀魂 立直｜立直和了、收支、先制等\n"
+                "/雀魂 更多｜副露、效率、局收支等\n"
+                "/雀魂 和铳｜和牌方式与放铳对象\n"
+                "/雀魂 血统｜役满、起手向听等\n"
+                "/雀魂 大铳｜最近满贯以上放铳\n"
+                "/雀魂 趋势｜最近20场顺位与段位分\n"
+                "/雀魂 同桌｜最近100场常见对手\n"
+                "/雀魂 对局｜每页5场，可翻页\n"
+                "用法：/雀魂 栏目 [UID或昵称] [三麻] [金|玉|王座] [近30天] [页码]\n"
+                "例：/雀魂 立直 12105509 四麻 玉\n"
+                "例：/雀魂 对局 12105509 三麻 2\n"
+                "时间可选近7/30/90/365天；省略玩家使用主绑定。\n"
+                "对局、趋势、同桌需要牌谱屋官方授权密钥。"
+            )
+            return
+        canonical = SECTIONS.get(section)
+        if not canonical:
+            yield event.plain_result("未知栏目。发送 /雀魂 查看可用栏目。")
+            return
+        mode, room, query, page, days = 4, "", "", 1, 0
+        for token in (arg1, arg2, arg3, arg4, arg5):
+            token = token.strip()
+            if not token:
+                continue
+            if token in {"三麻", "三"}:
+                mode = 3
+            elif token in {"四麻", "四"}:
+                mode = 4
+            elif token in {"金", "玉", "王座", "金间", "玉间", "王座间", "金之间", "玉之间", "王座之间"}:
+                room = token
+            elif token in {"近7天", "近30天", "近90天", "近365天"}:
+                days = int(token[1:-1])
+            elif (token.isdigit() and len(token) <= 2 or token.startswith("第") and token.endswith("页") and token[1:-1].isdigit()) and canonical == "对局":
+                page = int(token[1:-1] if token.startswith("第") else token)
+            elif not query:
+                query = token
+            else:
+                yield event.plain_result("参数过多。发送 /雀魂 查看用法。")
+                return
+        modes = room_modes(mode, room)
+        since_ms = int((time.time() - days * 86400) * 1000) if days else None
+        period = f"近{days}天" if days else ""
+        try:
+            uid, _ = await self._resolve_target(event, query, mode)
+            _, _, _, api = self._ready()
+            if canonical == "对局":
+                records = await api.records_page(uid, mode, page, 5, modes, since_ms)
+                result = f"{period} 第{page}页\n{format_records(uid, mode, records)}" if records else "该页没有对局。"
+            elif canonical in {"趋势", "同桌"}:
+                if canonical == "趋势":
+                    records = await api.records_page(uid, mode, 1, 20, modes, since_ms)
+                    result = format_trend(uid, mode, records)
+                else:
+                    records = await api.records_page(uid, mode, 1, 100, modes, since_ms)
+                    result = format_deskmates(uid, mode, records)
+                if period:
+                    result = f"{period}\n{result}"
+            else:
+                stats, extended = await asyncio.gather(
+                    api.player_stats(uid, mode, modes, since_ms),
+                    api.extended_stats(uid, mode, modes, since_ms),
+                )
+                result = format_view(uid, mode, canonical, stats, extended, room, period) if stats else "没有查到战绩数据。"
+            yield event.plain_result(result)
+        except Exception as exc:
+            yield event.plain_result(self._error_text(exc))
 
     @filter.command("雀魂查询")
     async def stats_four(self, event: AstrMessageEvent, query: str = "", room: str = ""):

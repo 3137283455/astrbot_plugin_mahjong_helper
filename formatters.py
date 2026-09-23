@@ -102,10 +102,10 @@ def format_stats(uid: str, mode: int, stats: dict, extended: dict | None = None)
         lines.append(f"平均顺位：{float(avg_rank):.2f}")
     fields = [
         ("一位率", ("rank1_rate", "rank1Rate", "rank_1_rate")),
-        ("和牌率", ("win_rate", "winRate")),
-        ("放铳率", ("dama_rate", "deal_in_rate", "dealInRate", "rank_rate", "rankRate")),
-        ("自摸率", ("self_draw_rate", "selfDrawRate")),
-        ("立直率", ("riichi_rate", "riichiRate")),
+        ("和牌率", ("和牌率", "win_rate", "winRate")),
+        ("放铳率", ("放铳率", "deal_in_rate", "dealInRate")),
+        ("自摸率", ("自摸率", "self_draw_rate", "selfDrawRate")),
+        ("立直率", ("立直率", "riichi_rate", "riichiRate")),
     ]
     merged = dict(stats)
     if isinstance(extended, dict):

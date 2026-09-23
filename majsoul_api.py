@@ -56,7 +56,7 @@ class KoromoClient:
     def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.4",
+            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.5",
         }
         token = (self.token_getter() or "").strip()
         if token:
@@ -74,6 +74,11 @@ class KoromoClient:
                 if response.status_code == 404:
                     return None
                 if response.status_code == 429:
+                    if "x-cap-token-required" in response.text:
+                        raise MajsoulApiError(
+                            "牌谱屋对局接口要求验证码或官方授权密钥，当前无法读取对局；"
+                            "基本、顺位、立直等统计仍可使用。"
+                        )
                     retry_after = min(int(response.headers.get("Retry-After", "5")), 30)
                     await asyncio.sleep(retry_after)
                     last_error = MajsoulApiError("牌谱屋请求过于频繁，请稍后再试")
@@ -98,19 +103,25 @@ class KoromoClient:
                 return data[key]
         return []
 
-    async def player_stats(self, uid: str, mode: int, room_modes: str | None = None):
+    async def player_stats(
+        self, uid: str, mode: int, room_modes: str | None = None,
+        since_ms: int | None = None,
+    ):
         now = int(time.time() * 1000)
         modes = room_modes or self.MODE_PARAMS[mode]
         return await self._get(
-            f"/pl{mode}/player_stats/{uid}/{self.START_TIMESTAMP}/{now}",
+            f"/pl{mode}/player_stats/{uid}/{since_ms or self.START_TIMESTAMP}/{now}",
             {"mode": modes},
         )
 
-    async def extended_stats(self, uid: str, mode: int, room_modes: str | None = None):
+    async def extended_stats(
+        self, uid: str, mode: int, room_modes: str | None = None,
+        since_ms: int | None = None,
+    ):
         now = int(time.time() * 1000)
         modes = room_modes or self.MODE_PARAMS[mode]
         return await self._get(
-            f"/pl{mode}/player_extended_stats/{uid}/{self.START_TIMESTAMP}/{now}",
+            f"/pl{mode}/player_extended_stats/{uid}/{since_ms or self.START_TIMESTAMP}/{now}",
             {"mode": modes},
         )
 
@@ -139,6 +150,43 @@ class KoromoClient:
             if isinstance(data.get(key), list):
                 return data[key]
         return [data] if isinstance(data, dict) else []
+
+    async def records_page(
+        self, uid: str, mode: int, page: int = 1, page_size: int = 5,
+        room_modes: str | None = None, since_ms: int | None = None,
+    ) -> list[dict]:
+        """Read a page via Koromo's timestamp cursor (newest first)."""
+        if not 1 <= page <= 20 or not 1 <= page_size <= 100:
+            raise ValueError("页码只能填写 1～20。")
+        stats = await self.player_stats(uid, mode, room_modes, since_ms)
+        if not stats:
+            return []
+        cursor = int(time.time() * 1000)
+        modes = room_modes or self.MODE_PARAMS[mode]
+        skip = (page - 1) * page_size
+        result = []
+        tag = stats.get("count", "all")
+        while len(result) < page_size:
+            requested = min(100, skip + page_size - len(result))
+            batch = await self._get(
+                f"/pl{mode}/player_records/{uid}/{cursor}/{since_ms or self.START_TIMESTAMP}",
+                {"limit": requested, "mode": modes,
+                 "descending": "true", "tag": tag},
+            )
+            tag = ""
+            if not isinstance(batch, list) or not batch:
+                break
+            if skip >= len(batch):
+                skip -= len(batch)
+            else:
+                result.extend(batch[skip:][:page_size - len(result)])
+                skip = 0
+            last_time = batch[-1].get("startTime", batch[-1].get("start_time"))
+            if last_time is None or len(batch) < requested:
+                break
+            last_time = int(last_time)
+            cursor = (last_time * 1000 if last_time < 10_000_000_000 else last_time) - 1
+        return result
 
 
 class ProtocolClient:
