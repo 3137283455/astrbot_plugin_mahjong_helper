@@ -1,0 +1,187 @@
+diff --git a/entertainment_menu.py b/entertainment_menu.py
+new file mode 100644
+index 0000000..ce62e0a
+--- /dev/null
++++ b/entertainment_menu.py
+@@ -0,0 +1,62 @@
++"""Compact Chinese image menus for the API plugin."""
++from io import BytesIO
++from pathlib import Path
++
++from PIL import Image, ImageDraw, ImageFont
++
++LABELS = {"text": "文字", "image": "图片", "video": "视频", "audio": "语音"}
++COLORS = {"text": "#197E79", "image": "#C98537", "video": "#7B60A7", "audio": "#C25E76"}
++FONT_PATHS = (
++    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
++    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
++    "C:/Windows/Fonts/msyh.ttc",
++)
++
++
++def _font(size):
++    for path in FONT_PATHS:
++        if Path(path).is_file():
++            return ImageFont.truetype(path, size)
++    return ImageFont.load_default()
++
++
++def render_menu(entries, category=""):
++    """Render current, accessible API names; category is one of text/image/video/audio."""
++    grouped = {kind: sorted((entry.name for entry in entries if entry.type == kind)) for kind in LABELS}
++    if category:
++        names = grouped[category]
++        rows = max(1, (len(names) + 1) // 2)
++        height = max(600, 340 + rows * 64 + 120)
++    else:
++        height = 1020
++    image = Image.new("RGB", (1200, height), "#F4F6F3")
++    draw = ImageDraw.Draw(image)
++    draw.rounded_rectangle((42, 38, 1158, 210), radius=32, fill="#19343A")
++    title = "娱乐 API · " + LABELS[category] if category else "娱乐 API · 菜单"
++    draw.text((80, 70), title, font=_font(55), fill="white")
++    draw.text((80, 151), "群聊先 @机器人；私聊直接发送命令或关键词", font=_font(26), fill="#D7EAE7")
++    if category:
++        draw.text((60, 245), f"已启用 {len(grouped[category])} 项 · 发送下列名称即可调用", font=_font(31), fill="#3A5459")
++        for idx, name in enumerate(grouped[category]):
++            x = 60 + (idx % 2) * 550
++            y = 305 + (idx // 2) * 64
++            draw.rounded_rectangle((x, y, x + 520, y + 50), radius=12, fill="white")
++            draw.rectangle((x, y + 7, x + 6, y + 43), fill=COLORS[category])
++            draw.text((x + 25, y + 8), name, font=_font(28), fill="#19343A")
++        footer = "/娱乐 返回总菜单 · 部分接口需要额外参数或可能临时不可用"
++    else:
++        draw.text((60, 244), "选择分类查看完整列表", font=_font(34), fill="#3A5459")
++        for idx, (kind, label) in enumerate(LABELS.items()):
++            x = 60 + (idx % 2) * 550
++            y = 315 + (idx // 2) * 265
++            draw.rounded_rectangle((x, y, x + 520, y + 235), radius=25, fill="white")
++            draw.rectangle((x + 24, y + 28, x + 34, y + 88), fill=COLORS[kind])
++            draw.text((x + 53, y + 25), f"{label}  ·  {len(grouped[kind])} 项", font=_font(37), fill="#19343A")
++            draw.text((x + 27, y + 104), f"/娱乐 {label}", font=_font(27), fill=COLORS[kind])
++            examples = "  ·  ".join(grouped[kind][:3]) or "当前无可用项目"
++            draw.text((x + 27, y + 166), examples, font=_font(24), fill="#52696F")
++        footer = "示例：@机器人 讲个笑话   ·   /娱乐 图片   ·   /查看api"
++    draw.text((60, height - 78), footer, font=_font(24), fill="#52696F")
++    output = BytesIO()
++    image.save(output, format="PNG", optimize=True)
++    return output.getvalue()
+diff --git a/main.py b/main.py
+index 55c2a4e..86d3d62 100644
+--- a/main.py
++++ b/main.py
+@@ -10,6 +10,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
+ 
+ from .api_aggregator import APICoreApp, APIEntry, DataResource
+ from .config import PluginConfig
++from .entertainment_menu import render_menu
+ from .page_controller import APIPageController
+ from .utils import get_nickname, get_reply_text
+ 
+@@ -136,10 +137,52 @@ class APIPlugin(Star):
+         params = ", ".join(entry.params.keys()) if entry.params else "-"
+         return f"{entry.name} | type={entry.type} | params={params}"
+ 
++    @staticmethod
++    def _allowed(event: AstrMessageEvent) -> bool:
++        """Only private messages or a group message explicitly @mentioning this bot."""
++        if not event.get_group_id():
++            return True
++        bot_id = str(event.get_self_id() or "")
++        return bool(bot_id) and any(
++            isinstance(part, Comp.At) and str(part.qq) == bot_id
++            for part in event.get_messages()
++        )
++
++    def _accessible_entries(self, event: AstrMessageEvent) -> list[APIEntry]:
++        user_id = event.get_sender_id()
++        group_id = event.get_group_id()
++        session_id = event.unified_msg_origin
++        is_admin = event.is_admin()
++        result = []
++        for entry in self.core.api_mgr.list_enabled_entries():
++            if not entry.scope or any(
++                scope == "admin" and is_admin
++                or scope in (user_id, group_id, session_id)
++                for scope in entry.scope
++            ):
++                result.append(entry)
++        return result
++
++    @filter.command("娱乐")
++    async def entertainment_menu(self, event: AstrMessageEvent, category: str = ""):
++        """Show the image menu; /娱乐 文字|图片|视频|语音 shows a category."""
++        if not self._allowed(event):
++            return
++        aliases = {"文字": "text", "文本": "text", "图片": "image", "图": "image",
++                   "视频": "video", "影": "video", "语音": "audio", "音频": "audio"}
++        selected = aliases.get(category, "")
++        if category and category not in {"菜单", "返回", "帮助", "帮"} and not selected:
++            yield event.plain_result("用法：/娱乐 [文字|图片|视频|语音]")
++            return
++        image = render_menu(self._accessible_entries(event), selected)
++        yield event.chain_result([Comp.Image.fromBytes(image)])
++
+     # ================ API commands =================
+ 
+     @filter.command("查看api", aliases=["查看api列表", "api列表"])
+     async def api_detail(self, event: AstrMessageEvent, api_name: str | None = None):
++        if not self._allowed(event):
++            return
+         if api_name:
+             entry = self.core.api_mgr.get_entry(api_name)
+             if entry:
+@@ -152,6 +195,8 @@ class APIPlugin(Star):
+     @filter.command("启用api")
+     async def enable_api(self, event: AstrMessageEvent, api_name: str | None = None):
+         """启用api <api名称>"""
++        if not self._allowed(event):
++            return
+         target_name = str(api_name or "").strip()
+         if not target_name:
+             yield event.plain_result("未指定 API 名称")
+@@ -173,6 +218,8 @@ class APIPlugin(Star):
+     @filter.command("禁用api")
+     async def disable_api(self, event: AstrMessageEvent, api_name: str | None = None):
+         """禁用api <api名称>"""
++        if not self._allowed(event):
++            return
+         target_name = str(api_name or "").strip()
+         if not target_name:
+             yield event.plain_result("未指定 API 名称")
+@@ -206,6 +253,8 @@ class APIPlugin(Star):
+         Returns:
+             A short candidate list, or compact detail when query is an exact API name.
+         """
++        if not self._allowed(event):
++            return "API calls require a private message or an explicit @mention of the bot."
+         query_text = str(query or "").strip()
+         user_id = event.get_sender_id()
+         group_id = event.get_group_id()
+@@ -306,6 +355,8 @@ class APIPlugin(Star):
+         Returns:
+             Text content for text APIs, or a short delivery summary after sending media.
+         """
++        if not self._allowed(event):
++            return "API calls require a private message or an explicit @mention of the bot."
+         target_name = str(api_name or "").strip()
+         if not target_name:
+             return "API call failed: api_name is required."
+@@ -383,7 +434,7 @@ class APIPlugin(Star):
+ 
+     @filter.event_message_type(EventMessageType.ALL)
+     async def on_message(self, event: AstrMessageEvent):
+-        if self.cfg.need_prefix and not event.is_at_or_wake_command:
++        if not self._allowed(event):
+             return
+ 
+         msg = event.message_str
+diff --git a/requirements.txt b/requirements.txt
+index 0ace5d2..b3daf48 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,2 +1,4 @@
+ aiohttp>=3.9,<4
+ beautifulsoup4>=4.12,<5
++
++Pillow>=10,<13

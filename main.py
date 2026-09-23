@@ -147,7 +147,7 @@ class MahjongHelperPlugin(Star):
             )
         else:
             lines.extend(["", "每日出题、订阅管理与牌谱屋凭据配置仅限管理员。"])
-        lines.extend(["", "再次查看：/help 或 /雀魂帮助"])
+        lines.extend(["", "再次查看：/雀 帮；文字版：/雀 帮 文"])
         return "\n".join(lines)
 
     async def _menu_image(self, event: AstrMessageEvent, kind: str):
@@ -220,17 +220,29 @@ class MahjongHelperPlugin(Star):
             return source
 
     @filter.command("何切")
-    async def nanikiru(self, event: AstrMessageEvent, question_id: int = 0):
-        """随机出一道何切题；可附加 1 到 601 的题号。"""
+    async def nanikiru(self, event: AstrMessageEvent, question_id: str = ""):
+        """随机出题、指定题号，或使用 /何切 帮 查看图片帮助。"""
+        if question_id in {"帮", "帮助", "菜单", "文", "文字"}:
+            if question_id not in {"文", "文字"}:
+                card = await self._menu_image(event, "help")
+                if card is not None:
+                    yield card
+                    return
+            yield event.plain_result(self._help_text(event))
+            return
         questions, state, _, _ = self._ready()
         session_id = event.unified_msg_origin
         if question_id:
-            question = questions.get(question_id)
+            try:
+                selected_id = int(question_id)
+            except ValueError:
+                selected_id = 0
+            question = questions.get(selected_id)
             if question is None:
                 yield event.plain_result(f"题号范围是 1～{len(questions.questions)}。")
                 return
             async with self._lock:
-                state.set_current(session_id, question_id)
+                state.set_current(session_id, selected_id)
             yield self._question_chain(event, question)
             return
         async with self._lock:
@@ -477,7 +489,15 @@ class MahjongHelperPlugin(Star):
             async for result in action(event, arg1):
                 yield result
             return
-        if section in {"", "帮助", "菜单", "帮", "文", "文字"}:
+        if section in {"帮助", "帮"}:
+            if arg1 not in {"文", "文字"}:
+                card = await self._menu_image(event, "help")
+                if card is not None:
+                    yield card
+                    return
+            yield event.plain_result(self._help_text(event))
+            return
+        if section in {"", "菜单", "文", "文字"}:
             if section not in {"文", "文字"} and arg1 not in {"文", "文字"}:
                 card = await self._menu_image(event, "quick")
                 if card is not None:
@@ -695,16 +715,6 @@ class MahjongHelperPlugin(Star):
     @filter.command("三麻订阅状态")
     async def status_three(self, event: AstrMessageEvent):
         yield event.plain_result(self._subscription_status(event, 3))
-
-    @filter.command("help")
-    async def help_command(self, event: AstrMessageEvent, style: str = ""):
-        """显示日麻助手功能、用法和当前用户可用的管理命令。"""
-        if style not in {"文", "文字"}:
-            card = await self._menu_image(event, "help")
-            if card is not None:
-                yield card
-                return
-        yield event.plain_result(self._help_text(event))
 
     @filter.command("雀魂帮助")
     async def mahjong_help(self, event: AstrMessageEvent, style: str = ""):

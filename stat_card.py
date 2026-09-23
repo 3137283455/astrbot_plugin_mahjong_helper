@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 4
+MENU_CARD_REVISION = 5
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -264,14 +264,14 @@ def render_quick_menu_card(path: Path) -> Path:
               font=_font(29, True), fill=INK)
     draw.text((119, 1591), "例：/雀 立 12105509 玉 30天    文字版：末尾加 文",
               font=_font(27), fill=INK)
-    draw.text((92, 1685), "网页：/雀 页    完整帮助：/help    文字版：/雀 文", font=_font(26), fill=MUTED)
+    draw.text((92, 1685), "网页：/雀 页    完整帮助：/雀 帮    文字版：/雀 文", font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
     return path
 
 
 def render_help_card(path: Path, admin: bool = False) -> Path:
-    """Render /help; administrator commands appear only for administrators."""
+    """Render /雀 帮; administrator commands appear only for administrators."""
     height = 1790 if admin else 1530
     image = Image.new("RGB", (WIDTH, height), PAPER)
     draw = ImageDraw.Draw(image)
@@ -315,7 +315,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
         draw.text((119, 1395), "管理员功能：每日出题、订阅管理、牌谱屋密钥配置",
                   font=_font(28), fill=INK)
 
-    draw.text((92, height - 63), "文字版：/help 文    何切题库已内置，无需另外准备",
+    draw.text((92, height - 63), "文字版：/雀 帮 文    何切题库已内置，无需另外准备",
               font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
