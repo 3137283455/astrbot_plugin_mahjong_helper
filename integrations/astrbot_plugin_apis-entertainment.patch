@@ -67,7 +67,7 @@ index 0000000..ce62e0a
 +    image.save(output, format="PNG", optimize=True)
 +    return output.getvalue()
 diff --git a/main.py b/main.py
-index 55c2a4e..86d3d62 100644
+index 55c2a4e..c4975d6 100644
 --- a/main.py
 +++ b/main.py
 @@ -10,6 +10,7 @@ from astrbot.core.star.filter.event_message_type import EventMessageType
@@ -131,25 +131,39 @@ index 55c2a4e..86d3d62 100644
          if api_name:
              entry = self.core.api_mgr.get_entry(api_name)
              if entry:
-@@ -152,6 +195,8 @@ class APIPlugin(Star):
+@@ -148,10 +191,14 @@ class APIPlugin(Star):
+                 return
+         yield event.plain_result(self.core.api_mgr.display_entries())
+ 
+-    @filter.permission_type(filter.PermissionType.ADMIN)
      @filter.command("启用api")
      async def enable_api(self, event: AstrMessageEvent, api_name: str | None = None):
          """启用api <api名称>"""
 +        if not self._allowed(event):
 +            return
++        if not event.is_admin():
++            yield event.plain_result("仅管理员可管理 API。")
++            return
          target_name = str(api_name or "").strip()
          if not target_name:
              yield event.plain_result("未指定 API 名称")
-@@ -173,6 +218,8 @@ class APIPlugin(Star):
+@@ -169,10 +216,14 @@ class APIPlugin(Star):
+         )
+         yield event.plain_result(f"已启用 API：{target_name}")
+ 
+-    @filter.permission_type(filter.PermissionType.ADMIN)
      @filter.command("禁用api")
      async def disable_api(self, event: AstrMessageEvent, api_name: str | None = None):
          """禁用api <api名称>"""
 +        if not self._allowed(event):
 +            return
++        if not event.is_admin():
++            yield event.plain_result("仅管理员可管理 API。")
++            return
          target_name = str(api_name or "").strip()
          if not target_name:
              yield event.plain_result("未指定 API 名称")
-@@ -206,6 +253,8 @@ class APIPlugin(Star):
+@@ -206,6 +257,8 @@ class APIPlugin(Star):
          Returns:
              A short candidate list, or compact detail when query is an exact API name.
          """
@@ -158,7 +172,7 @@ index 55c2a4e..86d3d62 100644
          query_text = str(query or "").strip()
          user_id = event.get_sender_id()
          group_id = event.get_group_id()
-@@ -306,6 +355,8 @@ class APIPlugin(Star):
+@@ -306,6 +359,8 @@ class APIPlugin(Star):
          Returns:
              Text content for text APIs, or a short delivery summary after sending media.
          """
@@ -167,7 +181,7 @@ index 55c2a4e..86d3d62 100644
          target_name = str(api_name or "").strip()
          if not target_name:
              return "API call failed: api_name is required."
-@@ -383,7 +434,7 @@ class APIPlugin(Star):
+@@ -383,7 +438,7 @@ class APIPlugin(Star):
  
      @filter.event_message_type(EventMessageType.ALL)
      async def on_message(self, event: AstrMessageEvent):
