@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -27,10 +29,11 @@ from .formatters import (
     record_uuid,
     room_modes,
 )
-from .koromo_views import SECTIONS, format_deskmates, format_trend, format_view
+from .koromo_views import format_deskmates, format_trend, format_view, parse_player_query
 from .majsoul_api import KoromoClient, MajsoulApiError, ProtocolClient, extract_paipu_id
 from .nanikiru_core import Question, QuestionStore, StateStore
 from .review_gateway import ReviewGateway
+from .stat_card import CARD_SECTIONS, render_stats_card
 
 
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -134,22 +137,17 @@ class MahjongHelperPlugin(Star):
             "/何切状态｜查看当前题和本轮进度",
             "",
             "【雀魂玩家】",
-            "/雀魂搜索 玩家名｜搜索 UID",
-            "/雀魂绑定 UID｜绑定自己的账号",
-            "/雀魂我的绑定｜查看绑定",
-            "/雀魂切换 UID｜切换主账号",
-            "/雀魂解绑 [UID]｜解除绑定",
+            "/雀 搜 玩家名｜搜索 UID",
+            "/雀 绑 UID｜绑定；/雀 号｜查看绑定",
+            "/雀 切 UID｜切换主账号；/雀 解 UID｜解除绑定",
             "",
             "【战绩与对局】",
-            "/雀魂｜查看牌谱屋分栏菜单",
-            "/雀魂 基本|顺位|立直|更多|和铳|血统|大铳 [玩家] [三麻] [金|玉|王座]",
-            "/雀魂 趋势|同桌 [玩家] [三麻] [金|玉|王座]",
-            "/雀魂 对局 [玩家] [三麻] [金|玉|王座] [页码]",
-            "以上分栏可加 近7天/近30天/近90天/近365天；对局数据需牌谱屋授权。",
-            "/雀魂查询 [玩家] [金|玉|王座]｜四麻战绩",
-            "/查询三麻 [玩家] [金|玉|王座]｜三麻战绩",
-            "/雀魂对局 [玩家] [金|玉|王座]｜最近四麻",
-            "/三麻对局 [玩家] [金|玉|王座]｜最近三麻",
+            "/雀｜查看简短菜单；/雀 [玩家]｜基本卡片",
+            "/雀 基|顺|立|风|和|运|铳 [玩家]｜统计分栏",
+            "/雀 立 [玩家] 玉 30天｜按房间和时间筛选",
+            "/雀 立 文｜改发文字；三麻可加 三",
+            "/雀 近|桌|局 [玩家]｜对局相关，需牌谱屋授权",
+            "原有 /雀魂查询、/查询三麻 等命令仍可用。",
             "不填写玩家时使用自己的主绑定账号。",
             "",
             "【其他功能】",
@@ -167,13 +165,13 @@ class MahjongHelperPlugin(Star):
                     "/何切自动 关闭、/何切重置",
                     "/雀魂订阅 玩家、/三麻订阅 玩家｜管理自动播报",
                     "/开启雀魂订阅、/关闭雀魂订阅、/删除雀魂订阅",
-                    "/设置牌谱屋Token TOKEN｜可选，必须私聊",
+                    "/设置牌谱屋Token TOKEN｜对局授权，必须私聊",
                     "/雀魂登录 账号 密码｜必须私聊",
                     "/雀魂取谱测试 牌谱链接",
                 ]
             )
         else:
-            lines.extend(["", "每日出题、订阅管理、可选 Token 与登录功能仅限管理员。"])
+            lines.extend(["", "每日出题、订阅管理、授权密钥与登录功能仅限管理员。"])
         lines.extend(["", "再次查看：/help 或 /雀魂帮助"])
         return "\n".join(lines)
 
@@ -409,7 +407,7 @@ class MahjongHelperPlugin(Star):
         _, _, db, _ = self._ready()
         rows = db.list_bindings(self._actor_id(event))
         if not rows:
-            yield event.plain_result("尚未绑定账号，使用 /雀魂绑定 UID。")
+            yield event.plain_result("尚未绑定账号，使用 /雀 绑 UID。")
             return
         lines = ["我的雀魂绑定："]
         for row in rows:
@@ -424,7 +422,7 @@ class MahjongHelperPlugin(Star):
         if not query:
             uid = db.get_main_uid(self._actor_id(event))
             if not uid:
-                raise ValueError("请先使用 /雀魂绑定 UID，或在命令后填写 UID/昵称。")
+                raise ValueError("请先使用 /雀 绑 UID，或在命令后填写 UID/昵称。")
             return uid, uid
         if UID_RE.fullmatch(query):
             return query, query
@@ -470,52 +468,49 @@ class MahjongHelperPlugin(Star):
     async def koromo_menu(
         self, event: AstrMessageEvent, section: str = "", arg1: str = "",
         arg2: str = "", arg3: str = "", arg4: str = "", arg5: str = "",
+        arg6: str = "",
     ):
         """按牌谱屋页面栏目查询玩家数据；不填玩家则使用主绑定。"""
-        if section in {"", "帮助", "菜单"}:
+        if section in {"搜", "搜索", "绑", "绑定", "号", "我的", "切", "切换", "解", "解绑"}:
+            if section in {"号", "我的"}:
+                async for result in self.majsoul_bindings(event):
+                    yield result
+                return
+            if section in {"解", "解绑"} and not arg1.strip():
+                yield event.plain_result("用法：/雀 解 UID；解除全部绑定请用 /雀魂解绑。")
+                return
+            action = {
+                "搜": self.majsoul_search, "搜索": self.majsoul_search,
+                "绑": self.majsoul_bind, "绑定": self.majsoul_bind,
+                "切": self.majsoul_switch, "切换": self.majsoul_switch,
+                "解": self.majsoul_unbind, "解绑": self.majsoul_unbind,
+            }[section]
+            async for result in action(event, arg1):
+                yield result
+            return
+        if section in {"", "帮助", "菜单", "帮"}:
             yield event.plain_result(
-                "🀄 牌谱屋分栏命令\n"
-                "/雀魂 基本｜和牌、放铳、平均打点等\n"
-                "/雀魂 顺位｜一至四位率\n"
-                "/雀魂 立直｜立直和了、收支、先制等\n"
-                "/雀魂 更多｜副露、效率、局收支等\n"
-                "/雀魂 和铳｜和牌方式与放铳对象\n"
-                "/雀魂 血统｜役满、起手向听等\n"
-                "/雀魂 大铳｜最近满贯以上放铳\n"
-                "/雀魂 趋势｜最近20场顺位与段位分\n"
-                "/雀魂 同桌｜最近100场常见对手\n"
-                "/雀魂 对局｜每页5场，可翻页\n"
-                "用法：/雀魂 栏目 [UID或昵称] [三麻] [金|玉|王座] [近30天] [页码]\n"
-                "例：/雀魂 立直 12105509 四麻 玉\n"
-                "例：/雀魂 对局 12105509 三麻 2\n"
-                "时间可选近7/30/90/365天；省略玩家使用主绑定。\n"
-                "对局、趋势、同桌需要牌谱屋官方授权密钥。"
+                "🀄 雀魂快捷查询\n"
+                "/雀 玩家｜基本卡片；不填玩家查主绑定\n"
+                "/雀 基 基本　/雀 顺 顺位　/雀 立 立直\n"
+                "/雀 风 牌风　/雀 和 和铳　/雀 运 血统\n"
+                "/雀 铳 最近大铳　/雀 近 趋势\n"
+                "/雀 桌 常同桌　/雀 局 对局（可加页码）\n"
+                "/雀 搜 名字　/雀 绑 UID　/雀 号 查绑定\n"
+                "/雀 切 UID　/雀 解 UID\n"
+                "筛选直接加：三/四、金/玉/王、7天/30天/90天/365天。\n"
+                "例：/雀 立 12105509 玉 30天\n"
+                "想要文字版，在末尾加 文；/雀魂 旧写法也能用。\n"
+                "近、桌、局需要牌谱屋官方授权密钥。"
             )
             return
-        canonical = SECTIONS.get(section)
-        if not canonical:
-            yield event.plain_result("未知栏目。发送 /雀魂 查看可用栏目。")
+        try:
+            parsed = parse_player_query(section, arg1, arg2, arg3, arg4, arg5, arg6)
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
             return
-        mode, room, query, page, days = 4, "", "", 1, 0
-        for token in (arg1, arg2, arg3, arg4, arg5):
-            token = token.strip()
-            if not token:
-                continue
-            if token in {"三麻", "三"}:
-                mode = 3
-            elif token in {"四麻", "四"}:
-                mode = 4
-            elif token in {"金", "玉", "王座", "金间", "玉间", "王座间", "金之间", "玉之间", "王座之间"}:
-                room = token
-            elif token in {"近7天", "近30天", "近90天", "近365天"}:
-                days = int(token[1:-1])
-            elif (token.isdigit() and len(token) <= 2 or token.startswith("第") and token.endswith("页") and token[1:-1].isdigit()) and canonical == "对局":
-                page = int(token[1:-1] if token.startswith("第") else token)
-            elif not query:
-                query = token
-            else:
-                yield event.plain_result("参数过多。发送 /雀魂 查看用法。")
-                return
+        canonical, query, mode, room = parsed.section, parsed.player, parsed.mode, parsed.room
+        page, days, plain = parsed.page, parsed.days, parsed.text
         modes = room_modes(mode, room)
         since_ms = int((time.time() - days * 86400) * 1000) if days else None
         period = f"近{days}天" if days else ""
@@ -539,10 +534,38 @@ class MahjongHelperPlugin(Star):
                     api.player_stats(uid, mode, modes, since_ms),
                     api.extended_stats(uid, mode, modes, since_ms),
                 )
-                result = format_view(uid, mode, canonical, stats, extended, room, period) if stats else "没有查到战绩数据。"
+                if not stats:
+                    yield event.plain_result("没有查到战绩数据。")
+                    return
+                if canonical in CARD_SECTIONS and not plain and self.state_dir:
+                    try:
+                        payload = json.dumps([uid, mode, canonical, room, period, stats, extended],
+                                             sort_keys=True, ensure_ascii=False, default=str)
+                        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
+                        path = self.state_dir / "cards" / f"{uid}-{digest}.png"
+                        if not path.is_file():
+                            await asyncio.to_thread(render_stats_card, path, uid, mode, canonical,
+                                                    stats, extended, room, period)
+                        yield event.chain_result([Comp.Image.fromFileSystem(str(path))])
+                        return
+                    except Exception:
+                        logger.exception("雀魂统计卡片生成失败，改用文字输出")
+                result = format_view(uid, mode, canonical, stats, extended, room, period)
             yield event.plain_result(result)
         except Exception as exc:
             yield event.plain_result(self._error_text(exc))
+
+    @filter.command("雀")
+    async def koromo_short(
+        self, event: AstrMessageEvent, section: str = "", arg1: str = "",
+        arg2: str = "", arg3: str = "", arg4: str = "", arg5: str = "",
+        arg6: str = "",
+    ):
+        """快捷查询雀魂玩家卡片，例如 /雀 立 UID 玉 30天。"""
+        async for result in self.koromo_menu(
+            event, section, arg1, arg2, arg3, arg4, arg5, arg6
+        ):
+            yield result
 
     @filter.command("雀魂查询")
     async def stats_four(self, event: AstrMessageEvent, query: str = "", room: str = ""):

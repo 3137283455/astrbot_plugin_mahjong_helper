@@ -6,7 +6,10 @@ from pathlib import Path
 from database import MahjongDatabase
 from formatters import format_record, format_stats, room_modes
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from astrbot_plugin_mahjong_helper.koromo_views import format_trend, format_view
+from astrbot_plugin_mahjong_helper.koromo_views import (
+    format_trend, format_view, parse_player_query,
+)
+from astrbot_plugin_mahjong_helper.stat_card import render_stats_card
 from majsoul_api import KoromoClient, ProtocolClient, extract_paipu_id
 from nanikiru_core import StateStore
 
@@ -106,6 +109,32 @@ class FormatterTests(unittest.TestCase):
         result = format_trend("10001", 4, records)
         self.assertIn("平均顺位：1.500", result)
         self.assertIn("段位分合计：+20pt", result)
+
+    def test_short_command_parsing(self):
+        query = parse_player_query("立", "12105509", "玉", "30天")
+        self.assertEqual((query.section, query.player, query.room, query.days),
+                         ("立直", "12105509", "玉", 30))
+        query = parse_player_query("12105509", "三", "王", "文")
+        self.assertEqual((query.section, query.mode, query.room, query.text),
+                         ("基本", 3, "王座", True))
+        query = parse_player_query("局", "三", "3")
+        self.assertEqual((query.mode, query.page), (3, 3))
+
+    def test_stat_card_renders_readable_png(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "card.png"
+            render_stats_card(
+                target, "12105509", 4, "基本",
+                {"nickname": "清风难胡", "count": 773, "avg_rank": 2.647,
+                 "level": {"id": 20201, "score": 276}},
+                {"和牌率": .203, "放铳率": .186, "自摸率": .313,
+                 "立直率": .189, "平均打点": 6450}, "玉", "近30天",
+            )
+            self.assertTrue(target.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+            from PIL import Image
+            with Image.open(target) as image:
+                self.assertGreaterEqual(image.width, 1400)
+                self.assertGreaterEqual(image.height, 1000)
 
 
 class KoromoClientTests(unittest.IsolatedAsyncioTestCase):

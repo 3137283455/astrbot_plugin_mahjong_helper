@@ -3,18 +3,73 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 
 from .formatters import level_text, percent, pick, player_name, player_uid, record_time
 
 
 SECTIONS = {
     "基本": "基本", "概览": "基本", "战绩": "基本",
+    "基": "基本", "战": "基本",
     "立直": "立直", "更多": "更多", "牌风": "更多",
+    "立": "立直", "风": "更多",
     "和铳": "和铳", "和铳分布": "和铳",
+    "和": "和铳",
     "血统": "血统", "运气": "血统",
+    "运": "血统",
     "大铳": "大铳", "最近大铳": "大铳",
-    "顺位": "顺位", "趋势": "趋势", "同桌": "同桌", "对局": "对局",
+    "铳": "大铳",
+    "顺位": "顺位", "顺": "顺位", "趋势": "趋势", "近": "趋势",
+    "同桌": "同桌", "桌": "同桌", "对局": "对局", "局": "对局",
 }
+
+
+@dataclass(frozen=True)
+class PlayerQuery:
+    section: str
+    player: str = ""
+    mode: int = 4
+    room: str = ""
+    days: int = 0
+    page: int = 1
+    text: bool = False
+
+
+def parse_player_query(section: str, *args: str) -> PlayerQuery:
+    """Parse compact commands; unknown first token is the player for 基本."""
+    canonical = SECTIONS.get(section, "基本")
+    tokens = list(args) if section in SECTIONS else [section, *args]
+    player, mode, room, days, page, as_text = "", 4, "", 0, 1, False
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        if token in {"三", "三麻"} or token == "3" and canonical != "对局":
+            mode = 3
+        elif token in {"四", "四麻"} or token == "4" and canonical != "对局":
+            mode = 4
+        elif token in {"金", "金间", "金之间"}:
+            room = "金"
+        elif token in {"玉", "玉间", "玉之间"}:
+            room = "玉"
+        elif token in {"王", "王座", "王座间", "王座之间"}:
+            room = "王座"
+        elif token in {"文", "文字"}:
+            as_text = True
+        elif token.removeprefix("近") in {"7天", "30天", "90天", "365天"}:
+            days = int(token.removeprefix("近")[:-1])
+        elif canonical == "对局" and (
+            token.isdigit() and len(token) <= 2 or
+            token.startswith("第") and token.endswith("页") and token[1:-1].isdigit()
+        ):
+            page = int(token[1:-1] if token.startswith("第") else token)
+        elif not player:
+            player = token
+        else:
+            raise ValueError("参数过多。发送 /雀 查看用法。")
+    if not 1 <= page <= 20:
+        raise ValueError("对局页码只能是 1～20。")
+    return PlayerQuery(canonical, player, mode, room, days, page, as_text)
 
 RATES = {
     "和牌率", "放铳率", "自摸率", "默听率", "流局率", "流听率", "副露率", "立直率",

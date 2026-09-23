@@ -20,7 +20,7 @@
     "default": 2
   },
   "koromo_token": {
-    "description": "可选的牌谱屋 API Token；公开查询无需填写",
+    "description": "牌谱屋官方授权密钥；公开统计无需填写，对局和订阅接口目前需要",
     "type": "string",
     "default": "",
     "obvious_hint": true
