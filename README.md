@@ -1,4 +1,6 @@
-# bili播放器
+# bili播放器 · 歌单版
+
+本版本基于 [57Darling02/astrbot_plugin_bili_player](https://github.com/57Darling02/astrbot_plugin_bili_player) 修改，由 3137283455 维护歌单功能。
 
 面向 AstrBot 的 Bilibili 点播插件：搜索并锁定具体分 P，按意图发送视频、可播放音频或音频文件；平台不适配时自动改发文件。
 
@@ -16,7 +18,7 @@
 3. 在 AstrBot 插件仓库中填入：
 
 ```text
-https://github.com/57Darling02/astrbot_plugin_bili_player
+https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/music-player
 ```
 
 运行要求：AstrBot `>=4.26,<5`、Python `>=3.10`、可访问 Bilibili。自然语言点播需要模型支持工具调用；建议 Provider 工具超时直听 ≥ 300 秒、直接视频 ≥ 900 秒，并关闭 `provider_settings.show_tool_use_status` 与 `show_tool_call_result`，避免工具过程文字出现在聊天里。
