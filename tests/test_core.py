@@ -9,7 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from astrbot_plugin_mahjong_helper.koromo_views import (
     format_trend, format_view, parse_player_query,
 )
-from astrbot_plugin_mahjong_helper.stat_card import render_stats_card
+from astrbot_plugin_mahjong_helper.stat_card import (
+    render_help_card, render_quick_menu_card, render_stats_card,
+)
 from majsoul_api import KoromoClient, ProtocolClient, extract_paipu_id
 from nanikiru_core import StateStore
 
@@ -135,6 +137,24 @@ class FormatterTests(unittest.TestCase):
             with Image.open(target) as image:
                 self.assertGreaterEqual(image.width, 1400)
                 self.assertGreaterEqual(image.height, 1000)
+
+    def test_menu_cards_render_for_users_and_admins(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cards = {
+                "quick": render_quick_menu_card(root / "quick.png"),
+                "help": render_help_card(root / "help.png"),
+                "admin": render_help_card(root / "admin.png", admin=True),
+            }
+            for path in cards.values():
+                self.assertTrue(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+                with Image.open(path) as image:
+                    self.assertEqual(image.width, 1400)
+                    self.assertGreaterEqual(image.height, 1500)
+            with Image.open(cards["help"]) as user, Image.open(cards["admin"]) as admin:
+                self.assertGreater(admin.height, user.height)
 
 
 class KoromoClientTests(unittest.IsolatedAsyncioTestCase):

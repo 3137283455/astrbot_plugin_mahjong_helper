@@ -33,7 +33,10 @@ from .koromo_views import format_deskmates, format_trend, format_view, parse_pla
 from .majsoul_api import KoromoClient, MajsoulApiError, ProtocolClient, extract_paipu_id
 from .nanikiru_core import Question, QuestionStore, StateStore
 from .review_gateway import ReviewGateway
-from .stat_card import CARD_SECTIONS, render_stats_card
+from .stat_card import (
+    CARD_SECTIONS, MENU_CARD_REVISION, render_help_card,
+    render_quick_menu_card, render_stats_card,
+)
 
 
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
@@ -174,6 +177,23 @@ class MahjongHelperPlugin(Star):
             lines.extend(["", "每日出题、订阅管理、授权密钥与登录功能仅限管理员。"])
         lines.extend(["", "再次查看：/help 或 /雀魂帮助"])
         return "\n".join(lines)
+
+    async def _menu_image(self, event: AstrMessageEvent, kind: str):
+        if not self.state_dir:
+            return None
+        admin = event.role == "admin"
+        name = f"{kind}-{'admin' if admin else 'user'}-v{MENU_CARD_REVISION}.png"
+        path = self.state_dir / "cards" / name
+        try:
+            if not path.is_file():
+                if kind == "quick":
+                    await asyncio.to_thread(render_quick_menu_card, path)
+                else:
+                    await asyncio.to_thread(render_help_card, path, admin)
+            return event.chain_result([Comp.Image.fromFileSystem(str(path))])
+        except Exception:
+            logger.exception("帮助卡片生成失败，改用文字输出")
+            return None
 
     def _question_chain(self, event: AstrMessageEvent, question: Question, prefix="🀄 何切"):
         questions, _, _, _ = self._ready()
@@ -488,7 +508,12 @@ class MahjongHelperPlugin(Star):
             async for result in action(event, arg1):
                 yield result
             return
-        if section in {"", "帮助", "菜单", "帮"}:
+        if section in {"", "帮助", "菜单", "帮", "文", "文字"}:
+            if section not in {"文", "文字"} and arg1 not in {"文", "文字"}:
+                card = await self._menu_image(event, "quick")
+                if card is not None:
+                    yield card
+                    return
             yield event.plain_result(
                 "🀄 雀魂快捷查询\n"
                 "/雀 玩家｜基本卡片；不填玩家查主绑定\n"
@@ -500,7 +525,7 @@ class MahjongHelperPlugin(Star):
                 "/雀 切 UID　/雀 解 UID\n"
                 "筛选直接加：三/四、金/玉/王、7天/30天/90天/365天。\n"
                 "例：/雀 立 12105509 玉 30天\n"
-                "想要文字版，在末尾加 文；/雀魂 旧写法也能用。\n"
+                "本条为文字版；/雀魂 旧写法也能用。\n"
                 "近、桌、局需要牌谱屋官方授权密钥。"
             )
             return
@@ -795,13 +820,23 @@ class MahjongHelperPlugin(Star):
             yield event.plain_result(f"场况生成失败：{exc}")
 
     @filter.command("help")
-    async def help_command(self, event: AstrMessageEvent):
+    async def help_command(self, event: AstrMessageEvent, style: str = ""):
         """显示日麻助手功能、用法和当前用户可用的管理命令。"""
+        if style not in {"文", "文字"}:
+            card = await self._menu_image(event, "help")
+            if card is not None:
+                yield card
+                return
         yield event.plain_result(self._help_text(event))
 
     @filter.command("雀魂帮助")
-    async def mahjong_help(self, event: AstrMessageEvent):
+    async def mahjong_help(self, event: AstrMessageEvent, style: str = ""):
         """显示日麻助手功能、用法和当前用户可用的管理命令。"""
+        if style not in {"文", "文字"}:
+            card = await self._menu_image(event, "help")
+            if card is not None:
+                yield card
+                return
         yield event.plain_result(self._help_text(event))
 
     def _protocol_executable(self) -> Path | None:

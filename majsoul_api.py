@@ -56,7 +56,7 @@ class KoromoClient:
     def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.6",
+            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.7",
         }
         token = (self.token_getter() or "").strip()
         if token:

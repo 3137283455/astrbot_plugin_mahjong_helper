@@ -11,6 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
+MENU_CARD_REVISION = 1
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -196,6 +197,126 @@ def render_stats_card(
         _draw_fields(draw, section, stats, ext, 637)
     draw.text((92, height - 72), "数据来源：牌谱屋 · 统计结果以当前筛选为准",
               font=_font(25), fill=MUTED)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, "PNG", optimize=True)
+    return path
+
+
+def _menu_header(draw, title: str, subtitle: str):
+    draw.rounded_rectangle((46, 42, WIDTH - 46, 252), radius=38, fill=INK)
+    draw.rounded_rectangle((89, 84, 179, 174), radius=22, fill=TEAL)
+    draw.text((107, 96), "麻", font=_font(52, True), fill=WHITE)
+    draw.text((216, 75), title, font=_font(60, True), fill=WHITE)
+    draw.text((218, 171), subtitle, font=_font(30), fill="#C4D9D7")
+
+
+def _menu_section(draw, title: str, y: int, color: str = TEAL):
+    draw.rounded_rectangle((92, y + 7, 102, y + 44), radius=4, fill=color)
+    draw.text((122, y), title, font=_font(38, True), fill=INK)
+
+
+def _menu_tile(draw, x: int, y: int, command: str, detail: str,
+               color: str = TEAL, width: int = 590, height: int = 108):
+    draw.rounded_rectangle((x, y, x + width, y + height), radius=23, fill=WHITE)
+    draw.text((x + 24, y + 15), _fit(draw, command, _font(35, True), width - 48),
+              font=_font(35, True), fill=color)
+    draw.text((x + 24, y + 64), _fit(draw, detail, _font(25), width - 48),
+              font=_font(25), fill=MUTED)
+
+
+def render_quick_menu_card(path: Path) -> Path:
+    """Render the compact /雀 menu with commands grouped by intent."""
+    image = Image.new("RGB", (WIDTH, 1735), PAPER)
+    draw = ImageDraw.Draw(image)
+    _menu_header(draw, "雀魂快捷菜单", "先选功能，再加玩家与筛选")
+    draw.text((92, 284), "不填玩家时，查询你绑定的主账号", font=_font(28), fill=MUTED)
+
+    _menu_section(draw, "统计卡片", 340)
+    stats = [
+        ("/雀 基", "和牌、放铳、打点"), ("/雀 顺", "顺位分布"),
+        ("/雀 立", "立直表现与收支"), ("/雀 风", "副露与效率"),
+        ("/雀 和", "和了与放铳分布"), ("/雀 运", "役满与起手向听"),
+    ]
+    for i, (command, detail) in enumerate(stats):
+        _menu_tile(draw, 92 + i % 2 * 625, 405 + i // 2 * 130,
+                   command, detail, TEAL if i % 2 == 0 else GOLD)
+
+    _menu_section(draw, "其他查询", 825, GOLD)
+    extras = [
+        ("/雀 铳", "最近大铳"), ("/雀 近", "最近对局趋势 · 需授权"),
+        ("/雀 桌", "常见同桌 · 需授权"), ("/雀 局", "对局列表 · 需授权"),
+    ]
+    for i, (command, detail) in enumerate(extras):
+        _menu_tile(draw, 92 + i % 2 * 625, 888 + i // 2 * 130,
+                   command, detail, GOLD)
+
+    _menu_section(draw, "账号操作", 1168)
+    accounts = [
+        ("/雀 搜 名字", "按昵称查 UID"), ("/雀 绑 UID", "绑定自己的账号"),
+        ("/雀 号", "查看已绑定账号"), ("/雀 切 UID", "切主号；解绑用 /雀 解 UID"),
+    ]
+    for i, (command, detail) in enumerate(accounts):
+        _menu_tile(draw, 92 + i % 2 * 625, 1232 + i // 2 * 130,
+                   command, detail, TEAL)
+
+    draw.rounded_rectangle((92, 1510, 1308, 1648), radius=25, fill="#E1EEEA")
+    draw.text((119, 1532), "筛选：三 / 四 · 金 / 玉 / 王 · 7天 / 30天 / 90天 / 365天",
+              font=_font(29, True), fill=INK)
+    draw.text((119, 1591), "例：/雀 立 12105509 玉 30天    文字版：末尾加 文",
+              font=_font(27), fill=INK)
+    draw.text((92, 1685), "完整帮助：/help    菜单文字版：/雀 文", font=_font(26), fill=MUTED)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, "PNG", optimize=True)
+    return path
+
+
+def render_help_card(path: Path, admin: bool = False) -> Path:
+    """Render /help; administrator commands appear only for administrators."""
+    height = 1790 if admin else 1530
+    image = Image.new("RGB", (WIDTH, height), PAPER)
+    draw = ImageDraw.Draw(image)
+    _menu_header(draw, "日麻助手 · 帮助", "何切练习、玩家战绩与牌谱工具")
+    draw.text((92, 283), "推荐从 /雀 开始，查看所有快捷查询", font=_font(29), fill=MUTED)
+
+    _menu_section(draw, "何切练习", 343)
+    practice = [
+        ("/何切", "随机出题；可加题号"), ("/何切答案", "查看原书答案"),
+        ("/何切状态", "查看本轮进度"),
+    ]
+    for i, (command, detail) in enumerate(practice):
+        _menu_tile(draw, 92 + i % 2 * 625, 408 + i // 2 * 130,
+                   command, detail, TEAL)
+
+    _menu_section(draw, "玩家与战绩", 733, GOLD)
+    players = [
+        ("/雀", "快捷菜单与基本卡片"), ("/雀 立", "顺、风、和、运等栏目同样用法"),
+        ("/雀 搜 名字", "搜索 UID"), ("/雀 绑 UID", "绑定账号；/雀 号 查看"),
+    ]
+    for i, (command, detail) in enumerate(players):
+        _menu_tile(draw, 92 + i % 2 * 625, 798 + i // 2 * 130,
+                   command, detail, GOLD)
+
+    _menu_section(draw, "牌谱工具", 1122)
+    _menu_tile(draw, 92, 1187, "/雀 局", "对局列表 · 需牌谱屋授权")
+    _menu_tile(draw, 717, 1187, "/牌谱Review", "牌谱分析 · 需配置分析网关")
+
+    if admin:
+        _menu_section(draw, "管理员", 1378, RED)
+        admin_commands = [
+            ("/何切自动 开启 19:30", "当前会话每日自动出题"),
+            ("/雀魂订阅 UID", "订阅新对局 · 需牌谱屋授权"),
+            ("/设置牌谱屋Token", "仅在私聊配置官方密钥"),
+        ]
+        for i, (command, detail) in enumerate(admin_commands):
+            _menu_tile(draw, 92 + i % 2 * 625, 1443 + i // 2 * 130,
+                       command, detail, RED)
+    else:
+        draw.rounded_rectangle((92, 1376, 1308, 1459), radius=23, fill="#E1EEEA")
+        draw.text((119, 1395), "管理员功能：每日出题、订阅管理、密钥配置与登录",
+                  font=_font(28), fill=INK)
+
+    draw.text((92, height - 63), "文字版：/help 文    何切题库已内置，无需另外准备",
+              font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
     return path
