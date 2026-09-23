@@ -79,6 +79,16 @@ class MahjongHelperPlugin(Star):
             raise RuntimeError("日麻助手尚未初始化")
         return self.questions, self.state, self.db, self.koromo
 
+    @filter.command("help", aliases=["帮助"])
+    async def user_help(self, event: AstrMessageEvent):
+        """Send the single-image user guide."""
+        event.stop_event()
+        image = self.plugin_dir / "data" / "help_one_page.png"
+        if not image.is_file():
+            yield event.plain_result("帮助图片暂时不可用，请稍后再试。")
+            return
+        yield event.chain_result([Comp.Image.fromFileSystem(str(image))])
+
     def _koromo_token(self) -> str | None:
         configured = str(self.config.get("koromo_token", "") or "").strip()
         if configured:
