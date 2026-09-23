@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 5
+MENU_CARD_REVISION = 6
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -228,7 +228,7 @@ def render_quick_menu_card(path: Path) -> Path:
     """Render the compact /雀 menu with commands grouped by intent."""
     image = Image.new("RGB", (WIDTH, 1735), PAPER)
     draw = ImageDraw.Draw(image)
-    _menu_header(draw, "雀魂快捷菜单", "先选功能，再加玩家与筛选")
+    _menu_header(draw, "雀魂快捷菜单", "玩家在前，后面的查询选项可换序")
     draw.text((92, 284), "不填玩家时，查询你绑定的主账号", font=_font(28), fill=MUTED)
 
     _menu_section(draw, "统计卡片", 340)
@@ -260,9 +260,9 @@ def render_quick_menu_card(path: Path) -> Path:
                    command, detail, TEAL)
 
     draw.rounded_rectangle((92, 1510, 1308, 1648), radius=25, fill="#E1EEEA")
-    draw.text((119, 1532), "筛选：三 / 四 · 金 / 玉 / 王 · 7天 / 30天 / 90天 / 365天",
+    draw.text((119, 1532), "格式：/雀 玩家 [三/四] [栏目] [房间] [时间] [文]",
               font=_font(29, True), fill=INK)
-    draw.text((119, 1591), "例：/雀 立 12105509 玉 30天    文字版：末尾加 文",
+    draw.text((119, 1591), "例：/雀 一剑风起醉英豪 三 铳 30天；后缀可换序",
               font=_font(27), fill=INK)
     draw.text((92, 1685), "网页：/雀 页    完整帮助：/雀 帮    文字版：/雀 文", font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,7 +276,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
     image = Image.new("RGB", (WIDTH, height), PAPER)
     draw = ImageDraw.Draw(image)
     _menu_header(draw, "日麻助手 · 帮助", "何切练习、玩家战绩与牌谱工具")
-    draw.text((92, 283), "推荐从 /雀 开始，查看所有快捷查询", font=_font(29), fill=MUTED)
+    draw.text((92, 283), "雀魂查询：/雀 玩家 三 铳 30天；后缀参数可换序", font=_font(29), fill=MUTED)
 
     _menu_section(draw, "何切练习", 343)
     practice = [

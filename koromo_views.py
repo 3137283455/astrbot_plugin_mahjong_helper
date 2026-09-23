@@ -37,17 +37,44 @@ class PlayerQuery:
 
 
 def parse_player_query(section: str, *args: str) -> PlayerQuery:
-    """Parse compact commands; unrecognized words are joined as the player name."""
-    canonical = SECTIONS.get(section, "基本")
-    tokens = list(args) if section in SECTIONS else [section, *args]
-    player_parts, mode, room, days, page, as_text = [], 4, "", 0, 1, False
-    for token in tokens:
-        token = token.strip()
-        if not token:
+    """Read the player first and accept query options in any trailing order."""
+    tokens = [token.strip() for token in (section, *args) if token.strip()]
+    prefix_section = SECTIONS.get(tokens[0]) if tokens else None
+    if prefix_section:
+        tokens.pop(0)  # Keep the old /雀 铳 玩家 form working.
+
+    has_records_section = prefix_section == "对局" or any(
+        SECTIONS.get(token) == "对局" for token in tokens
+    )
+
+    def is_option(token: str) -> bool:
+        return (
+            token in SECTIONS
+            or token in {"三", "三麻", "四", "四麻", "3", "4"}
+            or token in {"金", "金间", "金之间", "玉", "玉间", "玉之间",
+                         "王", "王座", "王座间", "王座之间", "文", "文字"}
+            or token.removeprefix("近") in {"7天", "30天", "90天", "365天"}
+            or token.startswith("第") and token.endswith("页") and token[1:-1].isdigit()
+            or has_records_section and token.isdigit() and len(token) <= 2
+        )
+
+    option_start = len(tokens)
+    while option_start and is_option(tokens[option_start - 1]):
+        option_start -= 1
+    player = " ".join(tokens[:option_start])
+    options = tokens[option_start:]
+    suffix_sections = [SECTIONS[token] for token in options if token in SECTIONS]
+    if len(suffix_sections) + bool(prefix_section) > 1:
+        raise ValueError("查询栏目只能填写一个，例如 /雀 玩家 三 铳 30天。")
+    canonical = prefix_section or (suffix_sections[0] if suffix_sections else "基本")
+
+    mode, room, days, page, as_text = 4, "", 0, 1, False
+    for token in options:
+        if token in SECTIONS:
             continue
-        if token in {"三", "三麻"} or token == "3" and canonical != "对局":
+        if token in {"三", "三麻"}:
             mode = 3
-        elif token in {"四", "四麻"} or token == "4" and canonical != "对局":
+        elif token in {"四", "四麻"}:
             mode = 4
         elif token in {"金", "金间", "金之间"}:
             room = "金"
@@ -64,11 +91,15 @@ def parse_player_query(section: str, *args: str) -> PlayerQuery:
             token.startswith("第") and token.endswith("页") and token[1:-1].isdigit()
         ):
             page = int(token[1:-1] if token.startswith("第") else token)
+        elif token == "3":
+            mode = 3
+        elif token == "4":
+            mode = 4
         else:
-            player_parts.append(token)
+            raise ValueError("页码只适用于 /雀 玩家 局 页码。")
     if not 1 <= page <= 20:
         raise ValueError("对局页码只能是 1～20。")
-    return PlayerQuery(canonical, " ".join(player_parts), mode, room, days, page, as_text)
+    return PlayerQuery(canonical, player, mode, room, days, page, as_text)
 
 RATES = {
     "和牌率", "放铳率", "自摸率", "默听率", "流局率", "流听率", "副露率", "立直率",

@@ -125,6 +125,24 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual((query.section, query.player, query.mode, query.room),
                          ("网页", "12105509", 3, "玉"))
 
+    def test_player_first_options_can_be_reordered(self):
+        for options in (("三", "铳", "30天"), ("30天", "铳", "三"),
+                        ("铳", "三", "30天")):
+            query = parse_player_query("一剑风起醉英豪", *options)
+            self.assertEqual(
+                (query.player, query.mode, query.section, query.days),
+                ("一剑风起醉英豪", 3, "大铳", 30),
+            )
+
+        query = parse_player_query("三", "千", "世界", "铳", "玉")
+        self.assertEqual((query.player, query.section, query.room),
+                         ("三 千 世界", "大铳", "玉"))
+
+        for options in (("局", "三", "2"), ("2", "三", "局")):
+            query = parse_player_query("12105509", *options)
+            self.assertEqual((query.section, query.player, query.mode, query.page),
+                             ("对局", "12105509", 3, 2))
+
     def test_player_page_link_uses_game_type_and_room(self):
         self.assertEqual(koromo_player_url("12105509", 4),
                          "https://amae-koromo.sapk.ch/player/12105509/9/")

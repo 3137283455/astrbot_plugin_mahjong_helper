@@ -132,12 +132,12 @@ class MahjongHelperPlugin(Star):
             "/雀 切 UID｜切换主账号；/雀 解 UID｜解除绑定",
             "",
             "【战绩与对局】",
-            "/雀｜查看简短菜单；/雀 [玩家昵称]｜基本卡片，昵称可含空格",
-            "/雀 基|顺|立|风|和|运|铳 [玩家]｜统计分栏",
-            "/雀 立 [玩家] 玉 30天｜按房间和时间筛选",
-            "/雀 立 文｜改发文字；三麻可加 三",
-            "/雀 近|桌|局 [玩家]｜对局相关；受限时返回网页链接",
-            "/雀 页 [玩家]｜直接打开牌谱屋玩家页",
+            "/雀 [玩家] [三/四] [栏目] [房间] [时间] [文]",
+            "玩家昵称可含空格；后面的参数可换序，不填玩家查主绑定。",
+            "例：/雀 一剑风起醉英豪 三 铳 30天",
+            "栏目：基/顺/立/风/和/运/铳/近/桌/局/页",
+            "/雀 立、/雀 局 三 2｜省略玩家时使用主绑定",
+            "近/桌/局受限时返回网页链接；页直接打开玩家页。",
             "原有 /雀魂查询、/查询三麻 等命令仍可用。",
             "不填写玩家时使用自己的主绑定账号。",
             "",
@@ -478,7 +478,7 @@ class MahjongHelperPlugin(Star):
 
     @filter.command("雀魂")
     async def koromo_menu(self, event: AstrMessageEvent, query: GreedyStr):
-        """按牌谱屋页面栏目查询玩家数据；支持空格昵称，不填玩家则使用主绑定。"""
+        """查询格式：/雀 玩家 三/四 栏目 房间 时间；后缀参数可换序。"""
         tokens = query.split()
         section = tokens[0] if tokens else ""
         arguments = tokens[1:]
@@ -516,7 +516,8 @@ class MahjongHelperPlugin(Star):
                     return
             yield event.plain_result(
                 "🀄 雀魂快捷查询\n"
-                "/雀 玩家昵称｜基本卡片，昵称可含空格；不填玩家查主绑定\n"
+                "/雀 玩家 [三/四] [栏目] [房间] [时间] [文]\n"
+                "玩家昵称可含空格，后面的参数可换序；不填玩家查主绑定。\n"
                 "/雀 基 基本　/雀 顺 顺位　/雀 立 立直\n"
                 "/雀 风 牌风　/雀 和 和铳　/雀 运 血统\n"
                 "/雀 铳 最近大铳　/雀 近 趋势\n"
@@ -524,8 +525,8 @@ class MahjongHelperPlugin(Star):
                 "/雀 页 直接打开牌谱屋玩家页\n"
                 "/雀 搜 名字　/雀 绑 UID　/雀 号 查绑定\n"
                 "/雀 切 UID　/雀 解 UID\n"
-                "筛选直接加：三/四、金/玉/王、7天/30天/90天/365天。\n"
-                "例：/雀 立 12105509 玉 30天\n"
+                "房间：金/玉/王；时间：7天/30天/90天/365天。\n"
+                "例：/雀 一剑风起醉英豪 三 铳 30天\n"
                 "本条为文字版；/雀魂 旧写法也能用。\n"
                 "近、桌、局触发牌谱屋验证时会返回网页链接。"
             )
@@ -592,7 +593,7 @@ class MahjongHelperPlugin(Star):
 
     @filter.command("雀")
     async def koromo_short(self, event: AstrMessageEvent, query: GreedyStr):
-        """快捷查询雀魂玩家卡片，例如 /雀 立 UID 玉 30天；昵称可含空格。"""
+        """快捷查询雀魂玩家，例如 /雀 玩家 三 铳 30天；后缀参数可换序。"""
         async for result in self.koromo_menu(event, query):
             yield result
 
