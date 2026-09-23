@@ -115,6 +115,23 @@ class KoromoClient:
             {"mode": modes},
         )
 
+    async def binding_profile(self, uid: str) -> dict | None:
+        """Find public data in either mode before saving a UID as a shortcut."""
+        results = await asyncio.gather(
+            self.player_stats(uid, 4), self.player_stats(uid, 3),
+            return_exceptions=True,
+        )
+        profiles = [row for row in results if isinstance(row, dict) and row]
+        if profiles:
+            return next(
+                (row for row in profiles if row.get("nickname") or row.get("name")),
+                profiles[0],
+            )
+        errors = [row for row in results if isinstance(row, Exception)]
+        if errors:
+            raise MajsoulApiError("牌谱屋暂时无法核对 UID，绑定未保存，请稍后重试。") from errors[0]
+        return None
+
     async def extended_stats(
         self, uid: str, mode: int, room_modes: str | None = None,
         since_ms: int | None = None,

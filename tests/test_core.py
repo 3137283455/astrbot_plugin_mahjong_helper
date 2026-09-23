@@ -12,7 +12,7 @@ from astrbot_plugin_mahjong_helper.koromo_views import (
 from astrbot_plugin_mahjong_helper.stat_card import (
     render_help_card, render_quick_menu_card, render_stats_card,
 )
-from majsoul_api import KoromoClient, koromo_player_url
+from majsoul_api import KoromoClient, MajsoulApiError, koromo_player_url
 from nanikiru_core import StateStore
 
 
@@ -187,6 +187,34 @@ class FormatterTests(unittest.TestCase):
 
 
 class KoromoClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_binding_accepts_three_player_data(self):
+        client = KoromoClient(lambda: None)
+
+        async def fake_stats(uid, mode):
+            return {"nickname": "三麻玩家", "count": 2} if mode == 3 else None
+
+        client.player_stats = fake_stats
+        self.assertEqual((await client.binding_profile("10001"))["nickname"], "三麻玩家")
+
+    async def test_binding_rejects_missing_public_data(self):
+        client = KoromoClient(lambda: None)
+
+        async def fake_stats(uid, mode):
+            return None
+
+        client.player_stats = fake_stats
+        self.assertIsNone(await client.binding_profile("10001"))
+
+    async def test_binding_does_not_save_on_api_failure(self):
+        client = KoromoClient(lambda: None)
+
+        async def fake_stats(uid, mode):
+            raise MajsoulApiError("temporary failure")
+
+        client.player_stats = fake_stats
+        with self.assertRaises(MajsoulApiError):
+            await client.binding_profile("10001")
+
     def test_public_api_does_not_require_token(self):
         self.assertNotIn("Authorization", KoromoClient(lambda: None)._headers())
         self.assertEqual(

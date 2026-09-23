@@ -128,8 +128,9 @@ class MahjongHelperPlugin(Star):
             "",
             "【雀魂玩家】",
             "/雀 搜 玩家名｜搜索 UID",
-            "/雀 绑 UID｜绑定；/雀 号｜查看绑定",
-            "/雀 切 UID｜切换主账号；/雀 解 UID｜解除绑定",
+            "/雀 绑 UID｜保存常用查询对象；/雀 号｜查看",
+            "/雀 切 UID｜切换默认对象；/雀 解 UID/全部｜解除",
+            "绑定仅保存牌谱屋公开 UID，不验证雀魂账号归属；数据范围为金之间及以上。",
             "",
             "【战绩与对局】",
             "/雀 [玩家] [三/四] [栏目] [房间] [时间] [文]",
@@ -371,24 +372,35 @@ class MahjongHelperPlugin(Star):
 
     @filter.command("雀魂绑定")
     async def majsoul_bind(self, event: AstrMessageEvent, uid: str = ""):
-        """绑定雀魂 UID，首次绑定自动设为主账号。"""
-        if not UID_RE.fullmatch(uid.strip()):
-            yield event.plain_result("用法：/雀魂绑定 数字UID")
+        """保存有牌谱屋公开数据的 UID，首次绑定自动设为默认账号。"""
+        uid = uid.strip()
+        if not UID_RE.fullmatch(uid):
+            yield event.plain_result("用法：/雀 绑 数字UID。可先用 /雀 搜 玩家名查 UID。")
             return
         _, _, db, api = self._ready()
-        nickname = ""
+        actor = self._actor_id(event)
+        if any(row["uid"] == uid for row in db.list_bindings(actor)):
+            yield event.plain_result("这个 UID 已保存；用 /雀 号 查看常用查询账号。")
+            return
         try:
-            stats = await api.player_stats(uid, 4)
-            if isinstance(stats, dict):
-                nickname = str(stats.get("nickname") or stats.get("name") or "")
-        except Exception:
-            pass
-        added = db.add_binding(self._actor_id(event), uid, nickname)
+            profile = await api.binding_profile(uid)
+        except Exception as exc:
+            yield event.plain_result(self._error_text(exc))
+            return
+        if not profile:
+            yield event.plain_result("牌谱屋未查到这个 UID 的金之间及以上公开数据，未保存。请核对 UID。")
+            return
+        nickname = str(profile.get("nickname") or profile.get("name") or "")
+        added = db.add_binding(actor, uid, nickname)
         if not added:
-            yield event.plain_result("这个 UID 已经绑定。")
+            yield event.plain_result("这个 UID 已保存。")
             return
         label = f"（{nickname}）" if nickname else ""
-        yield event.plain_result(f"已绑定 UID {uid}{label}。首次绑定会作为主账号。")
+        if db.get_main_uid(actor) == uid:
+            detail = "已设为默认查询账号。"
+        else:
+            detail = "默认查询账号未变；用 /雀 切 UID 可切换。"
+        yield event.plain_result(f"已保存牌谱屋 UID {uid}{label}。{detail}绑定仅用于免输 UID，不验证雀魂账号归属。")
 
     @filter.command("雀魂切换")
     async def majsoul_switch(self, event: AstrMessageEvent, uid: str = ""):
@@ -401,9 +413,13 @@ class MahjongHelperPlugin(Star):
 
     @filter.command("雀魂解绑")
     async def majsoul_unbind(self, event: AstrMessageEvent, uid: str = ""):
-        """解绑指定 UID；省略 UID 时解绑全部。"""
+        """解绑指定 UID；明确填写“全部”才清空。"""
+        uid = uid.strip()
+        if not uid or (uid != "全部" and not UID_RE.fullmatch(uid)):
+            yield event.plain_result("用法：/雀 解 UID；清空请明确输入 /雀 解 全部。")
+            return
         _, _, db, _ = self._ready()
-        count = db.remove_binding(self._actor_id(event), uid.strip() or None)
+        count = db.remove_binding(self._actor_id(event), None if uid == "全部" else uid)
         yield event.plain_result(f"已解除 {count} 个绑定。" if count else "没有找到对应绑定。")
 
     @filter.command("雀魂我的绑定")
@@ -414,10 +430,10 @@ class MahjongHelperPlugin(Star):
         if not rows:
             yield event.plain_result("尚未绑定账号，使用 /雀 绑 UID。")
             return
-        lines = ["我的雀魂绑定："]
+        lines = ["我的常用查询账号（不验证账号归属）："]
         for row in rows:
             main = " [主账号]" if row["is_main"] else ""
-            name = f" {row['nickname']}" if row["nickname"] else ""
+            name = f" {row['nickname']}" if row["nickname"] else " （昵称未记录，请核对）"
             lines.append(f"• {row['uid']}{name}{main}")
         yield event.plain_result("\n".join(lines))
 
@@ -489,7 +505,7 @@ class MahjongHelperPlugin(Star):
                     yield result
                 return
             if section in {"解", "解绑"} and not arg1.strip():
-                yield event.plain_result("用法：/雀 解 UID；解除全部绑定请用 /雀魂解绑。")
+                yield event.plain_result("用法：/雀 解 UID；清空请明确输入 /雀 解 全部。")
                 return
             action = {
                 "搜": self.majsoul_search, "搜索": self.majsoul_search,
@@ -524,7 +540,8 @@ class MahjongHelperPlugin(Star):
                 "/雀 桌 常同桌　/雀 局 对局（可加页码）\n"
                 "/雀 页 直接打开牌谱屋玩家页\n"
                 "/雀 搜 名字　/雀 绑 UID　/雀 号 查绑定\n"
-                "/雀 切 UID　/雀 解 UID\n"
+                "/雀 切 UID　/雀 解 UID/全部\n"
+                "绑定仅保存牌谱屋公开 UID，不验证雀魂账号归属。\n"
                 "房间：金/玉/王；时间：7天/30天/90天/365天。\n"
                 "例：/雀 一剑风起醉英豪 三 铳 30天\n"
                 "本条为文字版；/雀魂 旧写法也能用。\n"

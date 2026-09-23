@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 6
+MENU_CARD_REVISION = 7
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -252,8 +252,8 @@ def render_quick_menu_card(path: Path) -> Path:
 
     _menu_section(draw, "账号操作", 1168)
     accounts = [
-        ("/雀 搜 名字", "按昵称查 UID"), ("/雀 绑 UID", "绑定自己的账号"),
-        ("/雀 号", "查看已绑定账号"), ("/雀 切 UID", "切主号；解绑用 /雀 解 UID"),
+        ("/雀 搜 名字", "按昵称查 UID"), ("/雀 绑 UID", "保存常用查询 UID"),
+        ("/雀 号", "查看已保存 UID"), ("/雀 切 UID", "切默认；/雀 解 UID/全部"),
     ]
     for i, (command, detail) in enumerate(accounts):
         _menu_tile(draw, 92 + i % 2 * 625, 1232 + i // 2 * 130,
@@ -264,7 +264,7 @@ def render_quick_menu_card(path: Path) -> Path:
               font=_font(29, True), fill=INK)
     draw.text((119, 1591), "例：/雀 一剑风起醉英豪 三 铳 30天；后缀可换序",
               font=_font(27), fill=INK)
-    draw.text((92, 1685), "网页：/雀 页    完整帮助：/雀 帮    文字版：/雀 文", font=_font(26), fill=MUTED)
+    draw.text((92, 1685), "绑定不验证归属，仅收录金之间及以上公开数据；详情：/雀 帮", font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
     return path
@@ -290,7 +290,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
     _menu_section(draw, "玩家与战绩", 733, GOLD)
     players = [
         ("/雀", "快捷菜单与基本卡片"), ("/雀 立", "顺、风、和、运等栏目同样用法"),
-        ("/雀 搜 名字", "搜索 UID"), ("/雀 绑 UID", "绑定账号；/雀 号 查看"),
+        ("/雀 搜 名字", "搜索 UID"), ("/雀 绑 UID", "保存 UID；/雀 号 查看"),
     ]
     for i, (command, detail) in enumerate(players):
         _menu_tile(draw, 92 + i % 2 * 625, 798 + i // 2 * 130,
@@ -299,6 +299,8 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
     _menu_section(draw, "对局与网页", 1122)
     _menu_tile(draw, 92, 1187, "/雀 局", "对局列表；受限给网页链接")
     _menu_tile(draw, 717, 1187, "/雀 页", "直接打开牌谱屋玩家页")
+    draw.text((92, 1330), "绑定仅保存公开 UID，不验证归属；/雀 解 全部 可清空",
+              font=_font(25), fill=MUTED)
 
     if admin:
         _menu_section(draw, "管理员", 1378, RED)
