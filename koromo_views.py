@@ -37,10 +37,10 @@ class PlayerQuery:
 
 
 def parse_player_query(section: str, *args: str) -> PlayerQuery:
-    """Parse compact commands; unknown first token is the player for 基本."""
+    """Parse compact commands; unrecognized words are joined as the player name."""
     canonical = SECTIONS.get(section, "基本")
     tokens = list(args) if section in SECTIONS else [section, *args]
-    player, mode, room, days, page, as_text = "", 4, "", 0, 1, False
+    player_parts, mode, room, days, page, as_text = [], 4, "", 0, 1, False
     for token in tokens:
         token = token.strip()
         if not token:
@@ -64,13 +64,11 @@ def parse_player_query(section: str, *args: str) -> PlayerQuery:
             token.startswith("第") and token.endswith("页") and token[1:-1].isdigit()
         ):
             page = int(token[1:-1] if token.startswith("第") else token)
-        elif not player:
-            player = token
         else:
-            raise ValueError("参数过多。发送 /雀 查看用法。")
+            player_parts.append(token)
     if not 1 <= page <= 20:
         raise ValueError("对局页码只能是 1～20。")
-    return PlayerQuery(canonical, player, mode, room, days, page, as_text)
+    return PlayerQuery(canonical, " ".join(player_parts), mode, room, days, page, as_text)
 
 RATES = {
     "和牌率", "放铳率", "自摸率", "默听率", "流局率", "流听率", "副露率", "立直率",

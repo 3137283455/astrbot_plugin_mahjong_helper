@@ -14,6 +14,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
+from astrbot.core.star.filter.command import GreedyStr
 
 from .database import MahjongDatabase
 from .formatters import (
@@ -131,7 +132,7 @@ class MahjongHelperPlugin(Star):
             "/雀 切 UID｜切换主账号；/雀 解 UID｜解除绑定",
             "",
             "【战绩与对局】",
-            "/雀｜查看简短菜单；/雀 [玩家]｜基本卡片",
+            "/雀｜查看简短菜单；/雀 [玩家昵称]｜基本卡片，昵称可含空格",
             "/雀 基|顺|立|风|和|运|铳 [玩家]｜统计分栏",
             "/雀 立 [玩家] 玉 30天｜按房间和时间筛选",
             "/雀 立 文｜改发文字；三麻可加 三",
@@ -476,12 +477,12 @@ class MahjongHelperPlugin(Star):
         return f"牌谱屋要求在浏览器验证。请打开玩家页查看「{section}」：\n{koromo_player_url(uid, mode, room)}"
 
     @filter.command("雀魂")
-    async def koromo_menu(
-        self, event: AstrMessageEvent, section: str = "", arg1: str = "",
-        arg2: str = "", arg3: str = "", arg4: str = "", arg5: str = "",
-        arg6: str = "",
-    ):
-        """按牌谱屋页面栏目查询玩家数据；不填玩家则使用主绑定。"""
+    async def koromo_menu(self, event: AstrMessageEvent, query: GreedyStr):
+        """按牌谱屋页面栏目查询玩家数据；支持空格昵称，不填玩家则使用主绑定。"""
+        tokens = query.split()
+        section = tokens[0] if tokens else ""
+        arguments = tokens[1:]
+        arg1 = " ".join(arguments)
         if section in {"搜", "搜索", "绑", "绑定", "号", "我的", "切", "切换", "解", "解绑"}:
             if section in {"号", "我的"}:
                 async for result in self.majsoul_bindings(event):
@@ -515,7 +516,7 @@ class MahjongHelperPlugin(Star):
                     return
             yield event.plain_result(
                 "🀄 雀魂快捷查询\n"
-                "/雀 玩家｜基本卡片；不填玩家查主绑定\n"
+                "/雀 玩家昵称｜基本卡片，昵称可含空格；不填玩家查主绑定\n"
                 "/雀 基 基本　/雀 顺 顺位　/雀 立 立直\n"
                 "/雀 风 牌风　/雀 和 和铳　/雀 运 血统\n"
                 "/雀 铳 最近大铳　/雀 近 趋势\n"
@@ -530,7 +531,7 @@ class MahjongHelperPlugin(Star):
             )
             return
         try:
-            parsed = parse_player_query(section, arg1, arg2, arg3, arg4, arg5, arg6)
+            parsed = parse_player_query(section, *arguments)
         except ValueError as exc:
             yield event.plain_result(str(exc))
             return
@@ -590,15 +591,9 @@ class MahjongHelperPlugin(Star):
             yield event.plain_result(self._error_text(exc))
 
     @filter.command("雀")
-    async def koromo_short(
-        self, event: AstrMessageEvent, section: str = "", arg1: str = "",
-        arg2: str = "", arg3: str = "", arg4: str = "", arg5: str = "",
-        arg6: str = "",
-    ):
-        """快捷查询雀魂玩家卡片，例如 /雀 立 UID 玉 30天。"""
-        async for result in self.koromo_menu(
-            event, section, arg1, arg2, arg3, arg4, arg5, arg6
-        ):
+    async def koromo_short(self, event: AstrMessageEvent, query: GreedyStr):
+        """快捷查询雀魂玩家卡片，例如 /雀 立 UID 玉 30天；昵称可含空格。"""
+        async for result in self.koromo_menu(event, query):
             yield result
 
     @filter.command("雀魂查询")
