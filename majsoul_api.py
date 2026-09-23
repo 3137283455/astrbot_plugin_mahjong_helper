@@ -56,7 +56,7 @@ class KoromoClient:
     def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.7",
+            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.8",
         }
         token = (self.token_getter() or "").strip()
         if token:
@@ -76,8 +76,8 @@ class KoromoClient:
                 if response.status_code == 429:
                     if "x-cap-token-required" in response.text:
                         raise MajsoulApiError(
-                            "牌谱屋对局接口要求验证码或官方授权密钥，当前无法读取对局；"
-                            "基本、顺位、立直等统计仍可使用。"
+                            "牌谱屋对局接口要求 CAP 验证，当前无法读取对局；"
+                            "可向牌谱屋维护者咨询机器人接入方式。基本、顺位、立直等统计仍可使用。"
                         )
                     retry_after = min(int(response.headers.get("Retry-After", "5")), 30)
                     await asyncio.sleep(retry_after)

@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 1
+MENU_CARD_REVISION = 2
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -243,8 +243,8 @@ def render_quick_menu_card(path: Path) -> Path:
 
     _menu_section(draw, "其他查询", 825, GOLD)
     extras = [
-        ("/雀 铳", "最近大铳"), ("/雀 近", "最近对局趋势 · 需授权"),
-        ("/雀 桌", "常见同桌 · 需授权"), ("/雀 局", "对局列表 · 需授权"),
+        ("/雀 铳", "最近大铳"), ("/雀 近", "最近对局趋势 · 受 CAP 限制"),
+        ("/雀 桌", "常见同桌 · 受 CAP 限制"), ("/雀 局", "对局列表 · 受 CAP 限制"),
     ]
     for i, (command, detail) in enumerate(extras):
         _menu_tile(draw, 92 + i % 2 * 625, 888 + i // 2 * 130,
@@ -297,15 +297,15 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
                    command, detail, GOLD)
 
     _menu_section(draw, "牌谱工具", 1122)
-    _menu_tile(draw, 92, 1187, "/雀 局", "对局列表 · 需牌谱屋授权")
+    _menu_tile(draw, 92, 1187, "/雀 局", "对局列表 · 受 CAP 限制")
     _menu_tile(draw, 717, 1187, "/牌谱Review", "牌谱分析 · 需配置分析网关")
 
     if admin:
         _menu_section(draw, "管理员", 1378, RED)
         admin_commands = [
             ("/何切自动 开启 19:30", "当前会话每日自动出题"),
-            ("/雀魂订阅 UID", "订阅新对局 · 需牌谱屋授权"),
-            ("/设置牌谱屋Token", "仅在私聊配置官方密钥"),
+            ("/雀魂订阅 UID", "订阅新对局 · 受 CAP 限制"),
+            ("/设置牌谱屋Token", "获准后在私聊配置凭据"),
         ]
         for i, (command, detail) in enumerate(admin_commands):
             _menu_tile(draw, 92 + i % 2 * 625, 1443 + i // 2 * 130,

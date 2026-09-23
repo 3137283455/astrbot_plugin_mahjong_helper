@@ -20,7 +20,7 @@
     "default": 2
   },
   "koromo_token": {
-    "description": "牌谱屋官方授权密钥；公开统计无需填写，对局和订阅接口目前需要",
+    "description": "仅在牌谱屋维护者明确提供机器人可用的 API 凭据时填写；公开统计无需填写，网页临时 CAP 令牌不适用",
     "type": "string",
     "default": "",
     "obvious_hint": true
