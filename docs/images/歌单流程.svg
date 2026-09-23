@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="歌单使用流程示意">
+  <rect width="1200" height="300" rx="28" fill="#f4f8f7"/>
+  <text x="50" y="55" font-size="30" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-weight="bold" fill="#19343c">收藏后直接播放 · 命令流程示意</text>
+  <g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" text-anchor="middle">
+    <rect x="50" y="100" width="240" height="120" rx="24" fill="#e3f1ee"/>
+    <text x="170" y="150" font-size="26" font-weight="bold" fill="#137a70">搜索歌曲 晴天</text>
+    <text x="170" y="187" font-size="19" fill="#557076">查看候选序号</text>
+    <path d="M310 160h65" stroke="#d5943b" stroke-width="7" stroke-linecap="round"/>
+    <path d="m369 148 19 12-19 12" fill="none" stroke="#d5943b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="410" y="100" width="235" height="120" rx="24" fill="#fff0da"/>
+    <text x="527" y="150" font-size="26" font-weight="bold" fill="#b27021">/歌单 加 1</text>
+    <text x="527" y="187" font-size="19" fill="#756b59">保存指定歌曲</text>
+    <path d="M665 160h65" stroke="#d5943b" stroke-width="7" stroke-linecap="round"/>
+    <path d="m724 148 19 12-19 12" fill="none" stroke="#d5943b" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="765" y="100" width="385" height="120" rx="24" fill="#e3f1ee"/>
+    <text x="957" y="150" font-size="26" font-weight="bold" fill="#137a70">下次：/歌单 播 1</text>
+    <text x="957" y="187" font-size="19" fill="#557076">直接播放，不再搜索选歌</text>
+  </g>
+  <text x="52" y="265" font-size="18" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" fill="#60767c">示意图仅说明命令顺序，并非 QQ 聊天截图。</text>
+</svg>
