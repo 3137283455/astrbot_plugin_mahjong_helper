@@ -140,7 +140,7 @@ class MahjongHelperPlugin(Star):
             "/雀 立、/雀 局 三 2｜省略玩家时使用主绑定",
             "近/桌/局受限时返回网页链接；页直接打开玩家页。",
             "原有 /雀魂查询、/查询三麻 等命令仍可用。",
-            "不填写玩家时使用自己的主绑定账号。",
+            "不填写玩家时使用已保存的默认查询 UID。",
             "",
             "【其他功能】",
             "/雀魂订阅状态、/三麻订阅状态｜查看当前会话订阅",
@@ -428,7 +428,7 @@ class MahjongHelperPlugin(Star):
         _, _, db, _ = self._ready()
         rows = db.list_bindings(self._actor_id(event))
         if not rows:
-            yield event.plain_result("尚未绑定账号，使用 /雀 绑 UID。")
+            yield event.plain_result("尚未保存常用查询 UID，使用 /雀 绑 UID。")
             return
         lines = ["我的常用查询账号（不验证账号归属）："]
         for row in rows:
