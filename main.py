@@ -52,6 +52,7 @@ from .core.media import (
     MediaStore,
 )
 from .core.models import BilibiliCandidate, LocalMedia, SearchSnapshot
+from .core.playlist import PlaylistStore
 from .core.selection import SearchSnapshotStore
 from .core.settings import PluginLimits, PluginSettings
 from .core.services import (
@@ -416,6 +417,10 @@ class ListenMusicPlugin(Star):
         self._media: MediaStore | None = None
         self._search: SearchService | None = None
         self._delivery: DeliveryService | None = None
+        self._playlist: PlaylistStore | None = None
+        self._recent_searches: dict[tuple[str, str], SearchSnapshot] = {}
+        self._last_played: dict[tuple[str, str], BilibiliCandidate] = {}
+        self._playlist_scope = str((config or {}).get("playlist_scope", "personal"))
         self._selection_waits: dict[str, _SelectionWait] = {}
         self._llm_searches: dict[str, _LlmSearch] = {}
         self._selection_lock = asyncio.Lock()
@@ -425,6 +430,7 @@ class ListenMusicPlugin(Star):
         if self._initialized:
             return
         data_dir = StarTools.get_data_dir(PLUGIN_NAME)
+        self._playlist = PlaylistStore(data_dir / "playlist.sqlite3")
         connector = aiohttp.TCPConnector(limit=16, limit_per_host=8, ttl_dns_cache=300)
         http = aiohttp.ClientSession(
             connector=connector,
@@ -495,6 +501,9 @@ class ListenMusicPlugin(Star):
         if selection_tasks:
             await asyncio.gather(*selection_tasks, return_exceptions=True)
         self._delivery = None
+        self._playlist = None
+        self._recent_searches.clear()
+        self._last_played.clear()
         self._search = None
         self._media = None
         self._accounts = None
@@ -506,6 +515,93 @@ class ListenMusicPlugin(Star):
             await accounts.aclose()
         if http is not None and not http.closed:
             await http.close()
+
+    @staticmethod
+    def _playlist_key(event: AstrMessageEvent) -> tuple[str, str]:
+        return (event.unified_msg_origin, str(event.get_sender_id()))
+
+    def _playlist_owner(self, event: AstrMessageEvent) -> str:
+        group_id = event.get_group_id()
+        if self._playlist_scope == "group" and group_id:
+            return f"group:{group_id}"
+        return f"user:{event.get_sender_id()}"
+
+    @filter.command("歌单")
+    async def playlist_command(
+        self, event: AstrMessageEvent, action: str = "", number: str = ""
+    ):
+        """Persistent playlist: /歌单, /歌单 加 1, /歌单 播 1, /歌单 删 1."""
+        event.stop_event()
+        store = self._playlist
+        if store is None:
+            yield event.plain_result("播放器尚未就绪，请稍后重试。")
+            return
+        owner = self._playlist_owner(event)
+        key = self._playlist_key(event)
+        if action in {"", "列表", "查看", "帮助", "帮"}:
+            songs = store.list(owner)
+            lines = [f"🎵 {'群共享' if owner.startswith('group:') else '我的'}歌单 · {len(songs)} 首"]
+            lines.extend(
+                f"{index}. {song.display_title} · {song.uploader}"
+                for index, song in enumerate(songs, 1)
+            )
+            lines.extend([
+                "搜索歌曲后：/歌单 加 序号；刚播放的歌：/歌单 加",
+                "直接播放：/歌单 播 序号；删除：/歌单 删 序号",
+            ])
+            yield event.plain_result("\n".join(lines))
+            return
+        if action not in {"加", "添加", "播", "播放", "删", "删除"}:
+            yield event.plain_result("用法：/歌单 [加|播|删] [序号]")
+            return
+        if action in {"加", "添加"} and not number:
+            candidate = self._last_played.get(key)
+            if candidate is None:
+                yield event.plain_result("请先搜索并选择歌曲，或使用 /歌单 加 搜索结果序号。")
+                return
+        else:
+            try:
+                position = int(number)
+            except ValueError:
+                position = 0
+            if position < 1:
+                yield event.plain_result("请填写大于 0 的序号。")
+                return
+            if action in {"加", "添加"}:
+                snapshot = self._recent_searches.get(key)
+                candidate = (
+                    snapshot.candidate_at(position)
+                    if snapshot is not None and snapshot.expires_at > time.monotonic()
+                    else None
+                )
+            else:
+                candidate = store.get(owner, position)
+            if candidate is None:
+                yield event.plain_result("没有这个序号。搜索结果需在 5 分钟内加入歌单。")
+                return
+        if action in {"加", "添加"}:
+            added = store.add(owner, candidate)
+            yield event.plain_result(
+                f"{'已加入歌单' if added else '歌单里已有这首'}：{candidate.display_title}"
+            )
+            return
+        if action in {"删", "删除"}:
+            store.remove(owner, position)
+            yield event.plain_result(f"已从歌单删除：{candidate.display_title}")
+            return
+        if not self._settings.audio_allowed:
+            yield event.plain_result("当前播放器配置未开启音频交付。")
+            return
+        delivery_action = _action_for_delivery_key("audio", self._settings)
+        if _selection_requires_download(candidate, delivery_action, self._settings.limits.voice):
+            delivery_action = _DeliveryMode.DOWNLOAD
+        try:
+            await self._deliver_media(event, candidate=candidate, action=delivery_action)
+        except (DeliveryError, FfmpegUnavailableError, MediaError) as exc:
+            yield event.plain_result(str(exc))
+        except Exception:
+            logger.exception("bili-player playlist delivery failed")
+            yield event.plain_result("歌单播放失败，请稍后重试。")
 
     @filter.command("搜索歌曲")
     async def search_song(self, event: AstrMessageEvent, query: GreedyStr):
@@ -642,6 +738,9 @@ class ListenMusicPlugin(Star):
             yield event.plain_result("插件正在停止，无法继续选歌。")
             event.stop_event()
             return
+        recent_searches = getattr(self, "_recent_searches", None)
+        if recent_searches is not None:
+            recent_searches[self._playlist_key(event)] = snapshot
         yield event.plain_result(self._format_selection_results(snapshot))
         event.stop_event()
 
@@ -848,6 +947,9 @@ class ListenMusicPlugin(Star):
             await self._discard_delivery_preparation(preparation)
             raise
         await self._send_delivery(event, prepared, action)
+        last_played = getattr(self, "_last_played", None)
+        if last_played is not None:
+            last_played[self._playlist_key(event)] = candidate
 
     async def _discard_delivery_preparation(
         self, preparation: asyncio.Task[DeliveryResult]

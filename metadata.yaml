@@ -2,7 +2,7 @@ name: astrbot_plugin_bili_player
 display_name: bili播放器
 desc: Bilibili 单源搜索、语音听歌、看视频与文件下载。
 short_desc: bili播放器！用 Bilibili 找歌、看视频并发送可播放媒体。
-version: 0.2.5
+version: 0.2.5+playlist.1
 astrbot_version: ">=4.26,<5"
 author: 57Darling02
 repo: https://github.com/57Darling02/astrbot_plugin_bili_player

@@ -1,4 +1,12 @@
 {
+  "playlist_scope": {
+    "description": "歌单归属",
+    "type": "string",
+    "default": "personal",
+    "options": ["personal", "group"],
+    "labels": ["每人自己的歌单", "群聊共用歌单（私聊仍是个人歌单）"],
+    "hint": "歌单只保存 B 站视频和分 P 标识；再次播放时不会重新搜索。"
+  },
   "media_priority": {
     "description": "用户没有明确说“看视频/听音频”时的默认媒体类型",
     "type": "string",
