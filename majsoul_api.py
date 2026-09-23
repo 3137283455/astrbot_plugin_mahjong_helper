@@ -12,6 +12,20 @@ class MajsoulApiError(RuntimeError):
     pass
 
 
+class KoromoCapRequired(MajsoulApiError):
+    """The records endpoint requires an interactive browser verification."""
+
+
+def koromo_player_url(uid: str, mode: int = 4, room: str = "") -> str:
+    """Link to a player's page, using the selected game type and room."""
+    game_modes = {
+        4: {"": 9, "金": 9, "玉": 12, "王座": 16},
+        3: {"": 22, "金": 22, "玉": 24, "王座": 26},
+    }
+    game_mode = game_modes[mode][room]
+    return f"https://amae-koromo.sapk.ch/player/{quote(uid, safe='')}/{game_mode}/"
+
+
 def extract_paipu_id(value: str) -> str:
     value = value.strip()
     if not value:
@@ -56,7 +70,7 @@ class KoromoClient:
     def _headers(self) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
-            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.8",
+            "User-Agent": "astrbot-plugin-mahjong-helper/0.2.9",
         }
         token = (self.token_getter() or "").strip()
         if token:
@@ -75,7 +89,7 @@ class KoromoClient:
                     return None
                 if response.status_code == 429:
                     if "x-cap-token-required" in response.text:
-                        raise MajsoulApiError(
+                        raise KoromoCapRequired(
                             "牌谱屋对局接口要求 CAP 验证，当前无法读取对局；"
                             "可向牌谱屋维护者咨询机器人接入方式。基本、顺位、立直等统计仍可使用。"
                         )

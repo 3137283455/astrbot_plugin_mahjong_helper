@@ -30,7 +30,10 @@ from .formatters import (
     room_modes,
 )
 from .koromo_views import format_deskmates, format_trend, format_view, parse_player_query
-from .majsoul_api import KoromoClient, MajsoulApiError, ProtocolClient, extract_paipu_id
+from .majsoul_api import (
+    KoromoCapRequired, KoromoClient, MajsoulApiError, ProtocolClient,
+    extract_paipu_id, koromo_player_url,
+)
 from .nanikiru_core import Question, QuestionStore, StateStore
 from .review_gateway import ReviewGateway
 from .stat_card import (
@@ -149,7 +152,8 @@ class MahjongHelperPlugin(Star):
             "/雀 基|顺|立|风|和|运|铳 [玩家]｜统计分栏",
             "/雀 立 [玩家] 玉 30天｜按房间和时间筛选",
             "/雀 立 文｜改发文字；三麻可加 三",
-            "/雀 近|桌|局 [玩家]｜对局相关，可能受 CAP 限制",
+            "/雀 近|桌|局 [玩家]｜对局相关；受限时返回网页链接",
+            "/雀 页 [玩家]｜直接打开牌谱屋玩家页",
             "原有 /雀魂查询、/查询三麻 等命令仍可用。",
             "不填写玩家时使用自己的主绑定账号。",
             "",
@@ -476,13 +480,20 @@ class MahjongHelperPlugin(Star):
         modes = room_modes(mode, room)
         if room and modes is None:
             return "房间可填写：金、玉、王座。"
+        uid = ""
         try:
             uid, _ = await self._resolve_target(event, query, mode)
             limit = int(self.config.get("records_limit", 5))
             records = await api.recent_records(uid, mode, limit, modes)
             return format_records(uid, mode, records) if records else "没有查到最近对局。"
+        except KoromoCapRequired:
+            return self._player_page_text(uid, mode, room, "对局记录") if uid else "牌谱屋要求在浏览器验证，请使用 /雀 页 UID。"
         except Exception as exc:
             return self._error_text(exc)
+
+    @staticmethod
+    def _player_page_text(uid: str, mode: int, room: str, section: str) -> str:
+        return f"牌谱屋要求在浏览器验证。请打开玩家页查看「{section}」：\n{koromo_player_url(uid, mode, room)}"
 
     @filter.command("雀魂")
     async def koromo_menu(
@@ -521,12 +532,13 @@ class MahjongHelperPlugin(Star):
                 "/雀 风 牌风　/雀 和 和铳　/雀 运 血统\n"
                 "/雀 铳 最近大铳　/雀 近 趋势\n"
                 "/雀 桌 常同桌　/雀 局 对局（可加页码）\n"
+                "/雀 页 直接打开牌谱屋玩家页\n"
                 "/雀 搜 名字　/雀 绑 UID　/雀 号 查绑定\n"
                 "/雀 切 UID　/雀 解 UID\n"
                 "筛选直接加：三/四、金/玉/王、7天/30天/90天/365天。\n"
                 "例：/雀 立 12105509 玉 30天\n"
                 "本条为文字版；/雀魂 旧写法也能用。\n"
-                "近、桌、局可能触发牌谱屋 CAP 验证，目前插件无法读取。"
+                "近、桌、局触发牌谱屋验证时会返回网页链接。"
             )
             return
         try:
@@ -539,10 +551,13 @@ class MahjongHelperPlugin(Star):
         modes = room_modes(mode, room)
         since_ms = int((time.time() - days * 86400) * 1000) if days else None
         period = f"近{days}天" if days else ""
+        uid = ""
         try:
             uid, _ = await self._resolve_target(event, query, mode)
             _, _, _, api = self._ready()
-            if canonical == "对局":
+            if canonical == "网页":
+                result = f"牌谱屋玩家页：\n{koromo_player_url(uid, mode, room)}"
+            elif canonical == "对局":
                 records = await api.records_page(uid, mode, page, 5, modes, since_ms)
                 result = f"{period} 第{page}页\n{format_records(uid, mode, records)}" if records else "该页没有对局。"
             elif canonical in {"趋势", "同桌"}:
@@ -577,6 +592,12 @@ class MahjongHelperPlugin(Star):
                         logger.exception("雀魂统计卡片生成失败，改用文字输出")
                 result = format_view(uid, mode, canonical, stats, extended, room, period)
             yield event.plain_result(result)
+        except KoromoCapRequired:
+            if uid and canonical in {"对局", "趋势", "同桌"}:
+                label = {"对局": "对局记录", "趋势": "最近走势", "同桌": "常见同桌"}[canonical]
+                yield event.plain_result(self._player_page_text(uid, mode, room, label))
+            else:
+                yield event.plain_result("牌谱屋要求在浏览器验证，请使用 /雀 页 UID。")
         except Exception as exc:
             yield event.plain_result(self._error_text(exc))
 

@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 2
+MENU_CARD_REVISION = 3
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -243,8 +243,8 @@ def render_quick_menu_card(path: Path) -> Path:
 
     _menu_section(draw, "其他查询", 825, GOLD)
     extras = [
-        ("/雀 铳", "最近大铳"), ("/雀 近", "最近对局趋势 · 受 CAP 限制"),
-        ("/雀 桌", "常见同桌 · 受 CAP 限制"), ("/雀 局", "对局列表 · 受 CAP 限制"),
+        ("/雀 铳", "最近大铳"), ("/雀 近", "最近趋势；受限给链接"),
+        ("/雀 桌", "常见同桌；受限给链接"), ("/雀 局", "对局列表；受限给链接"),
     ]
     for i, (command, detail) in enumerate(extras):
         _menu_tile(draw, 92 + i % 2 * 625, 888 + i // 2 * 130,
@@ -264,7 +264,7 @@ def render_quick_menu_card(path: Path) -> Path:
               font=_font(29, True), fill=INK)
     draw.text((119, 1591), "例：/雀 立 12105509 玉 30天    文字版：末尾加 文",
               font=_font(27), fill=INK)
-    draw.text((92, 1685), "完整帮助：/help    菜单文字版：/雀 文", font=_font(26), fill=MUTED)
+    draw.text((92, 1685), "网页：/雀 页    完整帮助：/help    文字版：/雀 文", font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
     return path
@@ -297,7 +297,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
                    command, detail, GOLD)
 
     _menu_section(draw, "牌谱工具", 1122)
-    _menu_tile(draw, 92, 1187, "/雀 局", "对局列表 · 受 CAP 限制")
+    _menu_tile(draw, 92, 1187, "/雀 局", "对局列表；受限给网页链接")
     _menu_tile(draw, 717, 1187, "/牌谱Review", "牌谱分析 · 需配置分析网关")
 
     if admin:

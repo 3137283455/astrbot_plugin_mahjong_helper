@@ -12,7 +12,7 @@ from astrbot_plugin_mahjong_helper.koromo_views import (
 from astrbot_plugin_mahjong_helper.stat_card import (
     render_help_card, render_quick_menu_card, render_stats_card,
 )
-from majsoul_api import KoromoClient, ProtocolClient, extract_paipu_id
+from majsoul_api import KoromoClient, ProtocolClient, extract_paipu_id, koromo_player_url
 from nanikiru_core import StateStore
 
 
@@ -121,6 +121,17 @@ class FormatterTests(unittest.TestCase):
                          ("基本", 3, "王座", True))
         query = parse_player_query("局", "三", "3")
         self.assertEqual((query.mode, query.page), (3, 3))
+        query = parse_player_query("页", "12105509", "三", "玉")
+        self.assertEqual((query.section, query.player, query.mode, query.room),
+                         ("网页", "12105509", 3, "玉"))
+
+    def test_player_page_link_uses_game_type_and_room(self):
+        self.assertEqual(koromo_player_url("12105509", 4),
+                         "https://amae-koromo.sapk.ch/player/12105509/9/")
+        self.assertEqual(koromo_player_url("12105509", 4, "玉"),
+                         "https://amae-koromo.sapk.ch/player/12105509/12/")
+        self.assertEqual(koromo_player_url("12105509", 3, "王座"),
+                         "https://amae-koromo.sapk.ch/player/12105509/26/")
 
     def test_stat_card_renders_readable_png(self):
         with tempfile.TemporaryDirectory() as directory:
