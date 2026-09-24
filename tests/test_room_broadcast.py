@@ -45,15 +45,23 @@ class _Event:
         self.group = group
         self.bot = bot or _Bot()
         self.message_obj = SimpleNamespace(self_id="3113357165")
+        self.stopped = False
 
     def get_group_id(self):
         return self.group
+
+    def stop_event(self):
+        self.stopped = True
+
+    def plain_result(self, text):
+        return text
 
 
 class _Plugin:
     def __init__(self, db):
         self.db = db
         self._room_broadcast_lock = asyncio.Lock()
+        self.broadcast_requests = []
 
     def _ready(self):
         return None, None, self.db, None
@@ -61,8 +69,23 @@ class _Plugin:
     def _actor_id(self, event):
         return "alice"
 
+    async def _broadcast_room(self, event, raw_room):
+        self.broadcast_requests.append(raw_room)
+        return "已接收"
+
 
 class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
+    async def test_friend_command_keeps_full_room_string(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = _Plugin(MahjongDatabase(Path(directory) / "state.db"))
+            event = _Event()
+            results = [item async for item in MahjongHelperPlugin.friend_room(
+                plugin, event, "https://game.maj-soul.com/1/?room=94888",
+            )]
+            self.assertEqual(plugin.broadcast_requests, ["https://game.maj-soul.com/1/?room=94888"])
+            self.assertEqual(results, ["已接收"])
+            self.assertTrue(event.stopped)
+
     async def test_checks_bot_permission_and_confirms_at_all_before_cooldown(self):
         with tempfile.TemporaryDirectory() as directory:
             db = MahjongDatabase(Path(directory) / "state.db")

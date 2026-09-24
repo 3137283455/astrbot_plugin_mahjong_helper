@@ -128,7 +128,7 @@ class MahjongHelperPlugin(Star):
             "/何切状态｜查看当前题和本轮进度",
             "",
             "【雀魂玩家】",
-            "/雀 房 房间号或链接｜在群里 @全体广播友人房",
+            "/友 房间号或链接｜在群里 @全体广播友人房",
             "/雀 搜 玩家名｜搜索 UID",
             "/雀 绑 UID｜保存常用查询对象；/雀 号｜查看",
             "/雀 切 UID｜切换默认对象；/雀 解 UID/全部｜解除",
@@ -497,10 +497,10 @@ class MahjongHelperPlugin(Star):
     async def _broadcast_room(self, event: AstrMessageEvent, raw_room: str) -> str | None:
         """Broadcast only when OneBot confirms the bot can actually mention all."""
         if not event.get_group_id():
-            return "请在 QQ 群里使用 /雀 房 房间号或链接。"
+            return "请在 QQ 群里使用 /友 房间号或链接。"
         room = " ".join(raw_room.split())
         if not room:
-            return "用法：/雀 房 房间号或链接。"
+            return "用法：/友 房间号或链接。"
         if len(room) > 300:
             return "房间号或链接过长，请控制在 300 字以内。"
         bot = getattr(event, "bot", None)
@@ -568,6 +568,14 @@ class MahjongHelperPlugin(Star):
             db.record_room_broadcast(actor)
         return None
 
+    @filter.command("友")
+    async def friend_room(self, event: AstrMessageEvent, room: GreedyStr):
+        """在 QQ 群广播友人房号或链接。"""
+        event.stop_event()
+        feedback = await self._broadcast_room(event, room)
+        if feedback:
+            yield event.plain_result(feedback)
+
     @filter.command("雀魂")
     async def koromo_menu(self, event: AstrMessageEvent, query: GreedyStr):
         """查询格式：/雀 玩家 三/四 栏目 房间 时间；后缀参数可换序。"""
@@ -575,12 +583,6 @@ class MahjongHelperPlugin(Star):
         section = tokens[0] if tokens else ""
         arguments = tokens[1:]
         arg1 = " ".join(arguments)
-        if section in {"房", "开房"}:
-            event.stop_event()
-            feedback = await self._broadcast_room(event, arg1)
-            if feedback:
-                yield event.plain_result(feedback)
-            return
         if section in {"搜", "搜索", "绑", "绑定", "号", "我的", "切", "切换", "解", "解绑"}:
             if section in {"号", "我的"}:
                 async for result in self.majsoul_bindings(event):
@@ -614,7 +616,7 @@ class MahjongHelperPlugin(Star):
                     return
             yield event.plain_result(
                 "🀄 雀魂快捷查询\n"
-                "/雀 房 房间号或链接　在群里 @全体广播\n"
+                "/友 房间号或链接　在群里 @全体广播\n"
                 "/雀 玩家 [三/四] [栏目] [房间] [时间] [文]\n"
                 "玩家昵称可含空格，后面的参数可换序；不填玩家查主绑定。\n"
                 "/雀 基 基本　/雀 顺 顺位　/雀 立 立直\n"
