@@ -495,7 +495,7 @@ class MahjongHelperPlugin(Star):
         return f"牌谱屋要求在浏览器验证。请打开玩家页查看「{section}」：\n{koromo_player_url(uid, mode, room)}"
 
     async def _broadcast_room(self, event: AstrMessageEvent, raw_room: str) -> str | None:
-        """Send a room number or link to the current group with a real @all mention."""
+        """Broadcast only when OneBot confirms the bot can actually mention all."""
         if not event.get_group_id():
             return "请在 QQ 群里使用 /雀 房 房间号或链接。"
         room = " ".join(raw_room.split())
@@ -503,6 +503,11 @@ class MahjongHelperPlugin(Star):
             return "用法：/雀 房 房间号或链接。"
         if len(room) > 300:
             return "房间号或链接过长，请控制在 300 字以内。"
+        bot = getattr(event, "bot", None)
+        self_id = str(getattr(getattr(event, "message_obj", None), "self_id", ""))
+        if bot is None or not self_id.isdigit() or not str(event.get_group_id()).isdigit():
+            return "房间广播目前仅支持接入 OneBot 的 QQ 群。"
+        group_id = int(event.get_group_id())
         _, _, db, _ = self._ready()
         actor = self._actor_id(event)
         async with self._room_broadcast_lock:
@@ -511,12 +516,55 @@ class MahjongHelperPlugin(Star):
                 minutes, seconds = divmod(wait, 60)
                 return f"你的房间广播还在冷却中，请在 {minutes}分{seconds:02d}秒后重试。"
             try:
-                await event.send(MessageChain([
-                    Comp.AtAll(), Comp.Plain(f"雀魂友人房：{room}"),
-                ]))
+                member = await bot.call_action(
+                    action="get_group_member_info", group_id=group_id,
+                    user_id=int(self_id), no_cache=True,
+                )
+                if not isinstance(member, dict) or member.get("role") not in {"admin", "owner"}:
+                    return "机器人还不是本群管理员，无法可靠地 @全体；请先给机器人管理员权限。"
+                quota = await bot.call_action(action="get_group_at_all_remain", group_id=group_id)
+                if not isinstance(quota, dict) or not quota.get("can_at_all"):
+                    return "机器人当前无法在本群 @全体，请检查群权限与剩余次数。"
+                if member["role"] != "owner" and (
+                    int(quota.get("remain_at_all_count_for_group", 0)) <= 0
+                    or int(quota.get("remain_at_all_count_for_uin", 0)) <= 0
+                ):
+                    return "本群或机器人的 @全体次数已用完，暂时无法广播。"
+                sent = await bot.call_action(
+                    action="send_group_msg", group_id=group_id,
+                    message=[
+                        {"type": "at", "data": {"qq": "all"}},
+                        {"type": "text", "data": {"text": f" 雀魂友人房：{room}"}},
+                    ],
+                )
+                message_id = sent.get("message_id") if isinstance(sent, dict) else None
+                if message_id is None:
+                    return "房间消息的发送结果无法确认，未计入冷却；请检查群内消息。"
+                confirmed = False
+                for attempt in range(4):
+                    if attempt:
+                        await asyncio.sleep(0.5)
+                    delivered = await bot.call_action(action="get_msg", message_id=message_id)
+                    segments = delivered.get("message", []) if isinstance(delivered, dict) else []
+                    has_mention = any(
+                        segment.get("type") == "at"
+                        and str(segment.get("data", {}).get("qq")) == "all"
+                        for segment in segments if isinstance(segment, dict)
+                    )
+                    remaining = await bot.call_action(action="get_group_at_all_remain", group_id=group_id)
+                    quota_used = member["role"] == "owner" or (
+                        isinstance(remaining, dict)
+                        and int(remaining.get("remain_at_all_count_for_uin", 0))
+                        < int(quota["remain_at_all_count_for_uin"])
+                    )
+                    confirmed = has_mention and quota_used
+                    if confirmed:
+                        break
+                if not confirmed:
+                    return "房间消息已发出，但 QQ 未确认 @全体次数被使用；未计入冷却，请检查群内消息。"
             except Exception:
                 logger.exception("友人房 @全体广播失败")
-                return "@全体广播失败，未计入冷却；请检查机器人在本群的权限与 @全体剩余次数。"
+                return "无法确认 @全体广播，未计入冷却；请检查机器人群权限及 NapCat 状态。"
             db.record_room_broadcast(actor)
         return None
 
@@ -528,6 +576,7 @@ class MahjongHelperPlugin(Star):
         arguments = tokens[1:]
         arg1 = " ".join(arguments)
         if section in {"房", "开房"}:
+            event.stop_event()
             feedback = await self._broadcast_room(event, arg1)
             if feedback:
                 yield event.plain_result(feedback)
