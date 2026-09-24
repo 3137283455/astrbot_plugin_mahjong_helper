@@ -59,12 +59,45 @@ class MahjongDatabase:
                     value TEXT NOT NULL,
                     updated_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS room_broadcasts (
+                    actor_id TEXT PRIMARY KEY,
+                    count INTEGER NOT NULL,
+                    last_at INTEGER NOT NULL
+                );
                 """
             )
 
     @staticmethod
     def _now() -> int:
         return int(time.time())
+
+    def room_broadcast_wait(self, actor_id: str, now: int | None = None) -> int:
+        """First repeat waits five minutes; all later repeats wait fifteen."""
+        now = self._now() if now is None else now
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT count, last_at FROM room_broadcasts WHERE actor_id = ?",
+                (actor_id,),
+            ).fetchone()
+        if row is None:
+            return 0
+        interval = 300 if row["count"] == 1 else 900
+        return max(0, row["last_at"] + interval - now)
+
+    def record_room_broadcast(self, actor_id: str, now: int | None = None) -> None:
+        now = self._now() if now is None else now
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO room_broadcasts (actor_id, count, last_at)
+                VALUES (?, 1, ?)
+                ON CONFLICT(actor_id) DO UPDATE SET
+                    count = MIN(room_broadcasts.count + 1, 2),
+                    last_at = excluded.last_at
+                """,
+                (actor_id, now),
+            )
 
     def list_bindings(self, actor_id: str) -> list[dict]:
         with self.connect() as conn:
@@ -262,4 +295,3 @@ class MahjongDatabase:
                 "SELECT value FROM plugin_secrets WHERE key = ?", (key,)
             ).fetchone()
         return row["value"] if row else None
-

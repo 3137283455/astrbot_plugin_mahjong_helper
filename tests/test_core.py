@@ -37,6 +37,22 @@ class StateStoreTests(unittest.TestCase):
 
 
 class MahjongDatabaseTests(unittest.TestCase):
+    def test_room_broadcast_cooldown_is_per_user_and_persists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            db = MahjongDatabase(path)
+            self.assertEqual(db.room_broadcast_wait("alice", 1_000), 0)
+            db.record_room_broadcast("alice", 1_000)
+            self.assertEqual(db.room_broadcast_wait("alice", 1_299), 1)
+            self.assertEqual(db.room_broadcast_wait("bob", 1_299), 0)
+            self.assertEqual(db.room_broadcast_wait("alice", 1_300), 0)
+            db.record_room_broadcast("alice", 1_300)
+            self.assertEqual(MahjongDatabase(path).room_broadcast_wait("alice", 2_199), 1)
+            self.assertEqual(db.room_broadcast_wait("alice", 2_200), 0)
+            db.record_room_broadcast("alice", 2_200)
+            self.assertEqual(db.room_broadcast_wait("alice", 3_099), 1)
+            self.assertEqual(db.room_broadcast_wait("alice", 3_100), 0)
+
     def test_binding_main_account_and_removal(self):
         with tempfile.TemporaryDirectory() as directory:
             db = MahjongDatabase(Path(directory) / "state.db")

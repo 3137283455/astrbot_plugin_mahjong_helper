@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 7
+MENU_CARD_REVISION = 8
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -226,7 +226,7 @@ def _menu_tile(draw, x: int, y: int, command: str, detail: str,
 
 def render_quick_menu_card(path: Path) -> Path:
     """Render the compact /雀 menu with commands grouped by intent."""
-    image = Image.new("RGB", (WIDTH, 1735), PAPER)
+    image = Image.new("RGB", (WIDTH, 1785), PAPER)
     draw = ImageDraw.Draw(image)
     _menu_header(draw, "雀魂快捷菜单", "玩家在前，后面的查询选项可换序")
     draw.text((92, 284), "不填玩家时，查询你绑定的主账号", font=_font(28), fill=MUTED)
@@ -264,7 +264,8 @@ def render_quick_menu_card(path: Path) -> Path:
               font=_font(29, True), fill=INK)
     draw.text((119, 1591), "例：/雀 一剑风起醉英豪 三 铳 30天；后缀可换序",
               font=_font(27), fill=INK)
-    draw.text((92, 1685), "绑定不验证归属，仅收录金之间及以上公开数据；详情：/雀 帮", font=_font(26), fill=MUTED)
+    draw.text((92, 1685), "群内广播：/雀 房 房间号或链接（@全体）", font=_font(26), fill=INK)
+    draw.text((92, 1725), "绑定不验证归属，仅收录金之间及以上公开数据；详情：/雀 帮", font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
     return path
@@ -317,7 +318,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
         draw.text((119, 1395), "管理员功能：每日出题、订阅管理、牌谱屋密钥配置",
                   font=_font(28), fill=INK)
 
-    draw.text((92, height - 63), "文字版：/雀 帮 文    何切题库已内置，无需另外准备",
+    draw.text((92, height - 63), "群内广播：/雀 房 房间号或链接    文字版：/雀 帮 文",
               font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
