@@ -42,7 +42,7 @@ async def main():
     schemas = ToolSet([
         llm_tools.get_func("mahjong_quiz"), llm_tools.get_func("mahjong_query"),
         FindInBilibiliTool(None), DeliverMediaTool(None),
-        llm_tools.get_func("bot_menu"), llm_tools.get_func("query_available_apis"),
+        llm_tools.get_func("bot_menu"), llm_tools.get_func("music_search"), llm_tools.get_func("query_available_apis"),
         llm_tools.get_func("call_api_by_name"),
     ]).openai_schema()
     cases = [
@@ -57,6 +57,8 @@ async def main():
         ("你会什么", "bot_menu", {"section": "all"}),
         ("给我娱乐菜单", "bot_menu", {"section": "entertainment"}),
         ("我要看图片娱乐菜单", "bot_menu", {"section": "entertainment", "category": "图片"}),
+        ("帮我搜一下周杰伦的晴天", "music_search", {}),
+        ("点一首周杰伦的晴天", "find_in_bilibili", {"title": "晴天", "delivery": "audio"}),
     ]
     # Production injects the current user's accessible catalog. This fixture
     # checks the same name-based selection without executing an entertainment API.

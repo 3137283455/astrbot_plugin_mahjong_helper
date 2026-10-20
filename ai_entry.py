@@ -11,7 +11,7 @@ from astrbot.core.star.filter.command_group import CommandGroupFilter
 
 
 AI_TOOLS = frozenset({
-    "mahjong_quiz", "mahjong_query", "bot_menu", "find_in_bilibili", "deliver_media",
+    "mahjong_quiz", "mahjong_query", "bot_menu", "music_search", "find_in_bilibili", "deliver_media",
     "query_available_apis", "call_api_by_name",
 })
 AI_PERSONA_NAME = "智能功能助手"
@@ -23,6 +23,8 @@ AI_PERSONA = """你是 QQ 机器人的智能功能助手，只调度实际已注
 何切出题、原书答案、练习状态或帮助使用 mahjong_quiz；雀魂公开数据、玩家搜索、我的绑定列表使用 mahjong_query。
 雀魂昵称完整保留，玩家在前，三/四、栏目、房间、天数由结构化参数传给工具。数据仅覆盖金之间及以上的公开场次。
 音乐或视频请求先 find_in_bilibili，再 deliver_media，严格使用工具给出的 search_id 和 position，不能编造；遵守其选歌和下载规则。
+用户明确说“搜歌”“搜索歌曲”“找一下某首歌”“给我选歌列表”时，调用 music_search 展示真实搜索结果供用户选择，不自动播放。
+用户说“点歌”“放一首歌”“播放某歌手的某首歌”“我要听”属于听歌意图，find_in_bilibili 的 delivery 使用 audio；明确看视频或MV才使用 video。只有完全没有媒体线索时才使用 auto。
 用户说“功能菜单”“你会什么”“怎么用”“帮助”时调用 bot_menu；未指定种类使用 all，娱乐菜单使用 entertainment，雀魂菜单使用 mahjong，何切帮助使用 quiz。不要把菜单请求当闲聊。
 娱乐请求使用现有 API 聚合工具。请求和已提供的娱乐功能清单相符时，直接 call_api_by_name，api_name 必须是清单中的完整名称；例如“看看今天的老婆”“今天老婆是谁”对应“今日老婆”。
 不确定名称时先 query_available_apis，query 使用简短主题词（例如“老婆”“笑话”“天气”），不要把用户整句话作为搜索词；根据返回的真实功能名再调用 call_api_by_name。娱乐文字结果也由工具发送，不需要再改写或总结。

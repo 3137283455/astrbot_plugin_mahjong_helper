@@ -80,6 +80,23 @@ def tools(*names):
 
 
 class AIEntryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_music_search_displays_native_candidates_without_auto_play(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            called = []
+            async def search(event, query):
+                called.append(query)
+                yield event.plain_result("原有选歌列表，回复序号")
+            instance = SimpleNamespace(search_song=search)
+            p.context.get_registered_star = lambda name: SimpleNamespace(activated=True, star_cls=instance)
+            event = Event(text="搜索一下晴天")
+            event.set_extra("mahjong_ai_request", True)
+            await p.music_search_ai(event, "晴天 周杰伦")
+            self.assertEqual(called, ["晴天 周杰伦"])
+            self.assertEqual(event.sent[0].get_plain_text(), "原有选歌列表，回复序号")
+            await p.music_search_ai(event, "晴天")
+            self.assertEqual(len(called), 1)
+
     async def test_menu_requests_reuse_existing_images_and_respect_missing_plugin(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)
@@ -102,7 +119,7 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
             p.context.get_registered_star = lambda name: SimpleNamespace(activated=False, star_cls=instance)
             self.assertIsNone(p._entertainment_plugin())
 
-    async def test_catalog_only_includes_accessible_valid_names_and_parameter_keys(self):
+    async def test_catalog_only_includes_accessible_names_keys_and_availability(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)
             entries = [SimpleNamespace(name="今日老婆", type="image", params={"id": "SECRET"}, valid=True),
@@ -115,7 +132,7 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
             await p.ai_limit_request(event, req)
             self.assertIn("今日老婆 | image | 参数: id", req.system_prompt)
             self.assertNotIn("SECRET", req.system_prompt)
-            self.assertNotIn("invalid-api", req.system_prompt)
+            self.assertIn("invalid-api | text | 参数: 无 | 暂不可用", req.system_prompt)
 
     async def test_entertainment_lookup_then_call_sends_text_and_stops_without_summary(self):
         with tempfile.TemporaryDirectory() as d:
