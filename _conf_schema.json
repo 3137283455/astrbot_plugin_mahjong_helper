@@ -1,4 +1,15 @@
 {
+  "ai_enabled": {
+    "description": "启用 QQ 群 @机器人 的现有功能 AI 入口，同时限制 QQ AI 只用于功能工具",
+    "type": "bool",
+    "default": false
+  },
+  "ai_provider_id": {
+    "description": "已在 AstrBot 中测试成功的魔搭模型提供商 ID；仅接受官方魔搭 HTTPS 接口",
+    "type": "string",
+    "default": "",
+    "hint": "开启 AI 入口后必须填写；AstrBot Agent Runner 的模型需选择同一 ID，回退模型须为空。"
+  },
   "timezone": {
     "description": "每日何切使用的时区",
     "type": "string",

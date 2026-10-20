@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import time
+from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,12 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
+from astrbot.core.agent.tool import ToolSet
+
+from .ai_entry import (
+    AI_PERSONA, AI_PERSONA_NAME, AI_TOOLS, AI_UNAVAILABLE, eligible,
+    modelscope_provider, validate_quiz,
+)
 
 from .database import MahjongDatabase
 from .formatters import (
@@ -27,7 +34,7 @@ from .formatters import (
     record_uuid,
     room_modes,
 )
-from .koromo_views import format_deskmates, format_trend, format_view, parse_player_query
+from .koromo_views import PlayerQuery, SECTIONS, format_deskmates, format_trend, format_view, parse_player_query
 from .majsoul_api import KoromoCapRequired, KoromoClient, MajsoulApiError, koromo_player_url
 from .nanikiru_core import Question, QuestionStore, StateStore
 from .stat_card import (
@@ -51,6 +58,7 @@ class MahjongHelperPlugin(Star):
         self._lock = asyncio.Lock()
         self._room_broadcast_lock = asyncio.Lock()
         self._tasks: list[asyncio.Task] = []
+        self._ai_seen: OrderedDict[tuple[str, str, str], float] = OrderedDict()
         self.plugin_dir = Path(__file__).resolve().parent
         self.state_dir: Path | None = None
         self.timezone = ZoneInfo(self.config.get("timezone", "Asia/Shanghai"))
@@ -63,11 +71,29 @@ class MahjongHelperPlugin(Star):
         self.state = StateStore(database_path, self.questions.by_id)
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
+        manager = self.context.get_llm_tool_manager()
+        for name in ("mahjong_quiz", "mahjong_query"):
+            tool = manager.get_func(name)
+            if tool is not None:
+                tool.active = bool(self.config.get("ai_enabled", False))
         self._tasks = [
             asyncio.create_task(self._question_scheduler()),
             asyncio.create_task(self._subscription_scheduler()),
         ]
         logger.info("日麻助手已加载，共 %d 道何切题", len(self.questions.questions))
+        if self.config.get("ai_enabled", False):
+            try:
+                manager = self.context.persona_manager
+                kwargs = dict(system_prompt=AI_PERSONA, tools=sorted(AI_TOOLS),
+                              skills=[], custom_error_message=AI_UNAVAILABLE)
+                try:
+                    await manager.get_persona(AI_PERSONA_NAME)
+                except ValueError:
+                    await manager.create_persona(AI_PERSONA_NAME, **kwargs)
+                else:
+                    await manager.update_persona(AI_PERSONA_NAME, **kwargs)
+            except Exception:
+                logger.exception("智能功能助手人格创建失败，仍使用请求层的功能限制")
 
     async def terminate(self):
         for task in self._tasks:
@@ -80,6 +106,124 @@ class MahjongHelperPlugin(Star):
         if not all((self.questions, self.state, self.db, self.koromo)):
             raise RuntimeError("日麻助手尚未初始化")
         return self.questions, self.state, self.db, self.koromo
+
+    def _ai_managed(self, event: AstrMessageEvent) -> bool:
+        return bool(self.config.get("ai_enabled", False)) and event.get_platform_name() == "aiocqhttp"
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
+    async def ai_message_gate(self, event: AstrMessageEvent):
+        """Only a direct group @mention may reach the model; commands still run."""
+        if not self._ai_managed(event):
+            return
+        allowed = eligible(event)
+        event.set_extra("mahjong_ai_allowed", allowed)
+        # In AstrBot 4.28 this flag means "a plugin owns the LLM decision".
+        # True prevents the default agent request, without stopping native handlers.
+        event.should_call_llm(not allowed)
+        if allowed:
+            event.set_extra("selected_provider", str(self.config.get("ai_provider_id", "")))
+
+    @filter.on_waiting_llm_request(priority=100)
+    async def ai_before_model(self, event: AstrMessageEvent):
+        if not self._ai_managed(event):
+            return
+        if not eligible(event) or getattr(event, "_has_send_oper", False):
+            event.stop_event()
+            return
+        provider_id = str(self.config.get("ai_provider_id", "")).strip()
+        provider = self.context.get_provider_by_id(provider_id) if provider_id else None
+        if provider is None or not modelscope_provider(provider):
+            await event.send(event.plain_result(AI_UNAVAILABLE))
+            event.stop_event()
+            return
+        event.set_extra("selected_provider", provider_id)
+        event.set_extra("enable_streaming", False)
+        event.set_extra("enable_reasoning", False)
+        message_id = str(getattr(event.message_obj, "message_id", "") or "")
+        if message_id and not event.get_extra("mahjong_ai_started"):
+            now = time.monotonic()
+            while self._ai_seen and (next(iter(self._ai_seen.values())) < now - 300 or len(self._ai_seen) >= 2048):
+                self._ai_seen.popitem(last=False)
+            key = (event.unified_msg_origin, str(event.get_sender_id()), message_id)
+            if key in self._ai_seen:
+                event.stop_event()
+                return
+            self._ai_seen[key] = now
+        event.set_extra("mahjong_ai_started", True)
+
+    @filter.on_llm_request(priority=-1000)
+    async def ai_limit_request(self, event: AstrMessageEvent, req):
+        if not self._ai_managed(event):
+            return
+        if not eligible(event) or not event.get_extra("mahjong_ai_started"):
+            event.stop_event()
+            return
+        req.func_tool = ToolSet([
+            tool for tool in (req.func_tool.tools if req.func_tool else [])
+            if tool.name in AI_TOOLS and tool.active
+        ])
+        if req.func_tool.empty():
+            await event.send(event.plain_result(AI_UNAVAILABLE))
+            event.stop_event()
+            return
+        req.system_prompt = AI_PERSONA
+        req.model = None
+        req.contexts = []  # A group member's request never inherits another member's task.
+        req.tool_calls_result = None
+        req.image_urls = []
+        req.audio_urls = []
+        req.extra_user_content_parts = []
+        event.set_extra("mahjong_ai_request", True)
+        event.set_extra("mahjong_ai_toolset", req.func_tool)
+
+    @filter.on_llm_tool_respond(priority=100)
+    async def ai_tool_finished(self, event: AstrMessageEvent, tool, tool_args, tool_result):
+        if not self._ai_managed(event) or not event.get_extra("mahjong_ai_request"):
+            return
+        tools = event.get_extra("mahjong_ai_toolset")
+        if tools is None:
+            return
+        # Removing completed tools also blocks repeated calls in one model batch.
+        tools.remove_tool(tool.name)
+        if tool_result is None:
+            tools.tools.clear()
+            return
+        for part in tool_result.content:
+            try:
+                data = json.loads(getattr(part, "text", ""))
+            except (ValueError, TypeError):
+                continue
+            if isinstance(data, dict) and data.get("status") == "error":
+                tools.tools.clear()
+                await event.send(event.plain_result(str(data.get("message") or "功能执行失败，请使用原生命令重试。")[:500]))
+                return
+        if tool.name == "find_in_bilibili":
+            tools.tools[:] = [item for item in tools.tools if item.name == "deliver_media"]
+
+    @filter.on_llm_response(priority=-1000)
+    async def ai_no_chat_response(self, event: AstrMessageEvent, response):
+        if self._ai_managed(event) and event.get_extra("mahjong_ai_request") and response:
+            response.result_chain = None
+            response.completion_text = ""
+            response.reasoning_content = ""
+
+    @filter.on_decorating_result(priority=-1000)
+    async def ai_no_chat_result(self, event: AstrMessageEvent):
+        if not self._ai_managed(event) or not event.get_extra("mahjong_ai_request"):
+            return
+        result = event.get_result()
+        if result is not None:
+            if result.is_model_result():
+                result.chain.clear()
+            else:
+                result.chain = [Comp.Plain(AI_UNAVAILABLE)]
+
+    def _claim_ai_action(self, event: AstrMessageEvent) -> bool:
+        if (not self._ai_managed(event) or not eligible(event)
+                or not event.get_extra("mahjong_ai_request") or event.get_extra("mahjong_ai_action_used")):
+            return False
+        event.set_extra("mahjong_ai_action_used", True)
+        return True
 
     @filter.command("help", aliases=["帮助"])
     async def user_help(self, event: AstrMessageEvent):
@@ -302,6 +446,87 @@ class MahjongHelperPlugin(Star):
             f"{len(questions.questions)}\n剩余：{remaining}\n"
             f"当前轮次：第{row['round_number']}轮\n每日自动：{auto}"
         )
+
+    @filter.llm_tool(name="mahjong_quiz")
+    async def quiz_ai(self, event: AstrMessageEvent, action: str = "question",
+                      count: int = 1, question_id: int = 0):
+        """调用已有何切功能，直接发送原题图片、原书答案、练习状态或帮助。
+
+        Args:
+            action(string): question出题，answer查看答案，status查看状态，menu查看帮助。
+            count(int): 随机题整数数量，默认1，允许1至5；不能分次调用绕过上限。
+            question_id(int): 原有整数题号，0表示随机题或当前题；指定题号时count必须为1。
+        """
+        if not self._claim_ai_action(event):
+            return
+        try:
+            validate_quiz(action, count, question_id)
+            questions, _, _, _ = self._ready()
+            if question_id and questions.get(question_id) is None:
+                raise ValueError(f"题号范围是 1～{len(questions.questions)}。")
+            if action == "question":
+                for _ in range(count):
+                    async for result in self.nanikiru(event, str(question_id) if question_id else ""):
+                        await event.send(result)
+            elif action == "answer":
+                async for result in self.nanikiru_answer(event, question_id):
+                    await event.send(result)
+            elif action == "status":
+                async for result in self.nanikiru_status(event):
+                    await event.send(result)
+            else:
+                card = await self._menu_image(event, "help")
+                await event.send(card or event.plain_result(self._help_text(event)))
+        except ValueError as exc:
+            await event.send(event.plain_result(str(exc)))
+        except Exception:
+            logger.exception("何切 AI 入口执行失败")
+            await event.send(event.plain_result("何切功能执行失败，请使用 /何切 重试。"))
+
+    @filter.llm_tool(name="mahjong_query")
+    async def query_ai(self, event: AstrMessageEvent, player: str = "", mode: int = 4,
+                       section: str = "基本", room: str = "", days: int = 0,
+                       page: int = 1, text: bool = False):
+        """调用已有雀魂查询功能，直接发送统计卡片、搜索结果或网页链接，仅收录金之间及以上公开数据。
+
+        Args:
+            player(string): 完整昵称或UID；留空查询发起人的主绑定，搜索时填写昵称。
+            mode(int): 三麻为整数3，四麻为整数4，默认4。
+            section(string): 基本、顺位、立直、更多、和铳、血统、大铳、趋势、同桌、对局、网页、搜索、绑定列表。
+            room(string): 不筛选留空；可填金、玉、王座。
+            days(int): 整数时间范围，允许0、7、30、90、365，0为全部。
+            page(int): 对局整数页码，1至20，默认1。
+            text(boolean): true返回文字，false优先已有统计卡片。
+        """
+        if not self._claim_ai_action(event):
+            return
+        try:
+            if not isinstance(player, str) or len(player) > 100:
+                raise ValueError("请提供完整昵称或数字 UID，长度不超过100字。")
+            if type(mode) is not int or mode not in {3, 4}:
+                raise ValueError("查询模式只能是三麻或四麻。")
+            if not isinstance(section, str) or section not in {*SECTIONS, "搜索", "绑定列表"}:
+                raise ValueError("请选择现有的雀魂查询栏目，或使用 /雀 查看菜单。")
+            if not isinstance(room, str) or room not in {"", "金", "玉", "王座"}:
+                raise ValueError("房间可填写：金、玉、王座。")
+            if type(days) is not int or days not in {0, 7, 30, 90, 365}:
+                raise ValueError("时间范围可填写全部、7天、30天、90天或365天。")
+            if type(page) is not int or not 1 <= page <= 20 or type(text) is not bool:
+                raise ValueError("页码须为1～20，文字选项须为布尔值。")
+            if section == "搜索":
+                results = self.majsoul_search(event, player)
+            elif section == "绑定列表":
+                results = self.majsoul_bindings(event)
+            else:
+                parsed = PlayerQuery(SECTIONS[section], player.strip(), mode, room, days, page, text)
+                results = self._query_player_view(event, parsed)
+            async for result in results:
+                await event.send(result)
+        except ValueError as exc:
+            await event.send(event.plain_result(str(exc)))
+        except Exception:
+            logger.exception("雀魂查询 AI 入口执行失败")
+            await event.send(event.plain_result("雀魂查询失败，请使用 /雀 重试。"))
 
     @filter.command("何切重置")
     async def nanikiru_reset(self, event: AstrMessageEvent):
@@ -638,6 +863,11 @@ class MahjongHelperPlugin(Star):
         except ValueError as exc:
             yield event.plain_result(str(exc))
             return
+        async for result in self._query_player_view(event, parsed):
+            yield result
+
+    async def _query_player_view(self, event: AstrMessageEvent, parsed: PlayerQuery):
+        """Shared read-only player view for commands and native AI tools."""
         canonical, query, mode, room = parsed.section, parsed.player, parsed.mode, parsed.room
         page, days, plain = parsed.page, parsed.days, parsed.text
         modes = room_modes(mode, room)

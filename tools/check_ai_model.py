@@ -1,0 +1,80 @@
+"""Opt-in live schema check; never executes tools or sends QQ messages."""
+
+import argparse
+import asyncio
+import json
+import os
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--astrbot-root", type=Path, required=True)
+    parser.add_argument("--provider-id", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--live", action="store_true", required=True)
+    args = parser.parse_args()
+    root = args.astrbot_root.resolve()
+    config = json.loads((root / "data/cmd_config.json").read_text(encoding="utf-8-sig"))
+    model = next(item for item in config["provider"] if item["id"] == args.provider_id)
+    source = next(item for item in config["provider_sources"] if item["id"] == model["provider_source_id"])
+    if urlparse(source["api_base"]).hostname != "api-inference.modelscope.cn":
+        raise ValueError("Live checks only use the approved official ModelScope source")
+    raw_keys = source.get("key", [])
+    key = raw_keys[0] if isinstance(raw_keys, list) else raw_keys
+    if isinstance(key, str) and key.startswith("$"):
+        key = os.environ.get(key[1:].strip("{}"), "")
+    if not key:
+        raise ValueError("Configured API key is missing")
+    sys.path.insert(0, str(root))
+    sys.path.insert(0, str(root / "data/plugins"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from astrbot.core.agent.tool import ToolSet
+    from astrbot.core.provider.register import llm_tools
+    from astrbot_plugin_mahjong_helper.ai_entry import AI_PERSONA
+    from astrbot_plugin_mahjong_helper.main import MahjongHelperPlugin  # noqa: F401
+    from astrbot_plugin_bili_player.main import FindInBilibiliTool, DeliverMediaTool
+    from openai import AsyncOpenAI
+
+    schemas = ToolSet([
+        llm_tools.get_func("mahjong_quiz"), llm_tools.get_func("mahjong_query"),
+        FindInBilibiliTool(None), DeliverMediaTool(None),
+    ]).openai_schema()
+    cases = [
+        ("来道何切题", "mahjong_quiz", {"action": "question"}),
+        ("何且", "mahjong_quiz", {"action": "question"}),
+        ("给我出5道何切题", "mahjong_quiz", {"count": 5}),
+        ("查一剑风起醉英豪的三麻近30天和铳", "mahjong_query", {"player": "一剑风起醉英豪", "mode": 3, "days": 30}),
+        ("帮我播放周杰伦的晴天", "find_in_bilibili", {"title": "晴天"}),
+    ]
+    results = []
+    async with AsyncOpenAI(api_key=key, base_url=source["api_base"], timeout=45, max_retries=0) as client:
+        for prompt, expected_tool, expected in cases:
+            record = {"input": prompt, "expected_tool": expected_tool}
+            try:
+                response = await client.chat.completions.create(
+                    model=model["model"], temperature=0, max_tokens=1024,
+                    messages=[{"role": "system", "content": AI_PERSONA}, {"role": "user", "content": prompt}],
+                    tools=schemas, tool_choice="auto",
+                )
+                calls = response.choices[0].message.tool_calls or []
+                record["calls"] = [{"name": call.function.name, "args": json.loads(call.function.arguments)} for call in calls]
+                record["passed"] = len(calls) == 1 and calls[0].function.name == expected_tool
+                if record["passed"]:
+                    actual = record["calls"][0]["args"]
+                    for name, value in expected.items():
+                        record["passed"] = record["passed"] and actual.get(name, "question" if name == "action" else None) == value
+            except Exception as exc:
+                record.update(passed=False, error_type=type(exc).__name__, status_code=getattr(exc, "status_code", None))
+            results.append(record)
+            print(json.dumps(record, ensure_ascii=False), flush=True)
+            args.output.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+            if record.get("status_code") in {401, 403, 429}:
+                break
+    raise SystemExit(0 if all(item["passed"] for item in results) else 1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
