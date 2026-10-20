@@ -80,6 +80,64 @@ def tools(*names):
 
 
 class AIEntryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_menu_requests_reuse_existing_images_and_respect_missing_plugin(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            event = Event(text="给我功能菜单", group=None, mention=None)
+            event.set_extra("mahjong_ai_request", True)
+            await p.menu_ai(event)
+            self.assertEqual(len(event.sent), 1)
+            self.assertTrue(any(isinstance(part, Comp.Image) for part in event.sent[0].chain))
+            called = []
+            async def menu(event, category):
+                called.append(category)
+                yield event.plain_result("existing scoped menu")
+            instance = SimpleNamespace(_accessible_entries=lambda event: [], entertainment_menu=menu)
+            p.context.get_registered_star = lambda name: SimpleNamespace(activated=True, star_cls=instance)
+            entertainment = Event(text="娱乐图片菜单", message_id="2")
+            entertainment.set_extra("mahjong_ai_request", True)
+            await p.menu_ai(entertainment, section="entertainment", category="图片")
+            self.assertEqual(called, ["图片"])
+            self.assertEqual(entertainment.sent[0].get_plain_text(), "existing scoped menu")
+            p.context.get_registered_star = lambda name: SimpleNamespace(activated=False, star_cls=instance)
+            self.assertIsNone(p._entertainment_plugin())
+
+    async def test_catalog_only_includes_accessible_valid_names_and_parameter_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            entries = [SimpleNamespace(name="今日老婆", type="image", params={"id": "SECRET"}, valid=True),
+                       SimpleNamespace(name="invalid-api", type="text", params={}, valid=False)]
+            instance = SimpleNamespace(_accessible_entries=lambda event: entries)
+            p.context.get_registered_star = lambda name: SimpleNamespace(activated=True, star_cls=instance)
+            event = Event(text="看看今天的老婆")
+            await p.ai_before_model(event)
+            req = ProviderRequest(prompt=event.message_str, func_tool=tools(*AI_TOOLS))
+            await p.ai_limit_request(event, req)
+            self.assertIn("今日老婆 | image | 参数: id", req.system_prompt)
+            self.assertNotIn("SECRET", req.system_prompt)
+            self.assertNotIn("invalid-api", req.system_prompt)
+
+    async def test_entertainment_lookup_then_call_sends_text_and_stops_without_summary(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            event = Event(text="讲个笑话")
+            event.set_extra("mahjong_ai_request", True)
+            selected = tools(*AI_TOOLS)
+            event.set_extra("mahjong_ai_toolset", selected)
+            def content(value):
+                return CallToolResult(content=[TextContent(type="text", text=value)])
+            await p.ai_tool_finished(event, selected.get_tool("query_available_apis"), {}, content("Accessible APIs: 1\n- 笑话"))
+            self.assertEqual(selected.names(), ["call_api_by_name"])
+            self.assertEqual(event.sent, [])
+            await p.ai_tool_finished(event, selected.get_tool("call_api_by_name"), {}, content("这是接口返回的笑话"))
+            self.assertTrue(selected.empty())
+            self.assertEqual(event.sent[0].get_plain_text(), "这是接口返回的笑话")
+            selected = tools("call_api_by_name")
+            event.set_extra("mahjong_ai_toolset", selected)
+            await p.ai_tool_finished(event, selected.get_tool("call_api_by_name"), {}, content("API call succeeded: sent image result for 今日老婆."))
+            self.assertEqual(len(event.sent), 1)
+            self.assertTrue(selected.empty())
+
     async def test_non_mentions_replies_and_greetings_never_pass_model_gate(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)
