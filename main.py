@@ -112,7 +112,7 @@ class MahjongHelperPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=100)
     async def ai_message_gate(self, event: AstrMessageEvent):
-        """Only a direct group @mention may reach the model; commands still run."""
+        """Allow private feature requests or explicit group @mentions."""
         if not self._ai_managed(event):
             return
         allowed = eligible(event)

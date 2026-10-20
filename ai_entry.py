@@ -14,6 +14,7 @@ AI_TOOLS = frozenset({"mahjong_quiz", "mahjong_query", "find_in_bilibili", "deli
 AI_PERSONA_NAME = "智能功能助手"
 AI_UNAVAILABLE = "AI 功能识别暂时不可用，请直接使用 /何切、/雀 或 /搜索歌曲 等原有命令。"
 AI_PERSONA = """你是 QQ 机器人的智能功能助手，只调度实际已注册的功能工具。
+私聊可以直接提出功能请求；群聊需要明确 @机器人本身。
 仅处理当前消息中的明确功能请求。普通聊天、问候、感想不调用工具，不回复。
 何切、何且、何棋等明显错字按何切练习理解。出题数量使用 count，未指定为1，一次最多5道；超过5道交给工具校验，不能拆成多次调用规避限制。
 何切出题、原书答案、练习状态或帮助使用 mahjong_quiz；雀魂公开数据、玩家搜索、我的绑定列表使用 mahjong_query。
@@ -51,7 +52,13 @@ def is_greeting(text: str) -> bool:
 
 
 def eligible(event) -> bool:
-    return explicit_group_mention(event) and not has_native_command(event) and not is_greeting(event.message_str)
+    if event.get_platform_name() != "aiocqhttp":
+        return False
+    self_id = str(event.get_self_id() or "")
+    if not self_id or str(event.get_sender_id()) == self_id:
+        return False
+    addressed = event.is_private_chat() or explicit_group_mention(event)
+    return addressed and not has_native_command(event) and not is_greeting(event.message_str)
 
 
 def modelscope_provider(provider) -> bool:

@@ -31,7 +31,7 @@ class Event:
             self.parts.insert(0, Comp.At(qq=mention))
         self.group = group
         self.message_obj = SimpleNamespace(message_id=message_id)
-        self.unified_msg_origin = "napcat:GroupMessage:" + str(group)
+        self.unified_msg_origin = "napcat:GroupMessage:" + str(group) if group else "napcat:FriendMessage:user"
         self.extras = {}
         self._has_send_oper = False
         self.stopped = False
@@ -42,6 +42,7 @@ class Event:
 
     def get_platform_name(self): return "aiocqhttp"
     def get_group_id(self): return self.group
+    def is_private_chat(self): return not self.group
     def get_sender_id(self): return "user"
     def get_self_id(self): return "bot"
     def get_messages(self): return self.parts
@@ -83,13 +84,40 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)
             for event in [Event(mention=None), Event(mention="other"), Event(mention="all"),
-                          Event(group=None), Event(text="你好"), Event(text="hello!")]:
+                          Event(group=None, mention=None, text="你好"), Event(text="你好"), Event(text="hello!")]:
                 await p.ai_message_gate(event)
                 self.assertTrue(event.call_llm)
                 await p.ai_before_model(event)
                 self.assertTrue(event.stopped)
                 self.assertFalse(event.get_extra("mahjong_ai_started"))
                 self.assertEqual(event.sent, [])
+
+    async def test_private_feature_request_reaches_tools_without_mention(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            event = Event(text="给我何切答案", mention=None, group=None)
+            self.assertTrue(eligible(event))
+            await p.ai_message_gate(event)
+            self.assertFalse(event.call_llm)
+            await p.ai_before_model(event)
+            req = ProviderRequest(prompt=event.message_str, func_tool=tools(*AI_TOOLS))
+            await p.ai_limit_request(event, req)
+            self.assertFalse(event.stopped)
+            self.assertTrue(event.get_extra("mahjong_ai_request"))
+            self.assertIn("mahjong_quiz", req.func_tool.names())
+
+    async def test_private_native_command_and_self_echo_do_not_enter_ai(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            native = Event(text="何切", mention=None, group=None)
+            native.set_extra("activated_handlers", [SimpleNamespace(event_filters=[CommandFilter("何切")])])
+            await p.ai_message_gate(native)
+            await p.ai_before_model(native)
+            self.assertTrue(native.call_llm)
+            self.assertTrue(native.stopped)
+            own = Event(mention=None, group=None)
+            own.get_sender_id = lambda: "bot"
+            self.assertFalse(eligible(own))
 
     async def test_framework_matched_native_command_is_excluded_even_with_at(self):
         with tempfile.TemporaryDirectory() as d:

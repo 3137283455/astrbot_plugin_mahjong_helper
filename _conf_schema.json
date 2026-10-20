@@ -1,6 +1,6 @@
 {
   "ai_enabled": {
-    "description": "启用 QQ 群 @机器人 的现有功能 AI 入口，同时限制 QQ AI 只用于功能工具",
+    "description": "启用现有功能 AI 入口：私聊直接提出请求，群聊须 @机器人；QQ AI 只用于功能工具",
     "type": "bool",
     "default": false
   },
