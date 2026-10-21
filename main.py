@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,12 @@ TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 UID_RE = re.compile(r"^\d{5,12}$")
 
 
+class PlayerDataMissing(ValueError):
+    def __init__(self, uid=""):
+        self.uid = uid
+        super().__init__("没有查到该玩家的战绩数据。")
+
+
 class MahjongHelperPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -72,7 +79,7 @@ class MahjongHelperPlugin(Star):
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
         manager = self.context.get_llm_tool_manager()
-        for name in ("mahjong_quiz", "mahjong_query", "bot_menu", "music_search"):
+        for name in ("mahjong_quiz", "mahjong_query", "bot_menu", "music_search", "music_action"):
             tool = manager.get_func(name)
             if tool is not None:
                 tool.active = bool(self.config.get("ai_enabled", False))
@@ -167,6 +174,9 @@ class MahjongHelperPlugin(Star):
             event.stop_event()
             return
         req.system_prompt = AI_PERSONA
+        music_plugin = self._music_plugin()
+        if music_plugin is not None:
+            req.system_prompt += "\n" + music_plugin.music_context_text(event)
         api_plugin = self._entertainment_plugin()
         if api_plugin is not None:
             # Reuse the plugin's scope checks. Only names and argument keys are
@@ -312,6 +322,29 @@ class MahjongHelperPlugin(Star):
             return
         async for result in metadata.star_cls.search_song(event, query.strip()):
             await event.send(result)
+
+    def _music_plugin(self):
+        getter = getattr(self.context, "get_registered_star", None)
+        metadata = getter("astrbot_plugin_bili_player") if getter else None
+        instance = metadata.star_cls if metadata is not None and metadata.activated else None
+        return instance if callable(getattr(instance, "music_context_text", None)) else None
+
+    @filter.llm_tool(name="music_action")
+    async def music_action_ai(self, event: AstrMessageEvent, action: str, position: int = 0, source: str = "auto"):
+        """承接当前用户刚看到的音乐列表，播放指定项、加入歌单或查看歌单。
+
+        Args:
+            action(string): play播放，add加入歌单，list查看歌单，download下载音频，video播放视频。
+            position(int): 从1开始的明确序号，add时0表示刚播放的歌曲，list时可省略。
+            source(string): auto承接当前列表，search明确搜索结果，playlist明确歌单编号。
+        """
+        if not self._claim_ai_action(event):
+            return
+        instance = self._music_plugin()
+        if instance is None:
+            await event.send(event.plain_result("音乐插件尚未就绪，请稍后重试。"))
+            return
+        await instance.music_action(event, action, position, source)
 
     @filter.command("help", aliases=["帮助"])
     async def user_help(self, event: AstrMessageEvent):
@@ -572,14 +605,14 @@ class MahjongHelperPlugin(Star):
             await event.send(event.plain_result("何切功能执行失败，请使用 /何切 重试。"))
 
     @filter.llm_tool(name="mahjong_query")
-    async def query_ai(self, event: AstrMessageEvent, player: str = "", mode: int = 4,
+    async def query_ai(self, event: AstrMessageEvent, player: str = "", mode: int = 0,
                        section: str = "基本", room: str = "", days: int = 0,
                        page: int = 1, text: bool = False):
         """调用已有雀魂查询功能，直接发送统计卡片、搜索结果或网页链接，仅收录金之间及以上公开数据。
 
         Args:
             player(string): 完整昵称或UID；留空查询发起人的主绑定，搜索时填写昵称。
-            mode(int): 三麻为整数3，四麻为整数4，默认4。
+            mode(int): 默认0自动先四麻后尝试三麻；用户明确指定三麻或四麻时才填3或4。
             section(string): 基本、顺位、立直、更多、和铳、血统、大铳、趋势、同桌、对局、网页、搜索、绑定列表。
             room(string): 不筛选留空；可填金、玉、王座。
             days(int): 整数时间范围，允许0、7、30、90、365，0为全部。
@@ -591,7 +624,7 @@ class MahjongHelperPlugin(Star):
         try:
             if not isinstance(player, str) or len(player) > 100:
                 raise ValueError("请提供完整昵称或数字 UID，长度不超过100字。")
-            if type(mode) is not int or mode not in {3, 4}:
+            if type(mode) is not int or mode not in {0, 3, 4}:
                 raise ValueError("查询模式只能是三麻或四麻。")
             if not isinstance(section, str) or section not in {*SECTIONS, "搜索", "绑定列表"}:
                 raise ValueError("请选择现有的雀魂查询栏目，或使用 /雀 查看菜单。")
@@ -606,7 +639,7 @@ class MahjongHelperPlugin(Star):
             elif section == "绑定列表":
                 results = self.majsoul_bindings(event)
             else:
-                parsed = PlayerQuery(SECTIONS[section], player.strip(), mode, room, days, page, text)
+                parsed = PlayerQuery(SECTIONS[section], player.strip(), mode or 4, room, days, page, text, mode != 0)
                 results = self._query_player_view(event, parsed)
             async for result in results:
                 await event.send(result)
@@ -764,7 +797,7 @@ class MahjongHelperPlugin(Star):
             return query, query
         players = await api.search_player(query, mode)
         if not players:
-            raise ValueError("没有找到该玩家。")
+            raise PlayerDataMissing()
         player = next((item for item in players if player_name(item) == query), players[0])
         uid = player_uid(player)
         if not uid:
@@ -955,6 +988,24 @@ class MahjongHelperPlugin(Star):
             yield result
 
     async def _query_player_view(self, event: AstrMessageEvent, parsed: PlayerQuery):
+        """Only an unspecified mode may fall back from four to three players."""
+        automatic = parsed.mode == 4 and not parsed.mode_explicit
+        try:
+            async for result in self._query_player_view_mode(event, parsed):
+                yield result
+            return
+        except PlayerDataMissing as missing:
+            if not automatic:
+                yield event.plain_result(f"没有查到{'四麻' if parsed.mode == 4 else '三麻'}战绩数据，仅收录金之间及以上公开对局。")
+                return
+            fallback = replace(parsed, player=missing.uid or parsed.player, mode=3, mode_explicit=True)
+        try:
+            async for result in self._query_player_view_mode(event, fallback):
+                yield result
+        except PlayerDataMissing:
+            yield event.plain_result("四麻、三麻都没有查到战绩数据，仅收录金之间及以上公开对局。")
+
+    async def _query_player_view_mode(self, event: AstrMessageEvent, parsed: PlayerQuery):
         """Shared read-only player view for commands and native AI tools."""
         canonical, query, mode, room = parsed.section, parsed.player, parsed.mode, parsed.room
         page, days, plain = parsed.page, parsed.days, parsed.text
@@ -965,7 +1016,15 @@ class MahjongHelperPlugin(Star):
         try:
             uid, _ = await self._resolve_target(event, query, mode)
             _, _, _, api = self._ready()
+            if canonical in {"对局", "趋势", "同桌"} and not parsed.mode_explicit:
+                stats = await api.player_stats(uid, mode, modes, since_ms)
+                if not stats or stats.get("count") in (0, "0"):
+                    raise PlayerDataMissing(uid)
             if canonical == "网页":
+                if not parsed.mode_explicit:
+                    stats = await api.player_stats(uid, mode, modes, since_ms)
+                    if not stats or stats.get("count") in (0, "0"):
+                        raise PlayerDataMissing(uid)
                 result = f"牌谱屋玩家页：\n{koromo_player_url(uid, mode, room)}"
             elif canonical == "对局":
                 records = await api.records_page(uid, mode, page, 5, modes, since_ms)
@@ -984,9 +1043,8 @@ class MahjongHelperPlugin(Star):
                     api.player_stats(uid, mode, modes, since_ms),
                     api.extended_stats(uid, mode, modes, since_ms),
                 )
-                if not stats:
-                    yield event.plain_result("没有查到战绩数据。")
-                    return
+                if not stats or stats.get("count") in (0, "0"):
+                    raise PlayerDataMissing(uid)
                 if canonical in CARD_SECTIONS and not plain and self.state_dir:
                     try:
                         payload = json.dumps([uid, mode, canonical, room, period, stats, extended],
@@ -1002,6 +1060,8 @@ class MahjongHelperPlugin(Star):
                         logger.exception("雀魂统计卡片生成失败，改用文字输出")
                 result = format_view(uid, mode, canonical, stats, extended, room, period)
             yield event.plain_result(result)
+        except PlayerDataMissing:
+            raise
         except KoromoCapRequired:
             if uid and canonical in {"对局", "趋势", "同桌"}:
                 label = {"对局": "对局记录", "趋势": "最近走势", "同桌": "常见同桌"}[canonical]
@@ -1019,8 +1079,9 @@ class MahjongHelperPlugin(Star):
 
     @filter.command("雀魂查询")
     async def stats_four(self, event: AstrMessageEvent, query: str = "", room: str = ""):
-        """查询四麻战绩。"""
-        yield event.plain_result(await self._stats_text(event, 4, query, room))
+        """默认查询四麻，无公开数据时查询三麻。"""
+        async for result in self._query_player_view(event, PlayerQuery("基本", query, 4, room, text=True)):
+            yield result
 
     @filter.command("查询四麻")
     async def stats_four_alias(self, event: AstrMessageEvent, query: str = "", room: str = ""):

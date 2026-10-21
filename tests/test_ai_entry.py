@@ -80,6 +80,20 @@ def tools(*names):
 
 
 class AIEntryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_query_ai_distinguishes_default_mode_from_explicit_four(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            queries = []
+            async def view(event, query):
+                queries.append(query)
+                yield event.plain_result("查询结果")
+            p._query_player_view = view
+            for i, kwargs in enumerate(({}, {"mode": 4}, {"mode": 3})):
+                event = Event(message_id=str(i))
+                event.set_extra("mahjong_ai_request", True)
+                await p.query_ai(event, player="12105509", **kwargs)
+            self.assertEqual([(q.mode, q.mode_explicit) for q in queries], [(4, False), (4, True), (3, True)])
+
     async def test_music_search_displays_native_candidates_without_auto_play(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)

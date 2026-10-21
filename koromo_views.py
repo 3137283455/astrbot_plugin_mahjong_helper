@@ -34,6 +34,7 @@ class PlayerQuery:
     days: int = 0
     page: int = 1
     text: bool = False
+    mode_explicit: bool = False
 
 
 def parse_player_query(section: str, *args: str) -> PlayerQuery:
@@ -68,14 +69,16 @@ def parse_player_query(section: str, *args: str) -> PlayerQuery:
         raise ValueError("查询栏目只能填写一个，例如 /雀 玩家 三 铳 30天。")
     canonical = prefix_section or (suffix_sections[0] if suffix_sections else "基本")
 
-    mode, room, days, page, as_text = 4, "", 0, 1, False
+    mode, room, days, page, as_text, mode_explicit = 4, "", 0, 1, False, False
     for token in options:
         if token in SECTIONS:
             continue
         if token in {"三", "三麻"}:
             mode = 3
+            mode_explicit = True
         elif token in {"四", "四麻"}:
             mode = 4
+            mode_explicit = True
         elif token in {"金", "金间", "金之间"}:
             room = "金"
         elif token in {"玉", "玉间", "玉之间"}:
@@ -93,13 +96,15 @@ def parse_player_query(section: str, *args: str) -> PlayerQuery:
             page = int(token[1:-1] if token.startswith("第") else token)
         elif token == "3":
             mode = 3
+            mode_explicit = True
         elif token == "4":
             mode = 4
+            mode_explicit = True
         else:
             raise ValueError("页码只适用于 /雀 玩家 局 页码。")
     if not 1 <= page <= 20:
         raise ValueError("对局页码只能是 1～20。")
-    return PlayerQuery(canonical, player, mode, room, days, page, as_text)
+    return PlayerQuery(canonical, player, mode, room, days, page, as_text, mode_explicit)
 
 RATES = {
     "和牌率", "放铳率", "自摸率", "默听率", "流局率", "流听率", "副露率", "立直率",
