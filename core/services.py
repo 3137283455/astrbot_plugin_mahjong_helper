@@ -95,6 +95,10 @@ class SearchService:
         self._bilibili = bilibili
         self._snapshots = snapshots or SearchSnapshotStore()
 
+    def from_candidates(self, *, session_id: str, query: str, candidates) -> SearchSnapshot:
+        """Give saved exact pages the same selection contract as online results."""
+        return self._snapshots.create(session_id=session_id, query=query, candidates=tuple(candidates)[:SEARCH_LIMIT])
+
     async def search(
         self,
         *,

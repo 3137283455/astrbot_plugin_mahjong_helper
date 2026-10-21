@@ -68,7 +68,7 @@ from .core.services import (
 
 
 PLUGIN_NAME = "astrbot_plugin_bili_player"
-INTERACTION_TIMEOUT_SECONDS = 90
+INTERACTION_TIMEOUT_SECONDS = 300
 SEARCH_SNAPSHOT_TTL_SECONDS = 300.0
 SEARCH_SNAPSHOT_MAX_ENTRIES = 1024
 # AstrBot's weixin_oc adapter accepts File outbound but ignores Record.
@@ -235,6 +235,13 @@ class _SelectionWait:
     cancelled: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _MusicContext:
+    snapshot: SearchSnapshot
+    source: str = "search"
+    delivery: str = "audio"
+
+
 @dataclass(slots=True)
 class _LlmSearch:
     """A cancellable, short-lived authorization for one hidden candidate set."""
@@ -247,8 +254,9 @@ class _LlmSearch:
 class _SelectionSessionFilter(SessionFilter):
     """Route only an active result-selection reply into AstrBot's waiter."""
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, user_id: str | None = None) -> None:
         self._session_id = session_id
+        self._user_id = user_id
 
     @property
     def session_id(self) -> str:
@@ -256,6 +264,8 @@ class _SelectionSessionFilter(SessionFilter):
 
     def filter(self, event: AstrMessageEvent) -> str:
         if event.unified_msg_origin != self._session_id:
+            return ""
+        if self._user_id is not None and str(event.get_sender_id()) != self._user_id:
             return ""
         message = " ".join(event.message_str.split())
         if _is_selection_reply(message):
@@ -419,6 +429,7 @@ class ListenMusicPlugin(Star):
         self._delivery: DeliveryService | None = None
         self._playlist: PlaylistStore | None = None
         self._recent_searches: dict[tuple[str, str], SearchSnapshot] = {}
+        self._music_contexts: dict[tuple[str, str], _MusicContext] = {}
         self._last_played: dict[tuple[str, str], BilibiliCandidate] = {}
         self._playlist_scope = str((config or {}).get("playlist_scope", "personal"))
         self._selection_waits: dict[str, _SelectionWait] = {}
@@ -503,6 +514,7 @@ class ListenMusicPlugin(Star):
         self._delivery = None
         self._playlist = None
         self._recent_searches.clear()
+        self._music_contexts.clear()
         self._last_played.clear()
         self._search = None
         self._media = None
@@ -526,6 +538,96 @@ class ListenMusicPlugin(Star):
             return f"group:{group_id}"
         return f"user:{event.get_sender_id()}"
 
+    def _saved_candidates(self, event, query):
+        if parse_bilibili_video_refs(query):
+            return []  # Explicit BV/AV requests retain their original multi-page choice rules.
+        store = getattr(self, "_playlist", None)
+        return store.search(self._playlist_owner(event), query)[:SEARCH_LIMIT] if store else []
+
+    def _remember_music_list(self, event, snapshot, *, source="search", delivery="audio"):
+        if not hasattr(self, "_music_contexts"):
+            self._music_contexts = {}
+        now = time.monotonic()
+        self._music_contexts = {key: value for key, value in self._music_contexts.items()
+                                if value.snapshot.expires_at > now}
+        if len(self._music_contexts) >= SEARCH_SNAPSHOT_MAX_ENTRIES:
+            oldest = min(self._music_contexts, key=lambda key: self._music_contexts[key].snapshot.created_at)
+            self._music_contexts.pop(oldest, None)
+        self._music_contexts[self._playlist_key(event)] = _MusicContext(snapshot, source, delivery)
+
+    def music_context_text(self, event):
+        context = getattr(self, "_music_contexts", {}).get(self._playlist_key(event))
+        if context is None or context.snapshot.expires_at <= time.monotonic():
+            return "当前用户没有有效的音乐列表；不能猜测编号。"
+        lines = ["当前用户刚看到的音乐列表（5分钟内有效，编号固定）：",
+                 "来源：" + ("歌单" if context.source == "playlist" else "搜索结果")]
+        lines.extend(f"{i}. {song.display_title}" for i, song in enumerate(context.snapshot.candidates, 1))
+        return "\n".join(lines)
+
+    async def music_action(self, event, action, position=0, source="auto"):
+        """Resolve a follow-up against this user's visible list, never model history."""
+        if action not in {"play", "audio", "add", "download", "video", "list", "cancel"} or source not in {"auto", "search", "playlist"}:
+            await event.send(event.plain_result("可播放列表中的歌曲、加入歌单或查看歌单。"))
+            return
+        if type(position) is not int or position < 0:
+            await event.send(event.plain_result("请提供正确的歌曲序号。"))
+            return
+        if action == "list":
+            async for result in self.playlist_command(event):
+                await event.send(result)
+            return
+        key = self._playlist_key(event)
+        if action == "cancel":
+            getattr(self, "_music_contexts", {}).pop(key, None)
+            await event.send(event.plain_result("已取消选歌。"))
+            return
+        store = getattr(self, "_playlist", None)
+        context = getattr(self, "_music_contexts", {}).get(key)
+        candidate = None
+        if action == "add" and position == 0:
+            candidate = getattr(self, "_last_played", {}).get(key)
+        elif source == "playlist" and store:
+            candidate = store.get(self._playlist_owner(event), position)
+        elif context and context.snapshot.expires_at > time.monotonic() and source in {"auto", context.source}:
+            candidate = context.snapshot.candidate_at(position)
+        if candidate is None:
+            await event.send(event.plain_result("没有对应的有效歌曲。请先搜索或查看歌单，列表保留5分钟；再说“播放第二首”或“把第二首加入歌单”。"))
+            return
+        if action == "add":
+            if store is None:
+                await event.send(event.plain_result("歌单尚未就绪。"))
+                return
+            added = store.add(self._playlist_owner(event), candidate)
+            await event.send(event.plain_result(f"{'已加入歌单' if added else '歌单里已有这首'}：{candidate.display_title}"))
+            return
+        settings = self._settings
+        want_video = action == "video" or action == "play" and context and context.delivery == "video" and source != "playlist"
+        mode = _DeliveryMode.VIDEO if want_video else (
+            _DeliveryMode.DOWNLOAD if action == "download" else _action_for_delivery_key("audio", settings))
+        if mode is _DeliveryMode.VIDEO and not settings.video_allowed or mode is not _DeliveryMode.VIDEO and not settings.audio_allowed:
+            await event.send(event.plain_result("当前播放器配置未开启这种媒体类型。"))
+            return
+        if _selection_requires_download(candidate, mode, settings.limits.voice):
+            mode = _DeliveryMode.DOWNLOAD
+        try:
+            await self._deliver_media(event, candidate=candidate, action=mode)
+        except (DeliveryError, FfmpegUnavailableError, MediaError) as exc:
+            await event.send(event.plain_result(str(exc)))
+        except Exception:
+            logger.exception("bili-player contextual delivery failed")
+            await event.send(event.plain_result("歌曲发送失败，请稍后重试。"))
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=120)
+    async def music_followup(self, event: AstrMessageEvent):
+        followup = _parse_music_followup(event.message_str)
+        if followup is None:
+            return
+        if not getattr(self, "_music_contexts", {}).get(self._playlist_key(event)) and followup[2] != "playlist":
+            return
+        event.should_call_llm(True)
+        await self.music_action(event, *followup)
+        event.stop_event()
+
     @filter.command("歌单")
     async def playlist_command(
         self, event: AstrMessageEvent, action: str = "", number: str = ""
@@ -540,6 +642,13 @@ class ListenMusicPlugin(Star):
         key = self._playlist_key(event)
         if action in {"", "列表", "查看", "帮助", "帮"}:
             songs = store.list(owner)
+            if not songs:
+                getattr(self, "_music_contexts", {}).pop(key, None)
+            if songs:
+                now = time.monotonic()
+                snapshot = SearchSnapshot("playlist-" + str(time.monotonic_ns()), event.unified_msg_origin,
+                                          "我的歌单", tuple(songs), now, now + SEARCH_SNAPSHOT_TTL_SECONDS)
+                self._remember_music_list(event, snapshot, source="playlist")
             lines = [f"🎵 {'群共享' if owner.startswith('group:') else '我的'}歌单 · {len(songs)} 首"]
             lines.extend(
                 f"{index}. {song.display_title} · {song.uploader}"
@@ -662,7 +771,10 @@ class ListenMusicPlugin(Star):
         self._clear_llm_search(session_id)
         await self._cancel_selection_wait(session_id)
         try:
-            snapshot = await self._require_search().search(
+            saved = self._saved_candidates(event, query)
+            snapshot = self._require_search().from_candidates(
+                session_id=session_id, query=query, candidates=saved,
+            ) if saved else await self._require_search().search(
                 session_id=session_id,
                 query=query,
                 video_ref=None,
@@ -717,8 +829,13 @@ class ListenMusicPlugin(Star):
         self._clear_llm_search(session_id)
         await self._cancel_selection_wait(session_id)
         fuzzy_query = len(parse_bilibili_video_refs(query)) > 1
+        getattr(self, "_music_contexts", {}).pop(self._playlist_key(event), None)
+        getattr(self, "_recent_searches", {}).pop(self._playlist_key(event), None)
         try:
-            snapshot = await self._require_search().search(
+            saved = self._saved_candidates(event, query)
+            snapshot = self._require_search().from_candidates(
+                session_id=session_id, query=query, candidates=saved,
+            ) if saved else await self._require_search().search(
                 session_id=session_id,
                 query=query,
                 video_ref=None if fuzzy_query else parse_bilibili_video_ref(query),
@@ -741,7 +858,10 @@ class ListenMusicPlugin(Star):
         recent_searches = getattr(self, "_recent_searches", None)
         if recent_searches is not None:
             recent_searches[self._playlist_key(event)] = snapshot
-        yield event.plain_result(self._format_selection_results(snapshot))
+        self._remember_music_list(event, snapshot, delivery="video" if "视频" in usage else "audio")
+        prefix = "🎵 优先找到歌单内的歌曲，未进行在线搜索。\n" if saved else ""
+        yield event.plain_result(prefix + self._format_selection_results(snapshot)
+                                 + "\n5分钟内可说：播放第二首、把第二首加入歌单。")
         event.stop_event()
 
     async def find_in_bilibili_for_llm(
@@ -793,7 +913,10 @@ class ListenMusicPlugin(Star):
                 elif delivery_key in {"audio", "download"}:
                     # 只有可信的普通音频意图才做歌名/分P语义筛选。
                     search_kwargs["song_title"] = music.title
-            snapshot = await self._require_search().search(**search_kwargs)
+            saved = self._saved_candidates(event, music.query)
+            snapshot = self._require_search().from_candidates(
+                session_id=session_id, query=music.query, candidates=saved,
+            ) if saved and not fuzzy_query else await self._require_search().search(**search_kwargs)
 
             if not self._complete_llm_search(session_id, lease, snapshot, delivery_key):
                 return _tool_error("歌曲请求已被新的消息替换")
@@ -863,6 +986,10 @@ class ListenMusicPlugin(Star):
                 # Downloading an audio file is never automatic: the user must
                 # confirm the exact candidate from the visible catalogue.
                 let_user_choose = True
+            if let_user_choose:
+                self._remember_music_list(event, snapshot, delivery=delivery_key)
+                if hasattr(self, "_recent_searches"):
+                    self._recent_searches[self._playlist_key(event)] = snapshot
             if bool(let_user_choose):
                 if not await self._start_selection_wait(event, snapshot):
                     self._discard_llm_search(session_id, lease)
@@ -972,7 +1099,7 @@ class ListenMusicPlugin(Star):
         """Register the only selection path for a search result in this chat."""
 
         session_id = event.unified_msg_origin
-        selection_filter = _SelectionSessionFilter(session_id)
+        selection_filter = _SelectionSessionFilter(session_id, str(event.get_sender_id()))
         waiter = SessionWaiter(selection_filter, session_id, False)
         selection = _SelectionWait(waiter.session_controller, asyncio.Event())
         if not await self._replace_selection_wait(session_id, selection):
@@ -1013,10 +1140,7 @@ class ListenMusicPlugin(Star):
         try:
             await waiter.register_wait(select_song, timeout=INTERACTION_TIMEOUT_SECONDS)
         except TimeoutError:
-            if not selection.cancelled and self._initialized:
-                await source_event.send(
-                    source_event.plain_result("没有收到选歌回复，本次搜索已结束。")
-                )
+            pass  # Expiry is explained only when a user next selects a song.
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1045,6 +1169,10 @@ class ListenMusicPlugin(Star):
         try:
             if " ".join(reply.message_str.split()) == "取消":
                 await reply.send(reply.plain_result("已取消选歌。"))
+                return
+            followup = _parse_music_followup(reply.message_str)
+            if followup is not None and getattr(self, "_music_contexts", {}).get(self._playlist_key(reply)):
+                await self.music_action(reply, *followup)
                 return
             parsed = _parse_selection_for_settings(reply.message_str, settings)
             if parsed is None:
@@ -1621,8 +1749,44 @@ def _selection_help(settings: PluginSettings) -> str:
     return "请回复：" + "；".join(options) + "。"
 
 
+def _parse_music_followup(message: str):
+    text = re.sub(r"[\s，。！？、,.!?~～]+", "", message)
+    text = re.sub(r"^(?:请|帮我|给我)", "", text)
+    number = r"(?P<number>\d{1,4}|[一二三四五六七八九十两]{1,3})"
+    def position(match):
+        raw = match.group("number")
+        if raw.isdigit():
+            return int(raw)
+        if raw == "十":
+            return 10
+        digits = {word: i for i, word in enumerate("零一二三四五六七八九")}
+        digits["两"] = 2
+        if "十" in raw:
+            left, right = raw.split("十", 1)
+            return digits.get(left, 1) * 10 + digits.get(right, 0)
+        return digits.get(raw, 0)
+    if text == "取消":
+        return "cancel", 0, "auto"
+    if re.fullmatch(r"(?:把|将)?(?:这首|刚才那首|刚播放的歌)(?:歌)?(?:加到|加入|加进|添加到|收藏到?)(?:我的)?歌单(?:里)?", text):
+        return "add", 0, "auto"
+    match = re.fullmatch(r"(?:把|将)?(?:第)?" + number + r"(?:首|个|号)?(?:歌曲|歌)?(?:加到|加入|加进|添加到|收藏到?)(?:我的)?歌单(?:里)?", text)
+    if match:
+        return "add", position(match), "auto"
+    match = re.fullmatch(r"(?:收藏|加入歌单|添加到歌单)(?:第)?" + number + r"(?:首|个|号)?", text)
+    if match:
+        return "add", position(match), "auto"
+    match = re.fullmatch(r"(?P<verb>播放|放|播|听听|听|下载|看)(?:一下)?(?P<source>歌单(?:里|中)?(?:的)?)?(?:第)?" + number + r"(?:首|个|号)?(?:歌曲|歌)?(?:吧|听听)?", text)
+    if match:
+        action = {"下载": "download", "看": "video", "听": "audio", "听听": "audio"}.get(match.group("verb"), "play")
+        return action, position(match), "playlist" if match.group("source") else "auto"
+    match = re.fullmatch(r"第" + number + r"(?:首|个|号)?", text)
+    if match:
+        return "play", position(match), "auto"
+    return None
+
+
 def _is_selection_reply(message: str) -> bool:
-    return message == "取消" or _parse_selection(message) is not None
+    return message == "取消" or _parse_selection(message) is not None or _parse_music_followup(message) is not None
 
 
 def _resolve_delivery_key(text: object, settings: PluginSettings) -> str:

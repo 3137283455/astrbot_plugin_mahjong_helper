@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import re
+import unicodedata
 from pathlib import Path
 
 from .models import BilibiliCandidate
@@ -54,6 +56,20 @@ class PlaylistStore:
                 ),
             )
             return cursor.rowcount == 1
+
+    def search(self, owner: str, query: str) -> list[BilibiliCandidate]:
+        """Match saved titles within this owner before doing an online search."""
+        def normalize(value):
+            return re.sub(r"[^\w\u4e00-\u9fff]", "", unicodedata.normalize("NFKC", value).casefold())
+        words = [normalize(word) for word in query.split() if normalize(word)]
+        if not words:
+            return []
+        matches = []
+        for song in self.list(owner):
+            haystack = normalize(" ".join((song.title, song.page_title, song.search_title, song.uploader, song.bvid)))
+            if all(word in haystack for word in words):
+                matches.append(song)
+        return matches
 
     def get(self, owner: str, position: int) -> BilibiliCandidate | None:
         if position < 1:

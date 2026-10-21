@@ -1,6 +1,4 @@
-# bili播放器 · 歌单版
-
-本版本基于 [57Darling02/astrbot_plugin_bili_player](https://github.com/57Darling02/astrbot_plugin_bili_player) 修改，由 3137283455 维护歌单功能。
+# bili播放器
 
 面向 AstrBot 的 Bilibili 点播插件：搜索并锁定具体分 P，按意图发送视频、可播放音频或音频文件；平台不适配时自动改发文件。
 
@@ -18,7 +16,7 @@
 3. 在 AstrBot 插件仓库中填入：
 
 ```text
-https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/music-player
+https://github.com/57Darling02/astrbot_plugin_bili_player
 ```
 
 运行要求：AstrBot `>=4.26,<5`、Python `>=3.10`、可访问 Bilibili。自然语言点播需要模型支持工具调用；建议 Provider 工具超时直听 ≥ 300 秒、直接视频 ≥ 900 秒，并关闭 `provider_settings.show_tool_use_status` 与 `show_tool_call_result`，避免工具过程文字出现在聊天里。
@@ -132,3 +130,9 @@ https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/music-player
 ## 开发者
 
 设计契约、模块边界与修改规范见 [docs/](docs/README.md)。
+# 搜歌与连续操作
+
+搜歌、点歌先查自己的歌单（配置为群共享时查本群歌单），命中后复用保存的视频分P，未命中再在线搜索。
+
+出现列表后，5分钟内可说“放第二个”“播放第二首”“把第二首加入歌单”“收藏第二首”。查看歌单后同样可以承接编号；也可明确说“播放歌单第二首”。群成员之间的列表分别保存。
+

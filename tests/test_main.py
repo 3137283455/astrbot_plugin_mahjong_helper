@@ -229,6 +229,12 @@ class _Event(listen_main.AstrMessageEvent):
     def get_platform_name(self) -> str:
         return self._platform_name
 
+    def get_sender_id(self) -> str:
+        return "user"
+
+    def get_group_id(self) -> str:
+        return ""
+
     def should_call_llm(self, value: bool) -> None:
         self.call_llm = value
 
@@ -1530,7 +1536,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(controller.stopped)
         self.assertEqual(reply.sent, [("plain", "搜索结果已过期，请重新搜索。")])
 
-    async def test_selection_wait_timeout_notifies_then_cleans_up(self) -> None:
+    async def test_selection_wait_timeout_cleans_up_without_unsolicited_messages(self) -> None:
         class TimedOutWaiter:
             async def register_wait(self, *_args, **_kwargs):
                 raise TimeoutError
@@ -1554,10 +1560,7 @@ class MainContractTests(unittest.IsolatedAsyncioTestCase):
             selection=selection,
         )
 
-        self.assertEqual(
-            source.sent,
-            [("plain", "没有收到选歌回复，本次搜索已结束。")],
-        )
+        self.assertEqual(source.sent, [])
         self.assertTrue(selection.finished.is_set())
         self.assertEqual(plugin._selection_waits, {})
         self.assertNotIn(selection_filter, listen_main.FILTERS)
