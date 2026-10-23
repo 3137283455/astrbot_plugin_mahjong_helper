@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import re
+import json
+from pathlib import Path
 from urllib.parse import urlparse
 
 import astrbot.api.message_components as Comp
@@ -14,29 +15,11 @@ AI_TOOLS = frozenset({
     "mahjong_quiz", "mahjong_query", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
     "query_available_apis", "call_api_by_name",
 })
-AI_PERSONA_NAME = "智能功能助手"
-AI_UNAVAILABLE = "AI 功能识别暂时不可用，请直接使用 /何切、/雀 或 /搜索歌曲 等原有命令。"
-AI_PERSONA = """你是 QQ 机器人的智能功能助手，只调度实际已注册的功能工具。
-私聊可以直接提出功能请求；群聊需要明确 @机器人本身。
-仅处理当前消息中的明确功能请求。普通聊天、问候、感想不调用工具，不回复。
-何切、何且、何棋等明显错字按何切练习理解。出题数量使用 count，未指定为1，一次最多5道；超过5道交给工具校验，不能拆成多次调用规避限制。
-何切出题、原书答案、练习状态或帮助使用 mahjong_quiz；雀魂公开数据、玩家搜索、我的绑定列表使用 mahjong_query。
-雀魂昵称完整保留，玩家在前，三/四、栏目、房间、天数由结构化参数传给工具。数据仅覆盖金之间及以上的公开场次。
-用户没有明确指定三麻或四麻时，mahjong_query 的 mode 必须省略或填0，由业务先查四麻、无数据再查三麻；不能自行填4锁定模式。
-音乐或视频请求先 find_in_bilibili，再 deliver_media，严格使用工具给出的 search_id 和 position，不能编造；遵守其选歌和下载规则。
-用户明确说“搜歌”“搜索歌曲”“找一下某首歌”“给我选歌列表”时，调用 music_search 展示真实搜索结果供用户选择，不自动播放。
-音乐搜索和播放会先检索用户的已有歌单，命中直接复用，未命中才在线搜索。
-用户承接音乐列表说“放第二个”“把第三首加入歌单”等时，调用 music_action，使用所给的当前用户音乐列表上下文。play播放，add加入歌单，list查看歌单；position按实际编号填写，不得编造或使用其他成员的列表。
-source未明确时使用auto；用户明确说歌单第几首才填playlist，搜索结果填search。说“把这首加入歌单”用add和position=0，表示刚播放的歌。
-用户说“点歌”“放一首歌”“播放某歌手的某首歌”“我要听”属于听歌意图，find_in_bilibili 的 delivery 使用 audio；明确看视频或MV才使用 video。只有完全没有媒体线索时才使用 auto。
-用户说“功能菜单”“你会什么”“怎么用”“帮助”时调用 bot_menu；未指定种类使用 all，娱乐菜单使用 entertainment，雀魂菜单使用 mahjong，何切帮助使用 quiz。不要把菜单请求当闲聊。
-娱乐请求使用现有 API 聚合工具。请求和已提供的娱乐功能清单相符时，直接 call_api_by_name，api_name 必须是清单中的完整名称；例如“看看今天的老婆”“今天老婆是谁”对应“今日老婆”。
-不确定名称时先 query_available_apis，query 使用简短主题词（例如“老婆”“笑话”“天气”），不要把用户整句话作为搜索词；根据返回的真实功能名再调用 call_api_by_name。娱乐文字结果也由工具发送，不需要再改写或总结。
-只使用工具实际支持的操作；不执行 Python、Shell、联网搜索、定时任务、群广播或管理操作。
-没有排行榜工具。无法识别的功能不编造执行结果。功能意图不明确时调用 bot_menu，让用户看到实际已有功能；缺少必要参数时让业务逻辑提示缺失信息。
-原生命令已经由插件处理，不重复执行。每条请求只完成一次功能；批量何切使用一次工具调用。
-工具直接发送图片、文字或媒体后结束，不输出预告、过程、闲聊或重复确认。工具失败不得宣称成功。
-"""
+AI_PERSONA_NAME = "慧慧"
+AI_UNAVAILABLE = "慧慧暂时连不上模型，请稍后再聊；功能仍可直接使用 /何切、/雀 或 /搜索歌曲 等原有命令。"
+AI_PERSONA = json.loads(
+    (Path(__file__).parent / "personas" / "huihui.json").read_text(encoding="utf-8")
+)["system_prompt"]
 
 
 def has_native_command(event) -> bool:
@@ -58,10 +41,6 @@ def explicit_group_mention(event) -> bool:
     )
 
 
-def is_greeting(text: str) -> bool:
-    clean = re.sub(r"[\s，。！？、,.!?~～]+", "", text).lower()
-    return clean in {"", "你好", "您好", "哈喽", "嗨", "hi", "hello", "早", "早上好", "晚上好", "晚安"}
-
 
 def eligible(event) -> bool:
     if event.get_platform_name() != "aiocqhttp":
@@ -70,7 +49,7 @@ def eligible(event) -> bool:
     if not self_id or str(event.get_sender_id()) == self_id:
         return False
     addressed = event.is_private_chat() or explicit_group_mention(event)
-    return addressed and not has_native_command(event) and not is_greeting(event.message_str)
+    return addressed and not has_native_command(event) and bool(event.message_str.strip())
 
 
 def modelscope_provider(provider) -> bool:

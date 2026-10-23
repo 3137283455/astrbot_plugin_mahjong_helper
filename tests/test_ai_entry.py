@@ -17,7 +17,7 @@ from astrbot.core.provider.entities import LLMResponse, ProviderRequest
 from astrbot.core.star.filter.command import CommandFilter
 from mcp.types import CallToolResult, TextContent
 
-from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS, eligible, modelscope_provider
+from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS, AI_UNAVAILABLE, eligible, modelscope_provider
 from astrbot_plugin_mahjong_helper.database import MahjongDatabase
 from astrbot_plugin_mahjong_helper.main import MahjongHelperPlugin
 from astrbot_plugin_mahjong_helper.nanikiru_core import QuestionStore, StateStore
@@ -169,17 +169,65 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(event.sent), 1)
             self.assertTrue(selected.empty())
 
-    async def test_non_mentions_replies_and_greetings_never_pass_model_gate(self):
+    async def test_non_mentions_and_other_mentions_never_pass_model_gate(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)
             for event in [Event(mention=None), Event(mention="other"), Event(mention="all"),
-                          Event(group=None, mention=None, text="你好"), Event(text="你好"), Event(text="hello!")]:
+                          Event(text="你好", mention=None)]:
                 await p.ai_message_gate(event)
                 self.assertTrue(event.call_llm)
                 await p.ai_before_model(event)
                 self.assertTrue(event.stopped)
                 self.assertFalse(event.get_extra("mahjong_ai_started"))
                 self.assertEqual(event.sent, [])
+
+    async def test_addressed_greetings_and_chat_pass_without_tools(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            for i, event in enumerate([Event(text="你好"), Event(text="hello!"),
+                                       Event(text="今天打麻将输了", mention=None, group=None)]):
+                event.message_obj.message_id = str(i)
+                await p.ai_message_gate(event)
+                self.assertFalse(event.call_llm)
+                await p.ai_before_model(event)
+                req = ProviderRequest(prompt=event.message_str)
+                await p.ai_limit_request(event, req)
+                self.assertFalse(event.stopped)
+                response = LLMResponse(role="assistant", completion_text="我在呢，想聊什么？")
+                await p.ai_no_chat_response(event, response)
+                self.assertEqual(response.completion_text, "我在呢，想聊什么？")
+                event.result = MessageEventResult(chain=[Comp.Plain(response.completion_text)], result_content_type=ResultContentType.LLM_RESULT)
+                await p.ai_no_chat_result(event)
+                self.assertTrue(event.result.chain)
+
+    async def test_chat_history_is_scoped_by_member_and_conversation(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = plugin(d)
+            first = Event(text="我喜欢陈奕迅")
+            await p.ai_before_model(first)
+            req = ProviderRequest(prompt=first.message_str, conversation=SimpleNamespace(cid="one"))
+            await p.ai_limit_request(first, req)
+            await p.ai_no_chat_response(first, LLMResponse(role="assistant", completion_text="他的歌很耐听呢。"))
+            for n, sender, cid, expected in [(2,"user","one",2),(3,"other","one",0),(4,"user","two",0)]:
+                event = Event(text="我刚说喜欢谁？", message_id=str(n))
+                event.get_sender_id = lambda value=sender: value
+                await p.ai_before_model(event)
+                req = ProviderRequest(prompt=event.message_str, conversation=SimpleNamespace(cid=cid))
+                await p.ai_limit_request(event, req)
+                self.assertEqual(len(req.contexts), expected)
+                if expected:
+                    self.assertEqual(req.contexts[0]["content"], "我喜欢陈奕迅")
+
+    async def test_persona_edits_from_dashboard_are_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            from unittest.mock import AsyncMock
+            p = plugin(d)
+            p.context.persona_manager = SimpleNamespace(get_persona=AsyncMock(return_value=SimpleNamespace(system_prompt="慧慧自定义设定")))
+            event = Event(text="你好")
+            await p.ai_before_model(event)
+            req = ProviderRequest(prompt=event.message_str)
+            await p.ai_limit_request(event, req)
+            self.assertEqual(req.system_prompt, "慧慧自定义设定")
 
     async def test_private_feature_request_reaches_tools_without_mention(self):
         with tempfile.TemporaryDirectory() as d:
@@ -240,7 +288,7 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
             blocked = Event(message_id="2")
             await p.ai_before_model(blocked)
             self.assertTrue(blocked.stopped)
-            self.assertIn("AI 功能识别暂时不可用", blocked.sent[0].get_plain_text())
+            self.assertEqual(AI_UNAVAILABLE, blocked.sent[0].get_plain_text())
 
     async def test_duplicate_platform_event_does_not_start_a_second_request(self):
         with tempfile.TemporaryDirectory() as d:
@@ -331,7 +379,7 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.result.chain, [])
             event.result = MessageEventResult().message("HTTP 429: quota exhausted")
             await p.ai_no_chat_result(event)
-            self.assertIn("AI 功能识别暂时不可用", event.result.get_plain_text())
+            self.assertEqual(AI_UNAVAILABLE, event.result.get_plain_text())
 
 
 if __name__ == "__main__":

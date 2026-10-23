@@ -1,6 +1,6 @@
 {
   "ai_enabled": {
-    "description": "启用现有功能 AI 入口：私聊直接提出请求，群聊须 @机器人；QQ AI 只用于功能工具",
+    "description": "启用慧慧 AI：支持闲聊与已有功能，私聊直接回复，群聊须 @机器人",
     "type": "bool",
     "default": false
   },
