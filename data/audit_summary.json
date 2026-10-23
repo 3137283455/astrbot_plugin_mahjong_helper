@@ -1,0 +1,20 @@
+{
+  "question_count": 601,
+  "printed_labels_verified": 1202,
+  "ocr_verified": 1176,
+  "visually_verified_labels": 26,
+  "cross_page_answers": 54,
+  "answers_with_missing_text_in_old_dataset": 110,
+  "answers_with_neighbor_text_in_old_dataset": 63,
+  "answers_with_old_diagram_top_cut": 8,
+  "question_images_reused": 600,
+  "question_images_rebuilt": 1,
+  "source_has_no_explanation_text": [],
+  "source_sha256": {
+    "H300": "3e456dce7dd3de292e897c83ecf077a881b6aa402137e428181981de744bbab8",
+    "H301": "baeaa3aeb703805ca3a45fdf97496eb735a4a726618bf7c8d89e423163df41fc"
+  },
+  "render_scale": 2.5,
+  "answers_with_entire_explanation_missing": 58,
+  "affected_answers_union": 163
+}

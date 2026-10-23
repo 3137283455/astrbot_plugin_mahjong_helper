@@ -549,8 +549,9 @@ class MahjongHelperPlugin(Star):
             return source
         scale = max(2, min(4, int(self.config.get("image_scale", 2) or 2)))
         cache_dir = self.state_dir / "hd_images"
-        target = cache_dir / f"{source.stem}-v1-{scale}x.png"
         try:
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+            target = cache_dir / f"{source.stem}-{digest}-{scale}x.png"
             if target.is_file() and target.stat().st_mtime >= source.stat().st_mtime:
                 return target
             from PIL import Image, ImageFilter
