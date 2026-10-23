@@ -34,6 +34,7 @@ BILIBILI_PASSPORT_ORIGIN = "https://passport.bilibili.com"
 _NAV_URL = f"{BILIBILI_API_ORIGIN}/x/web-interface/nav"
 _SEARCH_URL = f"{BILIBILI_API_ORIGIN}/x/web-interface/wbi/search/type"
 _VIEW_URL = f"{BILIBILI_API_ORIGIN}/x/web-interface/wbi/view"
+_PAGES_URL = f"{BILIBILI_API_ORIGIN}/x/player/pagelist"
 _PLAY_URL = f"{BILIBILI_API_ORIGIN}/x/player/wbi/playurl"
 _QR_GENERATE_URL = f"{BILIBILI_PASSPORT_ORIGIN}/x/passport-login/web/qrcode/generate"
 _QR_POLL_URL = f"{BILIBILI_PASSPORT_ORIGIN}/x/passport-login/web/qrcode/poll"
@@ -135,6 +136,12 @@ QrLoginState: TypeAlias = Literal["waiting", "scanned", "confirmed", "expired"]
 
 class BilibiliError(RuntimeError):
     """Raised when a Bilibili response cannot be used safely."""
+
+
+class BilibiliHttpError(BilibiliError):
+    def __init__(self, status: int) -> None:
+        self.status = status
+        super().__init__(f"Bilibili request failed (HTTP {status})")
 
 
 class BilibiliApiError(BilibiliError):
@@ -504,7 +511,23 @@ class BilibiliClient:
     async def get_video(self, bvid: str) -> BilibiliVideo:
         """Fetch a video's current page list for matching and audio resolution."""
         normalized_bvid = _normalise_bvid(bvid)
-        data = await self._wbi_data(_VIEW_URL, {"bvid": normalized_bvid})
+        try:
+            data = await self._wbi_data(_VIEW_URL, {"bvid": normalized_bvid})
+        except BilibiliHttpError as exc:
+            if exc.status != 412:
+                raise
+            # Search already supplied the title. This public endpoint supplies
+            # actual CIDs and durations without depending on the detail route.
+            payload, _ = await self._request_json(
+                _PAGES_URL, params={"bvid": normalized_bvid},
+            )
+            code = _to_int(payload.get("code"), -1)
+            if code != 0:
+                raise BilibiliApiError(code, str(payload.get("message") or "request failed"))
+            pages = payload.get("data")
+            if not isinstance(pages, list) or not pages:
+                raise BilibiliError("Bilibili did not return playable pages")
+            data = {"bvid": normalized_bvid, "pages": pages}
         return self._parse_video_detail(data, fallback_bvid=normalized_bvid)
 
     async def get_video_by_aid(self, aid: int) -> BilibiliVideo:
@@ -873,9 +896,7 @@ class BilibiliClient:
             ) as response:
                 text = await response.text()
                 if response.status >= 400:
-                    raise BilibiliError(
-                        f"Bilibili request failed (HTTP {response.status})"
-                    )
+                    raise BilibiliHttpError(response.status)
                 try:
                     payload = json.loads(text)
                 except json.JSONDecodeError as exc:

@@ -234,6 +234,8 @@ class SearchService:
                 return None
 
         detailed = await asyncio.gather(*(fetch(video) for video in videos))
+        if all(video is None for video in detailed):
+            raise MusicSearchError("已在线搜到结果，但 Bilibili 视频信息暂时无法读取，请稍后重试。")
         candidates: list[BilibiliCandidate] = []
         for search_hit, video in zip(videos, detailed):
             if video is None:
@@ -478,6 +480,8 @@ def _expand_video_candidates(
 
     bvid = str(getattr(video, "bvid", "")).strip()
     title = str(getattr(video, "title", "")).strip()
+    if title == bvid and search_title:
+        title = search_title
     uploader = str(getattr(video, "uploader", "")).strip()
     if not bvid or not title:
         return ()

@@ -193,6 +193,21 @@ class BilibiliWorkflowTests(unittest.IsolatedAsyncioTestCase):
         delivery = DeliveryService(bilibili=bilibili, media=media)
         return search, delivery, bilibili, media
 
+    async def test_all_detail_failures_report_source_failure_instead_of_no_results(self):
+        search, _, _, _ = await self._workflow(
+            (video("BV1"),), reference_error=RuntimeError("HTTP 412"),
+        )
+        with self.assertRaisesRegex(MusicSearchError, "已在线搜到结果"):
+            await search.search(session_id="chat-a", query="披风")
+
+    async def test_pagelist_candidates_keep_the_search_hit_title(self):
+        search, _, _, _ = await self._workflow(
+            (video("BV1", title="BV1", pages=(Page(99, "第一部分", 269000),)),),
+        )
+        snapshot = await search.search(session_id="chat-a", query="披风")
+        self.assertEqual(snapshot.candidates[0].title, "搜索结果：BV1")
+        self.assertEqual(snapshot.candidates[0].cid, 99)
+
     async def test_search_expands_pages_and_returns_only_ten_platform_order_candidates(
         self,
     ) -> None:

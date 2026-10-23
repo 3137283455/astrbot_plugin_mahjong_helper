@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import AsyncMock
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,8 @@ ensure_aiohttp()
 
 from core.bilibili import (
     BilibiliClient,
+    BilibiliHttpError,
+    BilibiliApiError,
     BilibiliVideoRef,
     _DashAudioTrack,
     _DashVideoTrack,
@@ -209,6 +212,36 @@ class QrLoginFixtureBilibiliClient(BilibiliClient):
 
 
 class BilibiliProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_detail_412_uses_real_page_identifiers_and_durations(self):
+        client = BilibiliClient(session=object())
+        client._wbi_data = AsyncMock(side_effect=BilibiliHttpError(412))
+        client._request_json = AsyncMock(return_value=({
+            "code": 0, "data": [
+                {"cid": 99, "page": 1, "part": "披风", "duration": 269},
+                {"cid": 100, "page": 2, "part": "伴奏", "duration": 270},
+            ],
+        }, {}))
+        result = await client.get_video("BV1Q541167Qg")
+        self.assertEqual(result.bvid, "BV1Q541167Qg")
+        self.assertEqual([(p.cid, p.duration_ms) for p in result.pages], [(99, 269000), (100, 270000)])
+        self.assertTrue(client._request_json.await_args.args[0].endswith("/x/player/pagelist"))
+        self.assertEqual(client._request_json.await_args.kwargs["params"], {"bvid": result.bvid})
+
+    async def test_deleted_or_private_video_is_not_replaced_by_pagelist(self):
+        client = BilibiliClient(session=object())
+        client._wbi_data = AsyncMock(side_effect=BilibiliApiError(-404, "not found"))
+        client._request_json = AsyncMock()
+        with self.assertRaises(BilibiliApiError):
+            await client.get_video("BV1Q541167Qg")
+        client._request_json.assert_not_awaited()
+
+    async def test_pagelist_failure_is_not_a_fake_playable_video(self):
+        client = BilibiliClient(session=object())
+        client._wbi_data = AsyncMock(side_effect=BilibiliHttpError(412))
+        client._request_json = AsyncMock(return_value=({"code": -404, "message": "not found"}, {}))
+        with self.assertRaises(BilibiliApiError):
+            await client.get_video("BV1Q541167Qg")
+
     def test_video_track_selection_prefers_lowest_quality(self) -> None:
         def track(
             stream_id: int, codecs: str, *, bandwidth: int = 1_000_000
