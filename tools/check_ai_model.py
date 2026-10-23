@@ -41,6 +41,7 @@ async def main():
 
     schemas = ToolSet([
         llm_tools.get_func("mahjong_quiz"), llm_tools.get_func("mahjong_query"),
+        llm_tools.get_func("mahjong_review"),
         FindInBilibiliTool(None), DeliverMediaTool(None),
         llm_tools.get_func("bot_menu"), llm_tools.get_func("music_search"), llm_tools.get_func("music_action"), llm_tools.get_func("query_available_apis"),
         llm_tools.get_func("call_api_by_name"),
@@ -62,6 +63,8 @@ async def main():
         ("放第二个", "music_action", {"action": "play", "position": 2}),
         ("第二首挺好，把它收进歌单", "music_action", {"action": "add", "position": 2}),
         ("查12105509的雀魂战绩", "mahjong_query", {"mode": 0}),
+        ("锐评我的雀魂数据", "mahjong_review", {}),
+        ("锐评12105509的三麻近30天", "mahjong_review", {"player": "12105509", "mode": 3, "days": 30}),
     ]
     # Production injects the current user's accessible catalog. This fixture
     # checks the same name-based selection without executing an entertainment API.

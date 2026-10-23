@@ -25,6 +25,7 @@ from .ai_entry import (
 )
 
 from .database import MahjongDatabase
+from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
 from .formatters import (
     format_record,
     format_records,
@@ -80,7 +81,7 @@ class MahjongHelperPlugin(Star):
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
         manager = self.context.get_llm_tool_manager()
-        for name in ("mahjong_quiz", "mahjong_query", "bot_menu", "music_search", "music_action"):
+        for name in ("mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action"):
             tool = manager.get_func(name)
             if tool is not None:
                 tool.active = bool(self.config.get("ai_enabled", False))
@@ -95,9 +96,17 @@ class MahjongHelperPlugin(Star):
                 kwargs = dict(system_prompt=AI_PERSONA, tools=sorted(AI_TOOLS),
                               skills=[], custom_error_message=AI_UNAVAILABLE)
                 try:
-                    await manager.get_persona(AI_PERSONA_NAME)
+                    persona = await manager.get_persona(AI_PERSONA_NAME)
                 except ValueError:
                     await manager.create_persona(AI_PERSONA_NAME, **kwargs)
+                else:
+                    # Upgrade only the new feature instructions. Keep custom
+                    # personality edits, tool choices and other persona fields.
+                    if "mahjong_review" not in persona.system_prompt:
+                        update = {"system_prompt": persona.system_prompt + "\n\n" + REVIEW_INSTRUCTIONS}
+                        if persona.tools is not None and "mahjong_query" in persona.tools:
+                            update["tools"] = list(dict.fromkeys([*persona.tools, "mahjong_review"]))
+                        await manager.update_persona(AI_PERSONA_NAME, **update)
             except Exception:
                 logger.exception("慧慧人格创建失败，使用内置人格")
 
@@ -211,6 +220,11 @@ class MahjongHelperPlugin(Star):
         event.set_extra("mahjong_ai_request", True)
         event.set_extra("mahjong_ai_toolset", req.func_tool)
 
+    @filter.on_agent_begin(priority=100)
+    async def ai_store_agent_context(self, event: AstrMessageEvent, run_context):
+        if self._ai_managed(event) and event.get_extra("mahjong_ai_request"):
+            event.set_extra("mahjong_ai_run_context", run_context)
+
     @filter.on_llm_tool_respond(priority=100)
     async def ai_tool_finished(self, event: AstrMessageEvent, tool, tool_args, tool_result):
         if not self._ai_managed(event) or not event.get_extra("mahjong_ai_request"):
@@ -226,6 +240,31 @@ class MahjongHelperPlugin(Star):
             return
         text = "\n".join(getattr(part, "text", "") for part in tool_result.content
                          if getattr(part, "text", ""))
+        if tool.name == "mahjong_review":
+            tools.tools.clear()
+            try:
+                data = json.loads(text)
+            except (ValueError, TypeError):
+                data = {}
+            if (isinstance(data, dict) and data.get("status") == "review_data"
+                    and isinstance(data.get("metrics"), dict) and data["metrics"]
+                    and isinstance(data.get("player"), dict) and isinstance(data.get("scope"), dict)):
+                event.set_extra("mahjong_ai_review_ready", True)
+                event.set_extra("mahjong_ai_review_header", review_header(data))
+                run_context = event.get_extra("mahjong_ai_run_context")
+                if run_context is not None:
+                    messages = run_context.messages
+                    last_user = next((i for i in range(len(messages) - 1, -1, -1)
+                                      if messages[i].role == "user"), None)
+                    if last_user is not None:
+                        # A fresh review only sees this request and its evidence;
+                        # an older player's/mode's review must not color it.
+                        run_context.messages[:] = ([m for m in messages[:last_user] if m.role == "system"]
+                                                   + messages[last_user:])
+            else:
+                message = data.get("message") if isinstance(data, dict) else None
+                await event.send(event.plain_result(str(message or "没有取得足够的雀魂数据，暂时无法锐评。")[:500]))
+            return
         if tool.name == "query_available_apis":
             if text.startswith(("No accessible", "API calls require", "API call failed:")):
                 tools.tools.clear()
@@ -262,11 +301,15 @@ class MahjongHelperPlugin(Star):
     async def ai_no_chat_response(self, event: AstrMessageEvent, response):
         if self._ai_managed(event) and event.get_extra("mahjong_ai_request") and response:
             response.reasoning_content = ""
-            if (response.tools_call_name or event.get_extra("mahjong_ai_tool_used")
+            if (response.tools_call_name or (event.get_extra("mahjong_ai_tool_used") and not event.get_extra("mahjong_ai_review_ready"))
                     or getattr(event, "_has_send_oper", False)):
                 response.result_chain = None
                 response.completion_text = ""
                 return
+            if event.get_extra("mahjong_ai_review_ready") and response.completion_text:
+                review_text = attach_review_header(event.get_extra("mahjong_ai_review_header", ""), response.completion_text)
+                response.result_chain = None
+                response.completion_text = review_text
             key = event.get_extra("mahjong_ai_chat_key")
             if key and response.role == "assistant" and response.completion_text:
                 history = list(self._ai_chats.get(key, (0, []))[1])
@@ -284,7 +327,8 @@ class MahjongHelperPlugin(Star):
         result = event.get_result()
         if result is not None:
             if result.is_model_result():
-                if event.get_extra("mahjong_ai_tool_used") or getattr(event, "_has_send_oper", False):
+                if ((event.get_extra("mahjong_ai_tool_used") and not event.get_extra("mahjong_ai_review_ready"))
+                        or getattr(event, "_has_send_oper", False)):
                     result.chain.clear()
             else:
                 result.chain = [Comp.Plain(AI_UNAVAILABLE)]
@@ -632,6 +676,65 @@ class MahjongHelperPlugin(Star):
         except Exception:
             logger.exception("何切 AI 入口执行失败")
             await event.send(event.plain_result("何切功能执行失败，请使用 /何切 重试。"))
+
+    @filter.llm_tool(name="mahjong_review")
+    async def review_ai(self, event: AstrMessageEvent, player: str = "", mode: int = 0,
+                        room: str = "", days: int = 0):
+        """读取真实雀魂聚合统计，供慧慧锐评、分析牌风并给出建议；只查卡片用mahjong_query。
+
+        Args:
+            player(string): 完整昵称或UID；留空评价发起人的主绑定，不验证账号实际归属。
+            mode(int): 默认0先四麻无数据再三麻；明确要求三麻或四麻时填3或4。
+            room(string): 不筛选留空；可填金、玉、王座。
+            days(int): 时间范围只允许0、7、30、90、365，0为全部收录时间。
+        """
+        if not self._claim_ai_action(event):
+            return
+        try:
+            if not isinstance(player, str) or len(player) > 100:
+                raise ValueError("请提供完整昵称或数字 UID，长度不超过100字。")
+            if type(mode) is not int or mode not in {0, 3, 4}:
+                raise ValueError("查询模式只能是三麻或四麻。")
+            if not isinstance(room, str) or room not in {"", "金", "玉", "王座"}:
+                raise ValueError("房间可填写：金、玉、王座。")
+            if type(days) is not int or days not in {0, 7, 30, 90, 365}:
+                raise ValueError("时间范围可填写全部、7天、30天、90天或365天。")
+            data = await self._review_player_data(event, player.strip(), mode, room, days)
+            if not data["metrics"]:
+                raise ValueError("没有取得可供锐评的具体指标，暂时不作评价。")
+            return json.dumps(data, ensure_ascii=False, allow_nan=False)
+        except (ValueError, MajsoulApiError) as exc:
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+        except Exception:
+            logger.exception("雀魂数据锐评读取失败")
+            return json.dumps({"status": "error", "message": "雀魂统计暂时无法读取，这次先不锐评，请稍后重试。"}, ensure_ascii=False)
+
+    async def _review_player_data(self, event, player, mode, room, days):
+        _, _, _, api = self._ready()
+        since_ms = int((time.time() - days * 86400) * 1000) if days else None
+        for selected_mode in ([4, 3] if mode == 0 else [mode]):
+            uid = ""
+            try:
+                uid, _ = await self._resolve_target(event, player, selected_mode)
+                modes = room_modes(selected_mode, room)
+                stats = await api.player_stats(uid, selected_mode, modes, since_ms)
+                if not stats or stats.get("count") in (0, "0"):
+                    raise PlayerDataMissing(uid)
+            except PlayerDataMissing as missing:
+                player = missing.uid or player
+                continue
+            extended_failed = False
+            try:
+                extended = await api.extended_stats(uid, selected_mode, modes, since_ms)
+            except MajsoulApiError:
+                logger.warning("雀魂锐评扩展统计不可用，仅使用基础统计")
+                extended = None
+                extended_failed = True
+            return build_review_data(uid, selected_mode, room, days, stats,
+                                     extended if isinstance(extended, dict) else {},
+                                     extended_failed=extended_failed)
+        label = "四麻、三麻" if mode == 0 else "三麻" if mode == 3 else "四麻"
+        raise ValueError(f"{label}没有查到所选范围的数据，仅收录金之间及以上公开对局，暂时无法锐评。")
 
     @filter.llm_tool(name="mahjong_query")
     async def query_ai(self, event: AstrMessageEvent, player: str = "", mode: int = 0,

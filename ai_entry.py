@@ -12,7 +12,7 @@ from astrbot.core.star.filter.command_group import CommandGroupFilter
 
 
 AI_TOOLS = frozenset({
-    "mahjong_quiz", "mahjong_query", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
+    "mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
     "query_available_apis", "call_api_by_name",
 })
 AI_PERSONA_NAME = "慧慧"
