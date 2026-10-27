@@ -33,7 +33,7 @@ BILIBILI_HELP = """📺 B站订阅帮助
 /订阅测试 UID = /bili_sub_test（原版仍按未推送记录筛选；重发请用 /B站 测试）
 /bili_login（管理员私聊扫码）
 /bili_logout（管理员，退出B站登录）
-/卡片样式 [template_1|template_2|simple] = /bili_card_style（管理员）
+/卡片样式 [dark_news|template_1|template_2|simple] = /bili_card_style（管理员）
 /全局订阅 「UMO」 UID [过滤器...] = /bili_global_sub（管理员）
 /全局删除 「UMO」 = /bili_global_del（管理员，清空指定聊天订阅）
 /全局列表 = /bili_global_list（管理员）
@@ -143,4 +143,9 @@ async def resend_latest(instance, event, uid: str):
         chain = instance.dynamic_listener._compose_plain_push(payload, render_fail=bool(instance.rai))
     # Manual previews reply directly. Background deduplication, silent recovery
     # and @ notifications belong to automatic pushes, not this reply.
+    make_notice = getattr(instance.renderer, "notification_text", None)
+    if callable(make_notice):
+        notice = make_notice(payload)
+        if notice:
+            chain.insert(0, Comp.Plain(notice + "\n"))
     await event.send(event.chain_result(chain))

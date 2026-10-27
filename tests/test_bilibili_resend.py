@@ -64,6 +64,14 @@ class ResendTests(unittest.IsolatedAsyncioTestCase):
             obj.renderer.render_dynamic.assert_awaited_once()
             obj.dispatcher.send.assert_not_awaited()
 
+    async def test_manual_dark_card_has_one_text_notice_outside_the_image(self):
+        obj,record=self.source()
+        obj.renderer.notification_text=lambda payload:'🔔 B站动态更新\n测试UP'
+        e=Event();await resend_latest(obj,e,'353240497')
+        self.assertEqual(len(e.sent),1)
+        self.assertEqual(e.sent[0].chain[0].text,'🔔 B站动态更新\n测试UP\n')
+        self.assertEqual(sum(isinstance(part,Comp.Plain) and 'B站动态更新' in part.text for part in e.sent[0].chain),1)
+
     async def test_status_with_no_subscription_handles_none(self):
         with tempfile.TemporaryDirectory() as d:
             p=plugin(d);obj,record=self.source()

@@ -16,7 +16,7 @@
 /订阅测试 UID = /bili_sub_test（原版仍按未推送记录筛选；重发请用 /B站 测试）
 /bili_login（管理员私聊扫码）
 /bili_logout（管理员，退出B站登录）
-/卡片样式 [template_1|template_2|simple] = /bili_card_style（管理员）
+/卡片样式 [dark_news|template_1|template_2|simple] = /bili_card_style（管理员）
 /全局订阅 「UMO」 UID [过滤器...] = /bili_global_sub（管理员）
 /全局删除 「UMO」 = /bili_global_del（管理员，清空指定聊天订阅）
 /全局列表 = /bili_global_list（管理员）
@@ -28,8 +28,8 @@
 也可私聊或@慧慧说“帮我订阅B站UID 123456，不看抽奖和转发”。
 ```
 
-`/B站 测试 UID` 会重发最新可见且符合内容过滤规则的动态，即使它已推送过；手动回复不修改自动推送进度，也不触发自动群体提醒。
+当前样式为第三版“深色快讯”：图片外显示更新提示，卡片内显示标题和原图预览，原文链接放在图片外。漫画长图只在卡片中预览，完整内容从原文链接打开。可用 `/卡片样式 dark_news` 切回此样式，旧样式仍可选择。
 
-本功能复用原版 Bilibili 插件的解析与卡片模板。
+`/B站 测试 UID` 会重发最新可见且符合内容过滤规则的动态，不修改自动推送进度，不触发自动群体提醒。
 
-参考项目：[Soulter/astrbot_plugin_bilibili](https://github.com/Soulter/astrbot_plugin_bilibili)
+源码：[深色推送版](https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/bilibili-push)。参考项目：[Soulter/astrbot_plugin_bilibili](https://github.com/Soulter/astrbot_plugin_bilibili)。
