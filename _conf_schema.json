@@ -5,10 +5,10 @@
     "default": false
   },
   "ai_provider_id": {
-    "description": "已在 AstrBot 中测试成功的魔搭模型提供商 ID；仅接受官方魔搭 HTTPS 接口",
+    "description": "慧慧使用的已配置提供商ID；服务器使用WorkBuddy国内版DeepSeek",
     "type": "string",
     "default": "",
-    "hint": "开启 AI 入口后必须填写；AstrBot Agent Runner 的模型需选择同一 ID，回退模型须为空。"
+    "hint": "选择与AstrBot默认模型一致的DeepSeek；WorkBuddy服务自定义请求头需X-Realm: cn。"
   },
   "timezone": {
     "description": "每日何切使用的时区",

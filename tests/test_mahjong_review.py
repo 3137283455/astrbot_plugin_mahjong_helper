@@ -153,7 +153,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 kwargs = manager.update_persona.await_args.kwargs
                 self.assertTrue(kwargs["system_prompt"].startswith("自定义的屑慧慧"))
                 self.assertIn("mahjong_review", kwargs["tools"])
-                self.assertEqual(set(kwargs["tools"]), {"mahjong_query", "mahjong_review", "bot_menu", "bilibili_subscription"})
+                self.assertEqual(set(kwargs["tools"]), {"mahjong_query", "mahjong_review", "bot_menu", "bilibili_subscription", "group_data"})
             finally:
                 await p.terminate()
 

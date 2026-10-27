@@ -13,7 +13,7 @@ from astrbot.core.star.filter.command_group import CommandGroupFilter
 
 AI_TOOLS = frozenset({
     "mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
-    "query_available_apis", "call_api_by_name", "bilibili_subscription",
+    "query_available_apis", "call_api_by_name", "bilibili_subscription", "group_data",
 })
 AI_PERSONA_NAME = "慧慧"
 AI_UNAVAILABLE = "慧慧暂时连不上模型，请稍后再聊；功能仍可直接使用 /何切、/雀 或 /搜索歌曲 等原有命令。"
@@ -49,7 +49,7 @@ def eligible(event) -> bool:
     if not self_id or str(event.get_sender_id()) == self_id:
         return False
     addressed = event.is_private_chat() or explicit_group_mention(event)
-    return addressed and not has_native_command(event) and bool(event.message_str.strip())
+    return addressed and not has_native_command(event) and (bool(event.message_str.strip()) or any(isinstance(part, Comp.Image) for part in event.get_messages()))
 
 
 def modelscope_provider(provider) -> bool:
@@ -71,3 +71,14 @@ def validate_quiz(action, count, question_id):
         raise ValueError("题号必须是非负整数，0 表示随机题或当前题。")
     if count != 1 and (question_id or action != "question"):
         raise ValueError("只有随机出题支持批量；指定题号、答案和状态一次只能查看一项。")
+
+
+def ai_provider_allowed(provider) -> bool:
+    if modelscope_provider(provider):
+        return True
+    config=getattr(provider,"provider_config",{}) or {}
+    parsed=urlparse(str(config.get("api_base","")))
+    return (config.get("enable",True)
+            and parsed.scheme=="http" and parsed.hostname in {"127.0.0.1","localhost"}
+            and parsed.port==8788 and "deepseek" in str(config.get("model","")).lower()
+            and (config.get("custom_headers") or {}).get("X-Realm")=="cn")

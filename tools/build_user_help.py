@@ -92,7 +92,7 @@ def _api_card(draw, x, y, width, title, items, color, two_columns=True, font_siz
 
 
 def render(path: Path) -> Path:
-    height = 2720
+    height = 3100
     image = Image.new("RGB", (WIDTH, height), PAPER)
     draw = ImageDraw.Draw(image)
 
@@ -173,7 +173,15 @@ def render(path: Path) -> Path:
     yy += 7
     _api_card(draw, rx, yy, rw, "语音 · 7 项", AUDIO_APIS, RED, two_columns=True, font_size=21, line_h=35)
 
-    footer_y = api_top + api_h + 22
+    group_y = api_top + api_h + 22
+    _panel(draw, MARGIN, group_y, WIDTH - 2 * MARGIN, 315, "群数据 · 本群精华结算统计", TEAL)
+    _bullet_lines(draw, MARGIN + 32, group_y + 84, WIDTH - 2 * MARGIN - 64, [
+        "/群数据：三麻 / 四麻总览；/群数据 被飞率 四麻；/群数据 一位率 三麻",
+        "/群数据 最高 四麻、/群数据 最低 三麻：榜单与对局原图；/群数据 个人 完整昵称",
+        "只统计本群精华里的完整雀魂终局结算；被飞=最终持点<0，比例不是全部实战胜率。",
+        "新图自动更新；读不清不入榜；/群数据 状态看进度，/群数据 帮助看全部用法。",
+    ], size=25, line_h=47)
+    footer_y = group_y + 335
     _rounded(draw, (MARGIN, footer_y, WIDTH - MARGIN, height - 35), INK, 24)
     draw.text((MARGIN + 32, footer_y + 18), "命令忘了就发 /help；查询结果仍受公开数据范围与外部服务状态影响。",
               font=_font(24, True), fill=WHITE)
