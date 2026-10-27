@@ -75,15 +75,6 @@ class BilibiliBridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('UID', e.sent[0].get_plain_text())
         self.assertEqual(normalize_uid('3540000000000001'), '3540000000000001')
 
-    async def test_latest_reuses_original_handler_without_adding_admin_restriction(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = plugin(d); obj, calls = self.setup_bili(p)
-            event = self.event()
-            await p.bilibili_subscription_ai(event, 'latest', '123456')
-            self.assertEqual(calls, [('latest', event.unified_msg_origin, '123456')])
-            self.assertTrue(event.stopped)
-            self.assertEqual(event.sent, [])
-
     async def test_list_remove_and_status_use_current_chat_only(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d); obj, calls = self.setup_bili(p, login=False)

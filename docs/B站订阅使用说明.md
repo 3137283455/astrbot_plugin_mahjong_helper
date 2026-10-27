@@ -7,13 +7,13 @@
 /B站 取消 UID
 /B站 列表
 /B站 状态
-/B站 测试 UID
+/B站 测试 UID（重发最新可见动态，保留内容过滤）
 
 原插件完整命令：
 /订阅动态 UID [过滤器...] = /bili_sub
 /订阅列表 = /bili_sub_list
 /订阅删除 UID = /bili_sub_del
-/订阅测试 UID = /bili_sub_test
+/订阅测试 UID = /bili_sub_test（原版仍按未推送记录筛选；重发请用 /B站 测试）
 /bili_login（管理员私聊扫码）
 /bili_logout（管理员，退出B站登录）
 /卡片样式 [template_1|template_2|simple] = /bili_card_style（管理员）
@@ -28,6 +28,8 @@
 也可私聊或@慧慧说“帮我订阅B站UID 123456，不看抽奖和转发”。
 ```
 
-本功能依赖原版 Bilibili 插件，复用其订阅存储、权限验证和推送；慧慧提供调用入口。
+`/B站 测试 UID` 会重发最新可见且符合内容过滤规则的动态，即使它已推送过；手动回复不修改自动推送进度，也不触发自动群体提醒。
+
+本功能复用原版 Bilibili 插件的解析与卡片模板。
 
 参考项目：[Soulter/astrbot_plugin_bilibili](https://github.com/Soulter/astrbot_plugin_bilibili)

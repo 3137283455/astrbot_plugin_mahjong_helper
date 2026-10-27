@@ -443,7 +443,7 @@ class MahjongHelperPlugin(Star):
         """管理当前聊天的B站订阅并发送原插件的真实结果，不使用娱乐API。
 
         Args:
-            action(string): add订阅，remove取消，list订阅列表，latest最新动态/推送测试，status登录和监听状态，menu完整帮助。
+            action(string): add订阅，remove取消，list订阅列表，latest重发最新可见动态（可重复），status登录和监听状态，menu完整帮助。
             uid(string): 用户给出的B站数字UID或个人主页链接，add/remove/latest必填，不能用昵称代替。
             filters(string): 需要排除的类型，以空格分隔，例如lottery forward；video表示排除视频。可包含原插件的关键词过滤及明确要求的提醒选项。
         """
@@ -451,8 +451,8 @@ class MahjongHelperPlugin(Star):
             return
         await self._run_bilibili(event, action, uid, filters)
 
-    @filter.command("B站", aliases=["b站"])
-    async def bilibili_command(self, event: AstrMessageEvent, arguments: GreedyStr = ""):
+    @filter.command("B站", alias={"b站"})
+    async def bilibili_command(self, event: AstrMessageEvent, arguments: GreedyStr):
         """B站订阅、取消、列表、状态、测试和完整原版命令帮助。"""
         parts = str(arguments).strip().split(maxsplit=2)
         actions = {"订阅": "add", "取消": "remove", "删除": "remove", "列表": "list",
