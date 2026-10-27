@@ -14,6 +14,7 @@ from ..core.constant import (
     get_template_path,
 )
 from ..core.models import RenderPayload
+from ..core.presentation import dark_context, notification_text
 from ..core.utils import create_qrcode, image_to_base64, parse_rich_text
 
 
@@ -60,6 +61,9 @@ class Renderer:
             target_style = DEFAULT_TEMPLATE
         return self._templates.get(target_style, "")
 
+    def notification_text(self, payload: RenderPayload, category: str = "dynamic") -> str:
+        return notification_text(payload, category) if self.style == "dark_news" else ""
+
     async def render_dynamic(self, payload: RenderPayload, style: str | None = None):
         """
         将渲染数据字典渲染成最终图片。
@@ -76,7 +80,8 @@ class Renderer:
         }
 
         tmpl = self.get_template(style)
-        context = payload.to_template_context()
+        context = (dark_context(payload) if (style or self.style) == "dark_news"
+                   else payload.to_template_context())
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             render_output = None

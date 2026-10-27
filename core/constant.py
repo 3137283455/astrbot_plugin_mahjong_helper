@@ -40,6 +40,12 @@ DEFAULT_CFG = {
 # 添加新模板只需在此处注册即可
 
 CARD_TEMPLATES: Dict[str, dict] = {
+    "dark_news": {
+        "name": "深色快讯",
+        "description": "紧凑横卡、醒目标题与原图预览",
+        "file": "template_dark_news.html",
+        "path": _asset_path("template_dark_news.html"),
+    },
     "template_1": {
         "name": "经典风格",
         "description": "原版设计",
@@ -61,7 +67,7 @@ CARD_TEMPLATES: Dict[str, dict] = {
 }
 
 # 默认模板
-DEFAULT_TEMPLATE = "template_2"
+DEFAULT_TEMPLATE = "dark_news"
 
 
 def get_template_path(style: str) -> str:

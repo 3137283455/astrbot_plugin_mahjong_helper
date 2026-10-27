@@ -395,6 +395,10 @@ class DynamicListener:
         dyn_id: Optional[str] = None,
         summary_payload: Optional[Any] = None,
     ):
+        if summary_payload is not None:
+            notice = self.renderer.notification_text(summary_payload, category)
+            if notice:
+                chain_parts = [Plain(notice + "\n")] + list(chain_parts)
         notification = SubscriptionNotification(
             sub_user=sub_user,
             chain_parts=chain_parts,
@@ -874,7 +878,7 @@ class DynamicListener:
                 ls = self._add_at_components(
                     list(ls), sub_data, is_live=True, permit_atall=permit_atall
                 )
-            await self._send_dynamic(sub_user, ls, category="live")
+            await self._send_dynamic(sub_user, ls, category="live", summary_payload=payload)
             return
         img_path = await self.renderer.render_dynamic(payload)
         if img_path:
@@ -895,14 +899,14 @@ class DynamicListener:
                 image_chain = self._add_at_components(
                     image_chain, sub_data, is_live=True, permit_atall=permit_atall
                 )
-            await self._send_dynamic(sub_user, image_chain, category="live")
+            await self._send_dynamic(sub_user, image_chain, category="live", summary_payload=payload)
             return
         ls = self._compose_plain_push(payload, render_fail=True, category="live")
         if not is_offline:
             ls = self._add_at_components(
                 list(ls), sub_data, is_live=True, permit_atall=permit_atall
             )
-        await self._send_dynamic(sub_user, ls, category="live")
+        await self._send_dynamic(sub_user, ls, category="live", summary_payload=payload)
 
     async def _check_atall_permission(self, sub_user: str, enabled: bool) -> bool:
         if not enabled:

@@ -1,3 +1,15 @@
+# 深色快讯推送版
+
+基于 [Flartiny & Soulter 的 Bilibili 插件](https://github.com/Soulter/astrbot_plugin_bilibili) 改造，订阅、登录、权限和过滤逻辑沿用原项目。
+
+新增 `dark_news`（深色快讯）样式：短横卡片、醒目的标题与原图预览；自动通知前增加文字标题，原文链接保留在卡片外。漫画与长图在卡片中显示预览，完整内容可从原文链接打开。支持图文、投稿、文字、转发与直播提醒。
+
+使用 `/卡片样式 dark_news` 切换，也可在配置面板选择。旧样式仍可选择。
+
+本分支源码保存在 [bilibili-push 分支](https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/bilibili-push)。原作者与原使用说明如下。
+
+---
+
 # astrbot_plugin_bilibili
 
 这是一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的多功能 Bilibili 插件。

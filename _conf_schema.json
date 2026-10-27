@@ -46,8 +46,13 @@
         "description": "renderer_template",
         "type": "string",
         "hint": "渲染模板",
-        "options": ["template_1", "template_2", "simple"],
-        "default": "template_2"
+        "options": [
+            "dark_news",
+            "template_1",
+            "template_2",
+            "simple"
+        ],
+        "default": "dark_news"
     },
     "node": {
         "description": "node",
