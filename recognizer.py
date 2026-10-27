@@ -73,7 +73,7 @@ class Recognizer:
             previous=json.loads(row.get('raw') or '[]')
             ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
             for place,name in trusted_names(ocr).items():
-                if result['players'][place-1]['name']!=name:
+                if place>len(result['players']) or result['players'][place-1]['name']!=name:
                     raise ValueError('模型昵称与本地清晰文字不一致，请人工核对')
             second=await self.read(provider,row['path'],PROMPT+'\n请独立仔细复核每个昵称、最终顺位和持点的正负号，不要猜测。');raw.append(second)
             checked=validate(second)
@@ -81,7 +81,7 @@ class Recognizer:
             previous=json.loads(row.get('raw') or '[]')
             ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
             for place,name in trusted_names(ocr).items():
-                if result['players'][place-1]['name']!=name:
+                if place>len(result['players']) or result['players'][place-1]['name']!=name:
                     raise ValueError('模型昵称与本地清晰文字不一致，请人工核对')
             self.store.save(digest,'accepted',result=result,raw=raw,model=model);self.model_error=''
         except ValueError as exc:

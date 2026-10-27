@@ -1,5 +1,5 @@
 import unittest
-from astrbot_plugin_group_data.local_ocr import interpret
+from astrbot_plugin_group_data.local_ocr import interpret,trusted_names
 
 def word(text,x,y,width,height,score=.999):
  return {'text':text,'box':[[x,y],[x+width,y],[x+width,y+height],[x,y+height]],'score':score,'crop_text':text,'crop_score':score}
@@ -25,4 +25,8 @@ class LocalOCRTests(unittest.TestCase):
  def test_missing_edge_character_is_never_admitted(self):
   r=self.fixture();r['full'][1]['crop_text']='甲_'
   self.assertEqual(interpret(r)['decision'],'llm_pending')
+ def test_trusted_names_require_local_reading_and_edge_agreement(self):
+  r=self.fixture();self.assertEqual(trusted_names(r),{1:'甲',2:'乙',3:'丙'})
+  r['full'][1]['crop_text']='甲_'
+  self.assertNotIn(1,trusted_names(r))
 if __name__=='__main__':unittest.main()
