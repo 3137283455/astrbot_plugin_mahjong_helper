@@ -13,7 +13,7 @@ from astrbot.core.star.filter.command_group import CommandGroupFilter
 
 AI_TOOLS = frozenset({
     "mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
-    "query_available_apis", "call_api_by_name",
+    "query_available_apis", "call_api_by_name", "bilibili_subscription",
 })
 AI_PERSONA_NAME = "慧慧"
 AI_UNAVAILABLE = "慧慧暂时连不上模型，请稍后再聊；功能仍可直接使用 /何切、/雀 或 /搜索歌曲 等原有命令。"

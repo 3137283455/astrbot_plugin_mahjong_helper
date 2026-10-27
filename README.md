@@ -126,3 +126,7 @@ https://github.com/3137283455/astrbot_plugin_mahjong_helper
 
 代码使用 [AGPL-3.0](LICENSE)。题库图片的使用范围见 [NOTICE.md](NOTICE.md)，
 上游来源和参考范围见 [参考项目.md](参考项目.md)。
+
+## B站订阅入口
+
+安装 [Soulter Bilibili 插件](https://github.com/Soulter/astrbot_plugin_bilibili) 后，可用 `/B站` 查看完整帮助，或私聊/@慧慧管理当前聊天的订阅。需管理员私聊 `/bili_login` 扫码登录。详见 [B站订阅使用说明](docs/B站订阅使用说明.md)。
