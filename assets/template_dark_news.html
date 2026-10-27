@@ -11,11 +11,12 @@ body{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;color:#fff}
 .content{position:relative;z-index:1;width:535px;height:100%;padding:42px 40px 40px 44px}
 .top{display:flex;align-items:center;gap:22px}.tag{font-size:28px;line-height:50px;min-height:50px;padding:0 22px;font-weight:800;background:#fb7299;border-radius:13px;color:white}
 .brand{font-size:38px;color:#fb7299;font-weight:800;letter-spacing:-2px}
-.headline{font-size:66px;line-height:1.18;font-weight:900;margin:34px 0 0;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere;letter-spacing:-1px}
+.headline{font-size:66px;line-height:1.18;font-weight:900;margin:34px 0 0;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow-wrap:anywhere;letter-spacing:-1px}
 .comic .headline{font-size:68px;margin-top:38px;-webkit-line-clamp:1}
 .chapter{font-size:96px;font-weight:900;line-height:1.2;letter-spacing:-3px;margin-top:4px}
 .rule{height:5px;width:82px;background:#fb7299;margin-top:23px;border-radius:3px}
 .excerpt{font-size:27px;line-height:1.5;color:#b9bec8;margin-top:18px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.card:not(.comic) .excerpt{-webkit-line-clamp:1}
 .author{position:absolute;left:44px;bottom:78px;display:flex;align-items:center;gap:14px;width:430px}
 .avatar,.avatar-fallback{width:54px;height:54px;border-radius:50%;object-fit:cover;border:2px solid #d2d6de;background:#263b38}
 .avatar-fallback{text-align:center;line-height:50px;font-size:30px;color:#f1f5f2}
@@ -27,9 +28,9 @@ body{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;color:#fff}
 {% if news_cover %}<img class="cover" src="{{ news_cover|e }}" alt="">{% else %}<div class="no-cover"></div><div class="mark">bilibili</div>{% endif %}
 <div class="shade"></div><div class="content">
 <div class="top"><span class="tag">{{ news_tag|e }}</span><span class="brand">bilibili</span></div>
-<div class="headline">{{ news_title|e }}</div>
+<div class="headline" style="font-size:{{ news_title_size }}px">{{ news_title|e }}</div>
 {% if news_subtitle %}<div class="chapter">{{ news_subtitle|e }}</div>{% endif %}
 <div class="rule"></div>{% if news_excerpt %}<div class="excerpt">{{ news_excerpt|e }}</div>{% endif %}
 <div class="author">{% if news_avatar %}<img class="avatar" src="{{ news_avatar|e }}" alt="">{% else %}<div class="avatar-fallback">B</div>{% endif %}<span class="name">{{ news_name|e }}</span></div>
-<div class="meta">{{ news_label|e }}{% if news_count %} · {{ news_count }} 张配图{% endif %}</div>
+<div class="meta">{{ news_label|e }}{% if news_media_label %} · {{ news_media_label|e }}{% endif %}</div>
 </div></article></body></html>

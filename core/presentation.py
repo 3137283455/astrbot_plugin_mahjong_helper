@@ -94,7 +94,11 @@ def dark_context(payload):
     forward = getattr(payload, 'forward', None)
     if not images and forward:
         images = [u for u in (_image_url(u) for u in forward.image_urls or []) if u]
+    units = sum(1 if ord(c) > 255 else .55 for c in title[:100])
+    title_size = 68 if subtitle else max(34, min(66, int(1240 / max(units, 1))))
     return {
+        'news_title_size': title_size,
+        'news_media_label': ('视频封面' if kind == 'DYNAMIC_TYPE_AV' else str(len(images)) + ' 张配图') if images else '',
         'news_name': name[:80], 'news_avatar': _image_url(getattr(payload, 'avatar', '')),
         'news_title': title[:100], 'news_subtitle': subtitle, 'news_excerpt': excerpt[:100],
         'news_label': label, 'news_tag': tag,
@@ -105,4 +109,5 @@ def dark_context(payload):
 def notification_text(payload, category='dynamic'):
     data = dark_context(payload)
     title = data['news_tag'] if category == 'live' else 'B站动态更新'
-    return '🔔 ' + title + '\n' + data['news_name']
+    headline = data['news_title'] + (' · ' + data['news_subtitle'] if data['news_subtitle'] else '')
+    return '🔔 ' + title + '\n' + data['news_name'] + '\n' + headline

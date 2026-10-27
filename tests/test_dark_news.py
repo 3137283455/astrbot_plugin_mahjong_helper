@@ -24,7 +24,7 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual((d['news_title'],d['news_subtitle']),('漫画更新','第156话'))
         self.assertEqual(d['news_excerpt'],'不给糖就捣蛋')
         self.assertEqual(d['news_count'],1)
-        self.assertEqual(notification_text(p),'🔔 B站动态更新\n雀魂麻将majsoul')
+        self.assertEqual(notification_text(p),'🔔 B站动态更新\n雀魂麻将majsoul\n漫画更新 · 第156话')
 
     def test_video_title_and_cover_are_preserved(self):
         p=RenderPayload(name='视频UP',type='DYNAMIC_TYPE_AV',title='很长的视频标题'*30,image_urls=['https://i0.hdslb.com/cover.jpg'])
@@ -32,6 +32,8 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(d['news_label'],'视频投稿')
         self.assertEqual(d['news_cover'],p.image_urls[0])
         self.assertEqual(d['news_title'],p.title[:100])
+        self.assertLess(d['news_title_size'],66)
+        self.assertIn(p.title[:100],notification_text(p))
 
     def test_text_only_has_readable_fallback_without_fake_image(self):
         d=dark_context(RenderPayload(name='UP',type='DYNAMIC_TYPE_WORD',text='第一句更新<br>第二句正文'))
@@ -51,7 +53,7 @@ class PresentationTests(unittest.TestCase):
         p=RenderPayload(name='AstrBot',url='https://live.bilibili.com/123',title='今天来打麻将',text='📣 你订阅的UP 「直播UP」 开播了！')
         d=dark_context(p)
         self.assertEqual((d['news_tag'],d['news_name'],d['news_title']),('开播提醒','直播UP','今天来打麻将'))
-        self.assertEqual(notification_text(p,'live'),'🔔 开播提醒\n直播UP')
+        self.assertEqual(notification_text(p,'live'),'🔔 开播提醒\n直播UP\n今天来打麻将')
         p.text='📣 你订阅的UP 「直播UP」 下播了！'
         self.assertEqual(dark_context(p)['news_tag'],'下播提醒')
 
