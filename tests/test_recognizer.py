@@ -64,4 +64,25 @@ class RecognizerTests(unittest.IsolatedAsyncioTestCase):
     with self.assertRaises(asyncio.CancelledError):await rec.llm_loop()
    self.assertEqual(rec.context.get_using_provider_async.await_count,2)
    self.assertEqual(store.image('h')['status'],'new');self.assertEqual(rec.llm.await_count,1)
+ async def test_verified_glyphs_correct_model_names_and_preserve_original_reads(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   rec._match_verified=lambda row,ocr:[{'mode':3,'place':1,'points':65000,'name':'慪龢','score':.99,'sources':[2,3]}]
+   rec.read=AsyncMock(side_effect=[result(names=['榧酥','乙','丙']),result(names=['偃稣','乙','丙'])])
+   await rec.llm(row)
+   saved=store.image('h');self.assertEqual(saved['status'],'accepted')
+   self.assertEqual(json.loads(saved['result'])['players'][0]['name'],'慪龢')
+   self.assertEqual(json.loads(saved['raw'])[0]['players'][0]['name'],'榧酥')
+   self.assertEqual(rec.read.await_count,2)
+ async def test_local_admission_also_uses_verified_glyphs(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d)
+   rec._match_verified=lambda row,ocr:[{'mode':3,'place':1,'points':65000,'name':'慪龢'}]
+   with patch('astrbot_plugin_group_data.recognizer.run_ocr',AsyncMock(return_value={})),patch('astrbot_plugin_group_data.recognizer.interpret',return_value={'decision':'accepted','result':result(),'raw':[],'reason':'local'}):
+    await rec.local(row)
+   self.assertEqual(json.loads(store.image('h')['result'])['players'][0]['name'],'慪龢')
+   rec.context.get_using_provider_async.assert_not_awaited()
 if __name__=='__main__':unittest.main()
