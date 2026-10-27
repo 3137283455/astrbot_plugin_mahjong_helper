@@ -1,6 +1,27 @@
 {
- "initial_groups":{"description":"初次接入的QQ群号，开启后只识别终局结算画面","type":"list","default":[]},
- "poll_seconds":{"description":"精华检查间隔（秒，最低60）","type":"int","default":120},
- "ocr_python":{"description":"本地OCR独立环境Python路径，留空使用插件数据目录/ocr-venv/bin/python","type":"string","default":""},
- "llm_fallback":{"description":"本地无法可靠识别终局时使用AstrBot默认DeepSeek；不会使用魔搭或其他回退","type":"bool","default":true}
+  "initial_groups": {
+    "description": "初次接入的QQ群号，开启后只识别终局结算画面",
+    "type": "list",
+    "default": []
+  },
+  "poll_seconds": {
+    "description": "精华检查间隔（秒，最低60）",
+    "type": "int",
+    "default": 120
+  },
+  "ocr_python": {
+    "description": "本地OCR独立环境Python路径，留空使用插件数据目录/ocr-venv/bin/python",
+    "type": "string",
+    "default": ""
+  },
+  "llm_fallback": {
+    "description": "本地无法可靠识别终局时使用AstrBot默认DeepSeek；不会使用魔搭或其他回退",
+    "type": "bool",
+    "default": true
+  },
+  "llm_concurrency": {
+    "description": "默认DeepSeek辅助识别并发数（1～3），历史批量导入可选3",
+    "type": "int",
+    "default": 2
+  }
 }

@@ -7,7 +7,9 @@ from rapidocr_onnxruntime import RapidOCR
 
 def main():
     engine=RapidOCR(intra_op_num_threads=1,inter_op_num_threads=1,text_score=.4,det_limit_side_len=1280,det_limit_type='max')
-    im=Image.open(sys.argv[1]).convert('RGB');w,h=im.size
+    original=Image.open(sys.argv[1]).convert('RGB');im=original;orientation=0
+    if im.height>im.width*1.1:im=original.rotate(90,expand=True);orientation=90
+    w,h=im.size
     def rect(r):
         return min(p[0] for p in r['box']),min(p[1] for p in r['box']),max(p[0] for p in r['box']),max(p[1] for p in r['box'])
     def read(image,x=0,y=0,scale=1):
@@ -39,6 +41,11 @@ def main():
             direct,_=engine(np.array(patch)[:,:,::-1],use_det=False,use_cls=False)
             if direct and len(direct[0])==2:r['crop_text']=str(direct[0][0]);r['crop_score']=float(direct[0][1])
     full=read(im)
+    if orientation and not any(any(mark in row['text'] for mark in ('终局','終局','对局终结','對局終結')) for row in full):
+        alternate=original.rotate(270,expand=True);im=alternate;other=read(im)
+        if (any(any(mark in row['text'] for mark in ('终局','終局','对局终结','對局終結')) for row in other) or sum(len(r['text'])*r['score'] for r in other)>sum(len(r['text'])*r['score'] for r in full)):
+            full=other;orientation=270
+        else:im=original.rotate(90,expand=True)
     # Independently check the clear nickname regions; uncertain ones are never
     # promoted by a guess. Their images stay available for the default model.
     if names(full):
@@ -46,5 +53,5 @@ def main():
         x=int(w*.36);y=int(h*.07);crop=im.crop((x,y,w,int(h*.94)))
         focused=read(crop.resize((crop.width*2,crop.height*2)),x,y,2);check_edges(focused)
     else:focused=full
-    print(json.dumps({'width':w,'height':h,'full':full,'focused':focused},ensure_ascii=False))
+    print(json.dumps({'width':w,'height':h,'orientation_degrees':orientation,'full':full,'focused':focused},ensure_ascii=False))
 if __name__=='__main__':main()

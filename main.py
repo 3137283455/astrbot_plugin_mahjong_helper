@@ -172,7 +172,7 @@ class GroupDataPlugin(Star):
                 if not row or not row['hash']:raise ValueError('本群没有这个已下载的有效精华图片记录')
                 if action=='核对':
                     raw=json.loads(row['raw'] or '[]');lines=[f'记录 #{row["id"]}：{row["override_status"] or row["status"]}',row['override_reason'] or row['reason'] or '']
-                    for i,candidate in enumerate(raw):
+                    for i,candidate in enumerate(item for item in raw if 'is_result' in item):
                         lines.append(f'第{i+1}次：{candidate.get("reason","")}')
                         lines.extend(f'{p.get("place")}位  {p.get("name")}  {p.get("points")} 点' for p in candidate.get('players',[]) if isinstance(p,dict))
                     await self.card(event,'群数据 · 识别核对',lines);return

@@ -36,6 +36,20 @@ class RecognizerTests(unittest.IsolatedAsyncioTestCase):
   with tempfile.TemporaryDirectory() as d:
    provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
    rec,store,row=self.setup_recognizer(d,provider)
-   rec.read=AsyncMock(side_effect=[result(),result(names=['另一人','乙','丙'])]);await rec.llm(row)
+   rec.read=AsyncMock(side_effect=[result(),result(names=['另一人','乙','丙']),result(names=['第三个不同的人','乙','丙'])]);await rec.llm(row)
    self.assertEqual(store.image('h')['status'],'review');self.assertFalse(store.matches('b:g'))
+ async def test_visible_final_marker_prevents_silent_skip(self):
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   store.save('h','llm_pending',raw=[{'local_ocr':{'full':[{'text':'对局终结'}]}}])
+   row=store.get_source('b:g',row['id']);rec.read=AsyncMock(return_value={'is_result':False,'reason':'东2局仍在进行'})
+   await rec.llm(row)
+   self.assertEqual(store.image('h')['status'],'review');self.assertEqual(rec.read.await_count,1)
+ async def test_third_read_resolves_one_spelling_without_guessing(self):
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   rec.read=AsyncMock(side_effect=[result(),result(names=['另一人','乙','丙']),result()]);await rec.llm(row)
+   self.assertEqual(store.image('h')['status'],'accepted');self.assertEqual(rec.read.await_count,3)
 if __name__=='__main__':unittest.main()

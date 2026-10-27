@@ -29,4 +29,9 @@ class LocalOCRTests(unittest.TestCase):
   r=self.fixture();self.assertEqual(trusted_names(r),{1:'甲',2:'乙',3:'丙'})
   r['full'][1]['crop_text']='甲_'
   self.assertNotIn(1,trusted_names(r))
+ def test_grid_point_order_is_not_used_as_rank_name_evidence(self):
+  r=self.fixture()
+  r['full'][2]['text']='-2000';r['focused'][2]['text']='-2000'
+  r['full'][6]['text']='65000';r['focused'][6]['text']='65000'
+  self.assertEqual(trusted_names(r),{})
 if __name__=='__main__':unittest.main()

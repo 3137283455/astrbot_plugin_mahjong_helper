@@ -101,7 +101,16 @@ class EssenceSource:
                                 # Signed URL may expire; get_image can refresh it.
                                 if not entry['file']:raise
                                 image=unwrap(await bot.call_action(action='get_image',file=entry['file']))
-                                digest,path=await download(str(image.get('url','')),self.folder)
+                                try:
+                                    digest,path=await download(str(image.get('url','')),self.folder)
+                                except Exception:
+                                    original=unwrap(await bot.call_action(action='get_msg',message_id=int(entry['msg'])))
+                                    parts=original.get('message',[]) if isinstance(original,dict) else []
+                                    pictures=[x.get('data',{}) for x in parts if isinstance(x,dict) and x.get('type')=='image']
+                                    match=next((x for x in pictures if x.get('file')==entry['file']),None)
+                                    if match is None and len(pictures)==1:match=pictures[0]
+                                    if match is None:raise ValueError('无法安全对应原消息中的图片')
+                                    digest,path=await download(str(match.get('url','')),self.folder)
                             self.store.attach(row['id'],digest,path)
                         except Exception as exc:
                             self.store.source_error(row['id'],'图片读取失败：'+type(exc).__name__)

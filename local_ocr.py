@@ -110,6 +110,8 @@ def trusted_names(ocr):
             if re.fullmatch(r'-?(?:[1-9][0-9]{2,5}|0)',text) and b[3]-b[1]>=h*.035 and b[0]>w*.37 and int(text)%100==0:points.append((r,b))
         points.sort(key=lambda x:x[1][1]);names={}
         if len(points) not in (3,4):return {}
+        values=[int(normalize_name(r['text']).replace(',','').replace('−','-').replace('—','-').replace(' ','')) for r,_ in points]
+        if any(a<b for a,b in zip(values,values[1:])):return {}
         for place,(point,b) in enumerate(points,1):
             candidates=[]
             for r in rows:
