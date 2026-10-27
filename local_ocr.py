@@ -42,6 +42,14 @@ def interpret(ocr):
     final=any(any(word in r['text'] for word in final_words) and r['score']>=.8 for r in all_rows)
     points=point_rows(ocr['focused'])
     if not final and len(points)<3:
+        global_points=[]
+        for row in ocr['full']:
+            text=normalize_name(row['text']).replace(',','').replace('−','-').replace('—','-').replace(' ','')
+            bounds=box(row)
+            if re.fullmatch(r'-?(?:[1-9][0-9]{2,5}|0)',text) and int(text)%100==0 and bounds[3]-bounds[1]>=h*.018:
+                global_points.append(row)
+        if len(global_points)>=3:
+            return {'decision':'llm_pending','reason':'可能是网格布局结算，需图像确认终局覆盖层','raw':[]}
         return {'decision':'ignored','reason':'未检测到完整雀魂终局结算版式','raw':[]}
     def read(rows):
         pts=point_rows(rows)

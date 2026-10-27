@@ -49,6 +49,13 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             await p.handle(e,'关闭');self.assertFalse(p.store.group('12345:987654321')['enabled'])
             other=Event('999');await p.handle(other,'原图 1');self.assertIsInstance(other.sent[-1],list)
             self.assertIsNone(p.store.group('12345:999'))
+    async def test_mode_only_filters_overview(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            p=self.setup_plugin(d);e=Event()
+            with patch('astrbot_plugin_group_data.main.cards.overview',wraps=cards.overview) as render:
+                await p.handle(e,'三麻')
+            self.assertEqual(render.call_args.args[-1],3)
     async def test_private_chat_does_not_read_group(self):
         with tempfile.TemporaryDirectory() as d:
             p=self.setup_plugin(d);e=Event('');await p.handle(e,'')

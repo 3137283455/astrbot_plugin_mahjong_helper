@@ -206,7 +206,7 @@ class GroupDataPlugin(Star):
             matches=self.store.matches(scope,days);aliases=self.store.aliases(scope)
             if action=='总览':
                 path=self.card_dir/(uuid.uuid4().hex+'.png')
-                await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope),days)
+                await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope),days,opt['mode'])
                 await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]));return
             modes=[opt['mode']] if opt['mode'] else [3,4]
             if action=='玩家':

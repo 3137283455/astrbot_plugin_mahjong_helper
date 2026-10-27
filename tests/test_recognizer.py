@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,4 +53,15 @@ class RecognizerTests(unittest.IsolatedAsyncioTestCase):
    rec,store,row=self.setup_recognizer(d,provider)
    rec.read=AsyncMock(side_effect=[result(),result(names=['另一人','乙','丙']),result()]);await rec.llm(row)
    self.assertEqual(store.image('h')['status'],'accepted');self.assertEqual(rec.read.await_count,3)
+ async def test_startup_waits_for_default_provider_without_marking_image_failure(self):
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   rec.context.get_using_provider_async=AsyncMock(side_effect=[None,provider])
+   rec.pending=lambda _: [row]
+   rec.llm=AsyncMock(side_effect=asyncio.CancelledError())
+   with patch('astrbot_plugin_group_data.recognizer.asyncio.sleep',AsyncMock()):
+    with self.assertRaises(asyncio.CancelledError):await rec.llm_loop()
+   self.assertEqual(rec.context.get_using_provider_async.await_count,2)
+   self.assertEqual(store.image('h')['status'],'new');self.assertEqual(rec.llm.await_count,1)
 if __name__=='__main__':unittest.main()

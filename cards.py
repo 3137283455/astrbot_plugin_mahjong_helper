@@ -31,11 +31,14 @@ def footer(d,y,group,days):
     d.text((55,y),f'群 {group} · {period} · 被飞：最终持点 < 0',font=font(25),fill=MUTED)
     d.text((55,y+43),'比例仅代表本群精华样本；昵称来自截图，不等同于发送者。',font=font(25),fill=MUTED)
 
-def overview(path,group,matches,aliases,summary,days=0):
-    im,d=base('群数据 · 精华对局档案',f'三麻 / 四麻独立统计    已录入 {len(matches)} 场    待识别 {summary.get("new",0)} 张    待确认 {summary.get("review",0)+summary.get("llm_pending",0)} 张',1250)
-    for col,mode in enumerate((3,4)):
-        x=48+col*692;stats=aggregate(matches,mode,aliases);games=sum(s['games'] for s in stats)//mode
-        d.rounded_rectangle((x,238,x+654,930),radius=28,fill=PANEL)
+def overview(path,group,matches,aliases,summary,days=0,selected_mode=None):
+    modes=(selected_mode,) if selected_mode in (3,4) else (3,4)
+    matches=[m for m in matches if m['result']['mode'] in modes]
+    title='群数据 · 精华对局档案'+(' · 三麻' if selected_mode==3 else ' · 四麻' if selected_mode==4 else '')
+    im,d=base(title,f'三麻 / 四麻独立统计    已录入 {len(matches)} 场    待识别 {summary.get("new",0)} 张    待确认 {summary.get("review",0)+summary.get("llm_pending",0)} 张',1250)
+    for col,mode in enumerate(modes):
+        x=48+col*692;panel_width=1344 if len(modes)==1 else 654;stats=aggregate(matches,mode,aliases);games=sum(s['games'] for s in stats)//mode
+        d.rounded_rectangle((x,238,x+panel_width,930),radius=28,fill=PANEL)
         d.text((x+30,264),f'{"三麻" if mode==3 else "四麻"}  /  {games} 场',font=font(39,True),fill=TEAL)
         d.text((x+30,332),f'{len(stats)} 位玩家 · {sum(s["fly"] for s in stats)} 次被飞',font=font(29),fill=MUTED)
         y=408
@@ -45,9 +48,9 @@ def overview(path,group,matches,aliases,summary,days=0):
             if rows and (metric not in ('被飞',) or rows[0]['value']>0):
                 r=rows[0];v=f'{int(r["value"]):,}{suffix}'
                 tie=sum(q['position']==1 for q in rows)>1
-                name=fit(d,r['name']+(' 等（并列）' if tie else ''),30,370,True)
+                name=fit(d,r['name']+(' 等（并列）' if tie else ''),30,panel_width-284,True)
                 d.text((x+30,y+42),name,font=font(30,True),fill=INK)
-                d.text((x+420,y+42),v,font=font(30,True),fill=RED if metric in ('被飞','最低') else GOLD)
+                d.text((x+panel_width-234,y+42),v,font=font(30,True),fill=RED if metric in ('被飞','最低') else GOLD)
             else:d.text((x+30,y+42),'暂无记录',font=font(30),fill=INK)
             y+=98
     d.text((58,969),'/群数据 被飞率 四麻    /群数据 一位率 三麻    /群数据 个人 昵称',font=font(28),fill=INK)

@@ -126,5 +126,12 @@ class Recognizer:
             if not self.config.get('llm_fallback',True) or time.time()<self.paused_until:
                 await asyncio.sleep(3);continue
             jobs=self.pending(('llm_pending',))
-            if jobs:await asyncio.gather(*(self.llm(row) for row in jobs[:max(1,min(3,int(self.config.get('llm_concurrency',2))))]))
+            if jobs:
+                try:
+                    await self.provider()
+                except Exception as exc:
+                    self.model_error=str(exc)[:180] if isinstance(exc,RuntimeError) else '默认模型尚未就绪：'+type(exc).__name__
+                    await asyncio.sleep(5)
+                    continue
+                await asyncio.gather(*(self.llm(row) for row in jobs[:max(1,min(3,int(self.config.get('llm_concurrency',2))))]))
             else:await asyncio.sleep(3)

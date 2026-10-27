@@ -34,4 +34,9 @@ class LocalOCRTests(unittest.TestCase):
   r['full'][2]['text']='-2000';r['focused'][2]['text']='-2000'
   r['full'][6]['text']='65000';r['focused'][6]['text']='65000'
   self.assertEqual(trusted_names(r),{})
+ def test_grid_scores_do_not_get_discarded_when_title_ocr_fails(self):
+  r=self.fixture();r['full']=r['full'][1:];r['focused']=[]
+  for i,row in enumerate(r['full']):
+   for point in row['box']:point[0]-=500
+  self.assertEqual(interpret(r)['decision'],'llm_pending')
 if __name__=='__main__':unittest.main()
