@@ -1,0 +1,41 @@
+import unittest
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock,patch
+from astrbot_plugin_group_data.recognizer import Recognizer
+from astrbot_plugin_group_data.store import Store
+from test_core import result
+class RecognizerTests(unittest.IsolatedAsyncioTestCase):
+ def setup_recognizer(self,folder,provider=None):
+  store=Store(Path(folder)/'data.db');self.addCleanup(store.close)
+  ctx=SimpleNamespace(get_using_provider_async=AsyncMock(return_value=provider))
+  rec=Recognizer(ctx,{},store);store.enable('b:g','b','g');store.reconcile('b:g',[{'msg':'1','idx':0,'stamp':1}]);row=store.source('b:g','1',0);store.attach(row['id'],'h','image.png')
+  return rec,store,store.get_source('b:g',row['id'])
+ async def test_uses_only_default_deepseek_and_rejects_modelscope(self):
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'id':'default','model':'deepseek-v4.1-flash','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider);self.assertIs((await rec.provider())[0],provider)
+   provider.provider_config['api_base']='https://api-inference.modelscope.cn/v1'
+   with self.assertRaises(RuntimeError):await rec.provider()
+ async def test_local_result_calls_no_llm(self):
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d)
+   with patch('astrbot_plugin_group_data.recognizer.run_ocr',AsyncMock(return_value={})),patch('astrbot_plugin_group_data.recognizer.interpret',return_value={'decision':'accepted','result':result(),'raw':[],'reason':'local'}):
+    await rec.local(row)
+   self.assertEqual(store.image('h')['status'],'accepted');rec.context.get_using_provider_async.assert_not_awaited()
+ async def test_403_circuit_keeps_local_queue_running(self):
+  class Forbidden(Exception):status_code=403
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider);store.save('h','llm_pending',raw=[result()])
+   rec.read=AsyncMock(side_effect=Forbidden())
+   await rec.llm(row);await rec.llm(row)
+   self.assertEqual(rec.read.await_count,1);self.assertEqual(store.image('h')['status'],'llm_pending');self.assertIn('403',rec.model_error)
+ async def test_inconsistent_model_readings_never_counted(self):
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   rec.read=AsyncMock(side_effect=[result(),result(names=['另一人','乙','丙'])]);await rec.llm(row)
+   self.assertEqual(store.image('h')['status'],'review');self.assertFalse(store.matches('b:g'))
+if __name__=='__main__':unittest.main()
