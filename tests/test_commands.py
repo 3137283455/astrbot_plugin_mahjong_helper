@@ -31,6 +31,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
     def test_flexible_mode_time_metric_and_small_record_ids(self):
         a=parse_query('三麻 被飞率 30天 至少5场');b=parse_query('30天 被飞率 5场 三麻')
         self.assertEqual(a,b)
+        self.assertEqual(parse_query('被飞排行榜')['action'],'被飞')
         self.assertEqual(parse_query('原图 3')['rest'],['3'])
         self.assertEqual(parse_query('个人 "昵称 有空格" 四麻')['rest'],['昵称 有空格'])
     async def test_member_can_query_but_cannot_modify(self):
@@ -71,4 +72,11 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             for file in Path(d).glob('*.png'):
                 with Image.open(file) as im:self.assertEqual(im.width,1440);im.verify()
 
+    async def test_admin_can_exclude_failed_image_without_affecting_other_failures(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=self.setup_plugin(d);e=Event(admin=True);scope='12345:987654321'
+            p.store.reconcile(scope,[{'msg':'failed1','idx':0,'stamp':1},{'msg':'failed2','idx':0,'stamp':2}]);row=p.store.source(scope,'failed1',0)
+            await p.handle(e,f'忽略 {row["id"]}')
+            self.assertIn('已排除',e.sent[-1]);self.assertEqual([r['msg'] for r in p.store.rows(scope)],['failed2'])
+            self.assertEqual(p.store.summary(scope)['download_error'],1)
 if __name__=='__main__':unittest.main()

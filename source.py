@@ -88,6 +88,7 @@ class EssenceSource:
                 self.store.reconcile(scope,entries)
                 self.store.audit(scope,'system','scan',counts)
                 async def fetch(entry):
+                    if self.store.is_excluded(scope,entry['msg'],entry['idx']):return
                     row=self.store.source(scope,entry['msg'],entry['idx'])
                     if row['hash'] and self.store.image(row['hash']) and Path(self.store.image(row['hash'])['path']).is_file():return
                     async with self.download_lock:

@@ -18,6 +18,7 @@ class Store:
         CREATE TABLE IF NOT EXISTS aliases(scope TEXT,old TEXT,new TEXT,PRIMARY KEY(scope,old));
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,scope TEXT,actor TEXT,action TEXT,payload TEXT,stamp REAL);
         CREATE INDEX IF NOT EXISTS source_group ON sources(scope,active);
+        CREATE TABLE IF NOT EXISTS source_exclusions(scope TEXT,msg TEXT,idx INTEGER,reason TEXT,stamp REAL,PRIMARY KEY(scope,msg,idx));
         ''');self.db.commit()
     def close(self): self.db.close()
     def group(self,scope):
@@ -38,6 +39,11 @@ class Store:
             self.db.execute("UPDATE groups SET last_scan=?,error='' WHERE scope=?",(now,scope))
     def source(self,scope,msg,idx):
         return dict(self.db.execute('SELECT * FROM sources WHERE scope=? AND msg=? AND idx=?',(scope,msg,idx)).fetchone())
+    def is_excluded(self,scope,msg,idx):
+        return self.db.execute('SELECT 1 FROM source_exclusions WHERE scope=? AND msg=? AND idx=?',(scope,str(msg),idx)).fetchone() is not None
+    def exclude_source(self,scope,row,reason='管理员排除图片来源'):
+        if row['scope']!=scope:raise ValueError('不能排除其他群的图片来源')
+        self.db.execute('INSERT OR REPLACE INTO source_exclusions VALUES(?,?,?,?,?)',(scope,row['msg'],row['idx'],reason,time.time()));self.db.commit()
     def source_error(self,id,reason):
         self.db.execute('UPDATE sources SET error=? WHERE id=?',(reason,id));self.db.commit()
     def attach(self,id,digest,path):
@@ -52,7 +58,7 @@ class Store:
     def scan_error(self,scope,reason):
         self.db.execute('UPDATE groups SET error=? WHERE scope=?',(reason,scope));self.db.commit()
     def rows(self,scope):
-        return [dict(r) for r in self.db.execute('''SELECT s.*,i.path,i.status,i.result,i.raw,i.reason,i.attempts,i.retry,o.status AS override_status,o.result AS override_result,o.reason AS override_reason FROM sources s LEFT JOIN images i ON i.hash=s.hash LEFT JOIN overrides o ON o.hash=s.hash AND o.scope=s.scope WHERE s.scope=? AND s.active=1 ORDER BY s.stamp DESC,s.id DESC''',(scope,))]
+        return [dict(r) for r in self.db.execute('''SELECT s.*,i.path,i.status,i.result,i.raw,i.reason,i.attempts,i.retry,o.status AS override_status,o.result AS override_result,o.reason AS override_reason FROM sources s LEFT JOIN images i ON i.hash=s.hash LEFT JOIN overrides o ON o.hash=s.hash AND o.scope=s.scope WHERE s.scope=? AND s.active=1 AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx) ORDER BY s.stamp DESC,s.id DESC''',(scope,))]
     def matches(self,scope,days=0):
         out=[];seen=set();cut=time.time()-days*86400 if days else 0;aliases=self.aliases(scope)
         for r in self.rows(scope):

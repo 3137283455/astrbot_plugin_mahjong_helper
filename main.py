@@ -60,7 +60,7 @@ def parse_query(arguments):
         else:options['rest'].append(token)
     rest=options['rest']
     if rest:options['action']=rest.pop(0)
-    alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家'}
+    alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞率榜':'被飞率'}
     options['action']=alias.get(options['action'],options['action'])
     return options
 
@@ -169,7 +169,12 @@ class GroupDataPlugin(Star):
             if action in ('核对','确认','忽略','重识','修正'):
                 if not rest:raise ValueError('请在操作后填写图片记录编号')
                 row=self.store.get_source(scope,int(rest[0]))
-                if not row or not row['hash']:raise ValueError('本群没有这个已下载的有效精华图片记录')
+                if not row:raise ValueError('本群没有这个有效精华图片记录')
+                if action=='忽略' and not row['hash']:
+                    self.store.exclude_source(scope,row,'管理员忽略无法读取的精华图片')
+                    self.store.audit(scope,event.get_sender_id(),action,{'id':row['id'],'source_excluded':True})
+                    await event.send(event.plain_result(f'记录 #{row["id"]} 已排除，后续扫描不再读取该图。'));return
+                if not row['hash']:raise ValueError('这张原图尚未成功下载，可先忽略或待图片恢复后重试')
                 if action=='核对':
                     raw=json.loads(row['raw'] or '[]');lines=[f'记录 #{row["id"]}：{row["override_status"] or row["status"]}',row['override_reason'] or row['reason'] or '']
                     for i,candidate in enumerate(item for item in raw if 'is_result' in item):
