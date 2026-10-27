@@ -132,3 +132,18 @@ https://github.com/3137283455/astrbot_plugin_mahjong_helper
 安装 [Soulter Bilibili 插件](https://github.com/Soulter/astrbot_plugin_bilibili) 后，可用 `/B站` 查看完整帮助，或私聊/@慧慧管理当前聊天的订阅。需管理员私聊 `/bili_login` 扫码登录。详见 [B站订阅使用说明](docs/B站订阅使用说明.md)。
 
 B站第三版深色快讯的模板与推送代码位于 [bilibili-push 分支](https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/bilibili-push)，由原插件继续负责自动订阅推送。
+
+
+## 慧慧一图帮助
+
+`/help`、`/帮助` 与 AI 的总功能菜单共用 [高清帮助图](data/help_one_page.png)。2026-10-27 更新为黑橙配色，补齐群数据、B站订阅、歌单优先搜索和列表续接、友人房冷却，以及当前76项娱乐项目。完整文字版见 [慧慧使用手册](docs/慧慧使用手册.md)。
+
+帮助图与文字手册由同一内容生成，娱乐目录只保留项目名称，不包含接口地址或凭据。维护时在插件目录执行：
+
+```bash
+python tools/build_user_help.py
+# 从已安装娱乐插件的实际项目池刷新公共目录：
+python tools/build_user_help.py --pool ../astrbot_plugin_apis/presets/api_pool_default.json
+```
+
+生成器检查文字宽度、模块高度和画布边界。替换 `data/help_one_page.png` 即可更新菜单图。
