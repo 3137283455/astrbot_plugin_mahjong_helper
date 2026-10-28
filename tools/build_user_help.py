@@ -8,7 +8,7 @@ from PIL import Image,ImageDraw,ImageFont
 ROOT=Path(__file__).resolve().parents[1]
 W=2000;M=58;GAP=32;CW=(W-M*2-GAP)//2
 PAPER='#F5EFE3';INK='#202126';ORANGE='#EC5936';MUTED='#66635F';LINE='#D8CFC0';WHITE='#FFFCF6';GOLD='#F4C65B'
-EDITION='2026.10.27'
+EDITION='2026.10.28'
 MODULES=[
  {'id':'01','title':'群数据','tag':'只看本群精华','subtitle':'被飞几次，谁最惨？看这里。','height':770,'lines':[
   ('cmd','/群数据'),('small','三麻、四麻独立总览；不填模式分别显示。'),
@@ -36,14 +36,15 @@ MODULES=[
   ('note','筛选：金 / 玉 / 王；7天 / 30天 / 90天 / 365天。'),
   ('note','近 / 桌 / 局如遇访问验证，会返回玩家网页链接。')],
   'example':'@慧慧 锐评一下我的雀魂战绩'},
- {'id':'03','title':'何切练习','tag':'601道原书题','subtitle':'先想好切哪张，再看答案。','height':470,'lines':[
+ {'id':'03','title':'何切练习','tag':'601道原书题','subtitle':'先想好切哪张，再看答案。','height':530,'lines':[
   ('cmd','/何切　　/何切 150'),
   ('small','随机出题 / 指定题号；每轮随机不重复。'),
   ('cmd','/何切答案　　/何切状态'),
   ('small','看当前题答案与解析 / 看本轮进度。'),
-  ('note','不自动判题；更多用法：/何切 帮')],
+  ('note','不自动判题；更多用法：/何切 帮'),
+  ('cmd','/符数　 符数规则 + 番符点数对照表')],
   'example':'@慧慧 来5道何切题'},
- {'id':'04','title':'点歌与歌单','tag':'歌单优先','subtitle':'先找已收藏的歌，没有再在线搜索。','height':470,'lines':[
+ {'id':'04','title':'点歌与歌单','tag':'歌单优先','subtitle':'先找已收藏的歌，没有再在线搜索。','height':530,'lines':[
   ('cmd','/搜索歌曲 晴天　　/搜索视频 BV号'),
   ('small','出现列表后，5分钟内可续接：播放第二首。'),
   ('small','也能说：把第二首加入歌单。群聊聊天请@慧慧。'),
@@ -140,7 +141,7 @@ def render(path,catalog_path=None):
  # Editorial cover with a drawn magic burst: type stays crisp at original size.
  p.pill(M,38,'HUIHUI / 功能导航',WHITE,INK,26)
  p.text(M,100,'慧慧',108,True,width=650);p.text(M+280,146,'今天想做点什么？',49,True,width=1000)
- p.text(M+4,240,'练何切 · 查雀魂 · 看群数据 · 听歌 · 订阅B站 · 娱乐',31,color=MUTED,width=1600)
+ p.text(M+4,240,'练何切 · 查符数 · 查雀魂 · 看群数据 · 听歌 · 订阅B站 · 娱乐',31,color=MUTED,width=1600)
  d.rectangle((1694,35,1942,255),fill=ORANGE)
  p.text(1721,64,'HELP',60,True,WHITE,width=200);p.text(1723,156,'一图使用手册',25,True,WHITE,width=200)
  # Star / rays are decoration rather than an image-generated character.
@@ -151,8 +152,8 @@ def render(path,catalog_path=None):
  p.text(M+28,324,'群聊：@慧慧 + 你的需求',36,True,WHITE,width=900)
  p.text(1060,326,'私聊：直接说；常规命令可直接发',30,True,WHITE,width=850)
  p.text(M+28,389,'例如：来道何切题 / 播放第二首 / 看看四麻被飞榜 / 给我功能菜单',28,color='#E6D9C8',width=1800)
- commands=['/群数据','/雀','/何切','/歌单','/B站','/娱乐']
- qw=(W-2*M-5*16)/6
+ commands=['/群数据','/雀','/何切','/符数','/歌单','/B站','/娱乐']
+ qw=(W-2*M-(len(commands)-1)*16)/len(commands)
  for i,s in enumerate(commands):
   x=M+i*(qw+16);d.rectangle((x,479,x+qw,544),fill=WHITE,outline=INK,width=2);p.text(x+24,488,s,34,True,width=qw-40)
  y=578

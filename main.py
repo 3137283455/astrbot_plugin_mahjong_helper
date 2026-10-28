@@ -366,7 +366,7 @@ class MahjongHelperPlugin(Star):
         """发送机器人已有的图片功能菜单或帮助，不新增功能。
 
         Args:
-            section(string): all总功能菜单，entertainment娱乐菜单，mahjong雀魂菜单，quiz何切帮助，bilibili或bili为B站订阅帮助，group_data为群精华对局统计帮助。
+            section(string): all总功能菜单，entertainment娱乐菜单，mahjong雀魂菜单，quiz何切帮助，bilibili或bili为B站订阅帮助，group_data为群精华对局统计帮助，fu为符数规则和番符点数速查图。
             category(string): 娱乐分类，可留空，或文字、图片、视频、语音。
         """
         if not self._claim_ai_action(event):
@@ -387,10 +387,12 @@ class MahjongHelperPlugin(Star):
             results = self.koromo_menu(event, "")
         elif section == "quiz":
             results = self.nanikiru(event, "帮助")
+        elif section in {"fu", "符数", "符数表", "点数表"}:
+            results = self.fu_reference(event)
         elif section == "all":
             results = self.user_help(event)
         else:
-            await event.send(event.plain_result("可查看总功能菜单、娱乐菜单、雀魂菜单、何切帮助、B站订阅帮助或群数据帮助。"))
+            await event.send(event.plain_result("可查看总功能菜单、娱乐菜单、雀魂菜单、何切帮助、B站订阅帮助、群数据帮助或符数速查图。"))
             return
         async for result in results:
             await event.send(result)
@@ -488,6 +490,17 @@ class MahjongHelperPlugin(Star):
             return
         yield event.chain_result([Comp.Image.fromFileSystem(str(image))])
 
+    @filter.command("符数")
+    async def fu_reference(self, event: AstrMessageEvent):
+        """发送符数速算规则与四麻番符点数对照表，两张原图按顺序发送。"""
+        event.stop_event()
+        images = [self.plugin_dir / "data" / "fu" / name
+                  for name in ("rules.png", "points.png")]
+        if not all(path.is_file() for path in images):
+            yield event.plain_result("符数参考图暂时不可用，请联系管理员。")
+            return
+        yield event.chain_result([Comp.Image.fromFileSystem(str(path)) for path in images])
+
     def _koromo_token(self) -> str | None:
         configured = str(self.config.get("koromo_token", "") or "").strip()
         if configured:
@@ -523,6 +536,7 @@ class MahjongHelperPlugin(Star):
             "/何切 [题号]｜随机出题或查看指定题",
             "/何切答案 [题号]｜查看原书答案",
             "/何切状态｜查看当前题和本轮进度",
+            "/符数｜符数速算规则与四麻番符点数表（两张原图）",
             "",
             "【雀魂玩家】",
             "/友 房间号或链接｜在群里 @全体广播友人房",
