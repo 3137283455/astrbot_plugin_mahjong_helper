@@ -366,8 +366,8 @@ class MahjongHelperPlugin(Star):
         """发送机器人已有的图片功能菜单或帮助，不新增功能。
 
         Args:
-            section(string): all总功能菜单，entertainment娱乐菜单，mahjong雀魂菜单，quiz何切帮助，bilibili或bili为B站订阅帮助，group_data为群精华对局统计帮助，fu为符数规则和番符点数速查图。
-            category(string): 娱乐分类，可留空，或文字、图片、视频、语音。
+            section(string): all总功能菜单，entertainment娱乐菜单，mahjong雀魂菜单，quiz何切帮助，bilibili或bili为B站订阅帮助，group_data为群精华对局统计帮助，fu为符数规则和番符点数速查图，news或资讯为60s资讯热榜工具图片菜单。
+            category(string): 娱乐可选文字、图片、视频、语音；资讯可选热榜、资讯、工具、图片、趣味。
         """
         if not self._claim_ai_action(event):
             return
@@ -377,7 +377,13 @@ class MahjongHelperPlugin(Star):
         if section in {"bilibili", "bili"}:
             await event.send(event.plain_result(BILIBILI_HELP))
             return
-        if section == "entertainment":
+        if section in {"news", "资讯", "60s"}:
+            instance = self._entertainment_plugin()
+            if instance is None or not callable(getattr(instance, "sixty_menu", None)):
+                await event.send(event.plain_result("资讯服务暂时未启用。"))
+                return
+            results = instance.sixty_menu(event, category)
+        elif section == "entertainment":
             instance = self._entertainment_plugin()
             if instance is None:
                 await event.send(event.plain_result("娱乐插件暂时未启用，请稍后再试。"))
@@ -392,7 +398,7 @@ class MahjongHelperPlugin(Star):
         elif section == "all":
             results = self.user_help(event)
         else:
-            await event.send(event.plain_result("可查看总功能菜单、娱乐菜单、雀魂菜单、何切帮助、B站订阅帮助、群数据帮助或符数速查图。"))
+            await event.send(event.plain_result("可查看总功能菜单、资讯菜单、娱乐菜单、雀魂菜单、何切帮助、B站订阅帮助、群数据帮助或符数速查图。"))
             return
         async for result in results:
             await event.send(result)

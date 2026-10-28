@@ -137,7 +137,7 @@ class Poster:
 
 
 def render(path,catalog_path=None):
- c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(4300);d=p.d
+ c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(4600);d=p.d
  # Editorial cover with a drawn magic burst: type stays crisp at original size.
  p.pill(M,38,'HUIHUI / 功能导航',WHITE,INK,26)
  p.text(M,100,'慧慧',108,True,width=650);p.text(M+280,146,'今天想做点什么？',49,True,width=1000)
@@ -152,13 +152,20 @@ def render(path,catalog_path=None):
  p.text(M+28,324,'群聊：@慧慧 + 你的需求',36,True,WHITE,width=900)
  p.text(1060,326,'私聊：直接说；常规命令可直接发',30,True,WHITE,width=850)
  p.text(M+28,389,'例如：来道何切题 / 播放第二首 / 看看四麻被飞榜 / 给我功能菜单',28,color='#E6D9C8',width=1800)
- commands=['/群数据','/雀','/何切','/符数','/歌单','/B站','/娱乐']
+ commands=['/群数据','/雀','/何切','/符数','/歌单','/B站','/娱乐','/资讯']
  qw=(W-2*M-(len(commands)-1)*16)/len(commands)
  for i,s in enumerate(commands):
   x=M+i*(qw+16);d.rectangle((x,479,x+qw,544),fill=WHITE,outline=INK,width=2);p.text(x+24,488,s,34,True,width=qw-40)
  y=578
  for i in range(0,len(MODULES),2):
   p.module(M,y,MODULES[i]);p.module(M+CW+GAP,y,MODULES[i+1]);y+=max(MODULES[i]['height'],MODULES[i+1]['height'])+32
+ # New 60s catalog is a separate current menu; the original entertainment catalog stays readable.
+ d.rectangle((M,y,W-M,y+218),fill='#DCEAE5',outline=INK,width=2)
+ p.text(M+27,y+18,'60s 资讯站  /资讯',41,True,width=1500)
+ p.text(M+27,y+80,'热榜 · 早报 · 科技 · 天气 · 翻译 · 趣味；群聊先@慧慧，私聊直接用。',30,width=1800)
+ p.text(M+27,y+132,'/抖音热搜　 /天气 上海　 /翻译 hello world　 /资讯 工具',31,True,width=1800)
+ p.text(M+27,y+178,'也能说「看看抖音热搜」「查上海天气」；完整项目看 /资讯 图片菜单。',27,color=MUTED,width=1800)
+ y+=250
  # Entertainment names come from a sanitized snapshot of the actual enabled catalog.
  p.text(M,y+3,'07',54,True,ORANGE,width=100);p.text(M+118,y+12,'娱乐百宝箱',43,True,width=500)
  p.text(M+635,y+26,f'{total} 项速查 · 不知道怎么说，就让慧慧帮你找',28,color=MUTED,width=1200)
@@ -204,7 +211,7 @@ def write_manual(path,catalog_path=None):
   lines += ['## '+item['title'],'',item['subtitle'],'']+[('- `'+line+'`') if kind=='cmd' else '- '+line for kind,line in item['lines']]
   if item['example']:lines += ['',item['example']]
   lines += ['']
- lines+=['## 娱乐百宝箱','','群聊使用：`@慧慧 /娱乐`、`@慧慧 /娱乐 图片`；私聊可省略@。项目名后可带参数，如 `@慧慧 搜图 猫`。']
+ lines+=['## 60s资讯站','','群聊先@慧慧，私聊直接发送。`/资讯` 查看完整图片菜单；`/资讯 热榜`、`/资讯 工具` 可分类查看。例：`/抖音热搜`、`/天气 上海`、`/翻译 hello world`。也可以自然语言请求。仅启用服务器实测通过的项目，故障接口不替换原功能。','','## 娱乐百宝箱','','群聊使用：`@慧慧 /娱乐`、`@慧慧 /娱乐 图片`；私聊可省略@。项目名后可带参数，如 `@慧慧 搜图 猫`。']
  for key,label in [('text','文字'),('image','图片'),('video','视频'),('audio','语音')]:lines+=['','### '+label,'','、'.join(c[key])+'。']
  lines+=['','项目来自第三方，部分项目需参数或可能临时不可用；以 `/娱乐` 当前列表为准。','', '## 其他功能','','表情包：`/meme status` 查看状态，`/meme list` 查看已收集表情。启用的群里，普通消息发送“原神”可触发原神语录。','','帮助：`/help` 或 `/帮助`。']
  Path(path).write_text('\n'.join(lines)+'\n',encoding='utf8')
