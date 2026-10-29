@@ -47,6 +47,8 @@ from .stat_card import (
 )
 
 
+MAJSOUL_OFFICIAL_URL = "https://www.maj-soul.net/"
+
 TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 UID_RE = re.compile(r"^\d{5,12}$")
 
@@ -195,6 +197,11 @@ class MahjongHelperPlugin(Star):
                 req.system_prompt = persona.system_prompt or AI_PERSONA
             except ValueError:
                 pass
+        req.system_prompt += (
+            "\n【雀魂官网链接】用户索要雀魂官网、官方网址、网页版入口或官网游玩链接时，"
+            f"直接回复：雀魂官网：{MAJSOUL_OFFICIAL_URL}。"
+            "保留完整网址，不把中文说明拼入网址路径；无需调用战绩或娱乐工具。"
+        )
         music_plugin = self._music_plugin()
         if music_plugin is not None:
             req.system_prompt += "\n" + music_plugin.music_context_text(event)
@@ -485,6 +492,12 @@ class MahjongHelperPlugin(Star):
         action = actions.get(parts[0], parts[0]) if parts else "menu"
         await self._run_bilibili(event, action, parts[1] if len(parts) > 1 else "", parts[2] if len(parts) > 2 else "")
         event.stop_event()
+
+    @filter.command("雀魂官网")
+    async def majsoul_website(self, event: AstrMessageEvent):
+        """发送雀魂官网网址。"""
+        event.stop_event()
+        yield event.plain_result(f"雀魂官网：{MAJSOUL_OFFICIAL_URL}")
 
     @filter.command("help", aliases=["帮助"])
     async def user_help(self, event: AstrMessageEvent):
