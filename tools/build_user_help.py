@@ -8,20 +8,23 @@ from PIL import Image,ImageDraw,ImageFont
 ROOT=Path(__file__).resolve().parents[1]
 W=2000;M=58;GAP=32;CW=(W-M*2-GAP)//2
 PAPER='#F5EFE3';INK='#202126';ORANGE='#EC5936';MUTED='#66635F';LINE='#D8CFC0';WHITE='#FFFCF6';GOLD='#F4C65B'
-EDITION='2026.10.28'
+EDITION='2026.11.02'
 MODULES=[
- {'id':'01','title':'群数据','tag':'只看本群精华','subtitle':'被飞几次，谁最惨？看这里。','height':770,'lines':[
-  ('cmd','/群数据'),('small','三麻、四麻独立总览；不填模式分别显示。'),
-  ('cmd','/群数据 被飞榜 四麻'),('cmd','/群数据 个人 I咲仡'),
-  ('small','个人卡片包含被飞次数、被飞率与顺位。'),
-  ('small','还可查：被飞率、一位 / 二位及比率、最高 / 最低。'),
-  ('cmd','/群数据 最高 四麻　 /群数据 原图 编号'),
-  ('note','只收本群精华中的完整结算图；文字、牌桌图跳过。'),
-  ('note','被飞＝最终持点＜0；比例仅代表本群精华样本。'),
-  ('note','约2分钟检查新增精华；识别完成才计入，重复去重。'),
-  ('note','首次需群管理员 /群数据 开启；只查询当前群。'),
+ {'id':'01','title':'群数据','tag':'S1赛季 · 群精华样本','subtitle':'场次、顺位、持点与被飞，完整看对局。','height':850,'lines':[
+  ('cmd','/群数据　　/群数据 最近 5'),
+  ('small','三麻、四麻分别统计；默认S1，旧赛季加 S0。'),
+  ('cmd','/群数据 个人 完整昵称'),
+  ('small','场次、各顺位次数与比例、被飞、最高最低点数及图号。'),
+  ('cmd','/群数据 极值 完整昵称 S0'),
+  ('small','直接发该玩家最高、最低结算图；也能单查最高 / 最低。'),
+  ('cmd','/群数据 一位率 四麻　 /群数据 被飞榜'),
+  ('small','可查二位等各顺位、场次、平均顺位 / 持点、被飞率。'),
+  ('cmd','/群数据 对比 甲 乙　 /群数据 表格'),
+  ('note','正常结算和被飞结算都统计；文字、牌桌图跳过。'),
+  ('note','被飞榜按次数；被飞率按比例，数据仅代表本群精华。'),
+  ('note','约2分钟检查新增与取消精华；待核对图确认后才计入。'),
   ('link','更多：/群数据 帮助　进度：/群数据 状态')],
-  'example':'@慧慧 看看本群四麻谁被飞最多'},
+  'example':'@慧慧 查清风难胡S0数据，再看看他最低分那张图'},
  {'id':'02','title':'雀魂战绩','tag':'牌谱屋公开数据','subtitle':'查数据、看卡片，也可以让慧慧锐评。','height':770,'lines':[
   ('alert','仅收录金之间及以上的公开对局'),
   ('cmd','/雀 玩家昵称 三 铳 30天'),
@@ -137,7 +140,7 @@ class Poster:
 
 
 def render(path,catalog_path=None):
- c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(4600);d=p.d
+ c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(4800);d=p.d
  # Editorial cover with a drawn magic burst: type stays crisp at original size.
  p.pill(M,38,'HUIHUI / 功能导航',WHITE,INK,26)
  p.text(M,100,'慧慧',108,True,width=650);p.text(M+280,146,'今天想做点什么？',49,True,width=1000)
