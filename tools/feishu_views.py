@@ -32,14 +32,14 @@ async def configure(args):
         table=target['tables'][key];base=client.table_path(table)
         fields={r['field_name']:r for r in await client.listing(base+'/fields')}
         existing={r['view_name']:r['view_id'] for r in await client.listing(base+'/views')}
-        hidden=[fields[n]['field_id'] for n in ('对局ID','群标识','周期ID','数据版本','统计ID','玩家标识') if n in fields]
+        hidden=[fields[n]['field_id'] for n in ('对局ID','群标识','周期ID','数据版本','统计ID','玩家标识') if n in fields and not fields[n].get('is_primary')]
         for name,conditions in views:
             vid=existing.get(name)
             if not vid:
                 result=await client.request('POST',base+'/views',{'view_name':name,'view_type':'grid'})
                 vid=result['view']['view_id']
             body={'property':{'hidden_fields':hidden,'filter_info':{'conjunction':'and','conditions':[
-                {'field_id':fields[field]['field_id'],'operator':'is','value':json.dumps([value],ensure_ascii=False)} for field,value in conditions]}}}
+                {'field_id':fields[field]['field_id'],'field_type':fields[field]['type'],'operator':'is','value':json.dumps([value],ensure_ascii=False)} for field,value in conditions]}}}
             await client.request('PATCH',base+'/views/'+vid,body)
             # Verify that the server really applies each filter, not merely its name.
             rows=await client.listing(base+'/records',{'view_id':vid})
