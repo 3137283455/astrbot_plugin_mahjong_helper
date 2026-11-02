@@ -70,6 +70,9 @@ class Feishu:
     async def create(self,table,fields):
         data=await self.request('POST',self.table_path(table)+'/records',{'fields':fields})
         return data['record']
+    async def batch_create(self,table,fields):
+        obj=await self.request('POST',self.table_path(table)+'/records/batch_create',{'records':[{'fields':f} for f in fields]})
+        return obj['records']
 
     async def update(self,table,record,fields):
         return await self.request('PUT',self.table_path(table)+'/records/'+record,{'fields':fields})

@@ -18,6 +18,7 @@ class FakeFeishu:
         self.counter+=1;rid='rec'+str(self.counter)
         row={'record_id':rid,'fields':copy.deepcopy(fields),'last_modified_by':{'id':'bot'}}
         self.rows[table][rid]=row;return copy.deepcopy(row)
+    async def batch_create(self,table,fields):return [await self.create(table,f) for f in fields]
     async def update(self,table,rid,fields):
         self.updates+=1
         self.rows[table][rid]['fields'].update(copy.deepcopy(fields));self.rows[table][rid]['last_modified_by']={'id':'bot'}
@@ -115,6 +116,23 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         key,rid,source=await self.current();await self.fake.create('matches',self.fake.rows['matches'][rid]['fields'])
         with self.assertRaises(ValueError):await self.online.once()
         self.assertEqual(len(self.store.matches(self.scope)),1)
+    async def test_uncertain_batch_response_recovers_by_stable_id_without_duplicates(self):
+        original=self.fake.batch_create;failed=False
+        async def uncertain(table,fields):
+            nonlocal failed
+            rows=await original(table,fields)
+            if not failed:
+                failed=True;raise FeishuError('response lost after creation')
+            return rows
+        self.fake.batch_create=uncertain
+        with self.assertRaises(FeishuError):await self.online.once()
+        await self.online.once()
+        self.assertEqual(len(self.fake.rows['matches']),1)
+    async def test_other_group_rows_and_derived_stats_are_never_modified(self):
+        other=await self.fake.create('players',{'统计ID':'other','群标识':'another:group','场次':9})
+        before=copy.deepcopy(self.fake.rows['players'][other['record_id']])
+        await self.online.once()
+        self.assertEqual(self.fake.rows['players'][other['record_id']],before)
     async def test_incomplete_pagination_raises_without_returning_partial_results(self):
         from unittest.mock import AsyncMock
         client=Feishu(self.folder/'absent','app');client.request=AsyncMock(return_value={'items':[{'record_id':'one'}],'has_more':True,'page_token':'repeated'})

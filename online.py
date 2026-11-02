@@ -214,9 +214,16 @@ class OnlineSync:
     async def mirror(self,kind,wanted,id_field):
         table=self.tables[kind];rows=await self.client.records(table);index={}
         for row in rows:
-            key=normalize(row.get('fields') or {}).get(id_field)
+            normalized=normalize(row.get('fields') or {})
+            if normalized.get('群标识')!=self.scope:continue
+            key=normalized.get(id_field)
             if key in index:raise ValueError('派生表存在重复ID：'+kind)
             if key:index[key]=row
+        pending=[normalize(fields) for key,fields in wanted.items() if key not in index]
+        if kind=='players':pending=[{**f,'更新时间':int(time.time()*1000)} for f in pending]
+        for start in range(0,len(pending),50):
+            for row in await self.client.batch_create(table,pending[start:start+50]):
+                index[normalize(row['fields'])[id_field]]=row
         for key,fields in wanted.items():
             fields=normalize(fields)
             row=index.get(key)
@@ -239,6 +246,7 @@ class OnlineSync:
         async with self.lock:
             if not periods.select(self.store,self.scope):raise ValueError('未切换周期，不执行在线导入')
             table=self.tables['matches'];remote=await self.client.records(table);errors=[]
+            remote=[r for r in remote if normalize(r.get('fields') or {}).get('群标识') in (None,self.scope)]
             for row in remote:
                 try:await self.import_new(row)
                 except ValueError as exc:
@@ -252,6 +260,19 @@ class OnlineSync:
             desired,meta,players,sources=self.projection()
             errors.extend(await self.attachments(sources))
             desired,meta,players,sources=self.projection()
+            links=self.links()
+            # Initial history imports can contain hundreds of games. Batched creates
+            # avoid one network round trip per row; stable IDs recover uncertain POSTs.
+            pending=[normalize(f) for key,f in desired.items() if key not in index]
+            for key in desired:
+                if key not in index and key in links:errors.append('在线行被删除，已按本地数据恢复；停用请修改确认状态')
+            for start in range(0,len(pending),50):
+                batch=await self.client.batch_create(table,pending[start:start+50])
+                if {normalize(r['fields']).get('对局ID') for r in batch}!={f['对局ID'] for f in pending[start:start+50]}:
+                    raise FeishuError('飞书批量创建响应不完整；下轮按稳定ID核对，不盲目重试')
+                for row in batch:
+                    fields=normalize(row['fields']);key=fields['对局ID'];index[key]=row
+                    self.remember(key,row['record_id'],desired[key])
             links=self.links()
             for key,fields in desired.items():
                 # Re-read local state after earlier network awaits. Native corrections
