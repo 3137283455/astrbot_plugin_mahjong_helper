@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "app_id": "",
+  "app_secret": "",
+  "base_url": "",
+  "sync_strategy": "polling",
+  "poll_interval_seconds": 600,
+  "group_scope": "",
+  "note": "仅为准备模板，尚未接入运行；密钥只填写在服务器插件设置，不提交到公开仓库。实际同步频率按账号配额确定。"
+}
