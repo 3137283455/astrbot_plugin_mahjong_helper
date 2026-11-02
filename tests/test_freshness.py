@@ -60,6 +60,23 @@ class FreshnessStoreTests(unittest.TestCase):
         self.store.save('image','accepted',validate(result()))
         self.assertEqual(self.store.freshness(self.scope)['last_import'],0)
 
+    def test_data_cutoff_uses_confirmed_essence_time_and_separates_modes(self):
+        entries=[{'msg':str(i),'idx':0,'stamp':stamp} for i,stamp in [(1,100),(2,200),(3,300),(4,400)]]
+        self.store.reconcile(self.scope,entries)
+        for i,mode in [(1,3),(2,4),(3,4),(4,4)]:
+            row=self.store.source(self.scope,str(i),0)
+            self.store.attach(row['id'],str(i),'image.png')
+            data=validate(result(mode,points=[50000,30000,15000,5000] if i==3 else None))
+            self.store.save(str(i),'review' if i==4 else 'accepted',data)
+        info=self.store.freshness(self.scope)
+        self.assertEqual(info['data_until']['stamp'],300) # Newest accepted game has no negative points.
+        self.assertEqual(info['latest_fly'][3]['stamp'],100)
+        self.assertEqual(info['latest_fly'][4]['stamp'],200)
+        self.assertGreater(info['last_scan'],info['data_until']['stamp'])
+        row=self.store.source(self.scope,'2',0);self.store.override(self.scope,row,'ignored')
+        self.assertEqual(self.store.freshness(self.scope)['latest_fly'][4]['stamp'],0)
+        self.assertEqual(self.store.freshness('other')['data_until']['stamp'],0)
+
     def test_old_database_migration_is_additive_and_does_not_invent_history(self):
         path=Path(self.temp.name)/'old.db'
         with sqlite3.connect(path) as db:
@@ -93,7 +110,7 @@ class FreshnessCommandTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(admin.sent),1)
                 message=admin.sent[0]
                 self.assertIsInstance(message,str)
-                for label in ['北京时间','查询时间','最近成功检查精华','最近结果入库','待识别','升级后暂无新入库']:
+                for label in ['北京时间','查询时间','数据截至','三麻最新被飞精华','四麻最新被飞精华','最近成功检查精华','最近结果入库','待识别','历史处理时间未记录']:
                     self.assertIn(label,message)
                 self.assertRegex(message,r'查询时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}')
         finally:helper.doCleanups()

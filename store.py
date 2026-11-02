@@ -37,8 +37,14 @@ class Store:
         self.db.execute('INSERT INTO audit(scope,actor,action,payload,stamp) VALUES(?,?,?,?,?)',(scope,str(actor),action,json.dumps(payload,ensure_ascii=False),time.time()));self.db.commit()
     def freshness(self,scope):
         group=self.group(scope) or {}
+        matches=self.matches(scope)
+        def latest(rows):
+            row=max(rows,key=lambda r:(r['stamp'],r['id']),default=None)
+            return {'stamp':row['stamp'],'id':row['id']} if row else {'stamp':0,'id':None}
+        flying=[m for m in matches if any(p['points']<0 for p in m['result']['players'])]
         return {'generated_at':time.time(),'last_scan':group.get('last_scan',0),
-                'last_import':group.get('last_import',0)}
+                'last_import':group.get('last_import',0),'data_until':latest(matches),
+                'latest_fly':{mode:latest([m for m in flying if m['result']['mode']==mode]) for mode in (3,4)}}
     def _accepted_hashes(self,scope):
         return {r[0] for r in self.db.execute('''SELECT DISTINCT s.hash FROM sources s
             JOIN images i ON i.hash=s.hash

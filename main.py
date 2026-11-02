@@ -39,7 +39,7 @@ HELP=[
  '按顺位从高到低填写所有人；只在核对原图后确认，不确定就保留待确认。',
  '别名：/群数据 合并 "旧昵称" "新昵称"；撤销别名：/群数据 取消合并 "旧昵称"',
  '每约2分钟检查精华变更，识别异步进行；取消精华后不再计入。',
- '管理员 /群数据 时间：查询最近成功检查、最近结果入库时间和待处理数量。',
+ '管理员 /群数据 时间：查看数据截至日期、各模式最新被飞和程序检查时间。',
  '群聊也可@慧慧说“看看本群三麻被飞榜”；管理操作仅接受明确命令。',
 ]
 WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并'}
@@ -153,15 +153,21 @@ class GroupDataPlugin(Star):
                 tz=timezone(timedelta(hours=8))
                 def stamp(value,missing):
                     return datetime.fromtimestamp(float(value),tz).strftime('%Y-%m-%d %H:%M:%S') if value else missing
+                def record(value):
+                    return stamp(value['stamp'],'暂无已确认记录')+(f'（记录 #{value["id"]}）' if value['id'] is not None else '')
                 lines=[
                     '群数据 · 更新时间（北京时间）',
                     '查询时间：'+stamp(info['generated_at'],''),
+                    '数据截至（加入精华时间）：'+record(info['data_until']),
+                    '三麻最新被飞精华：'+record(info['latest_fly'][3]),
+                    '四麻最新被飞精华：'+record(info['latest_fly'][4]),
                     '最近成功检查精华：'+stamp(info['last_scan'],'尚未成功检查'),
-                    '最近结果入库：'+stamp(info['last_import'],'未记录（升级后暂无新入库）'),
+                    '最近结果入库（程序处理时间）：'+stamp(info['last_import'],'历史处理时间未记录；不代表没有历史数据'),
                     f'自动检查：{"开启" if group["enabled"] else "暂停"}；检查间隔至少 {max(60,int(self.config.get("poll_seconds",120)))} 秒',
                     f'已录入：{s["games"]} 场；待识别：{s.get("new",0)} 张；待辅助识别：{s.get("llm_pending",0)} 张',
                     f'待确认：{s.get("review",0)} 张；本地异常：{s.get("local_error",0)} 张；读取失败：{s.get("download_error",0)} 张',
                     '最近检查异常：'+group['error'] if group['error'] else '最近检查：正常',
+                    '数据截至与最新被飞按已确认记录的加入精华时间计算，不推断实际对局时间。',
                     '成功检查只代表精华列表已同步；识别或人工确认完成后才会入库。',
                 ]
                 await event.send(event.plain_result('\n'.join(lines)));return
