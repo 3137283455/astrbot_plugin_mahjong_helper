@@ -218,7 +218,7 @@ class GroupDataPlugin(Star):
                 lines=[
                     '群数据 · 更新时间（北京时间）',
                     '统计周期：'+period_name+(f' · {period_id}' if period_id else ''),
-                    '查询时间：'+stamp(info['generated_at'],''),
+                    '查询时间：'+stamp(time.time(),''),
                     '数据截至（加入精华时间）：'+record(info['data_until']),
                     '三麻最新被飞精华：'+record(info['latest_fly'][3]),
                     '四麻最新被飞精华：'+record(info['latest_fly'][4]),
