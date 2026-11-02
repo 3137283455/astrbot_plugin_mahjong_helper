@@ -29,6 +29,9 @@ HELP=[
  '/群数据 个人 "游戏昵称" 三麻   玩家档案',
  '/群数据 最高 四麻             最高持点榜 + 第一条记录原图',
  '/群数据 最低 三麻             最低持点榜 + 第一条记录原图',
+ '/群数据 最高 "游戏昵称" 三麻 S0   直接发送该玩家最高持点的结算图',
+ '/群数据 最低 "游戏昵称" 四麻 S0   直接发送该玩家最低持点的结算图',
+ '/群数据 极值 "游戏昵称" S0        分别发送三麻、四麻的最高和最低图',
  '/群数据 原图 编号             查看记录对应的精华截图',
  '/群数据 玩家 / 记录 [页码] / 状态 / 帮助',
  '/群数据 赛季                  查看赛季列表；默认查询 S1赛季',
@@ -81,7 +84,13 @@ def parse_query(arguments):
     alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞次数榜':'被飞','被飞率榜':'被飞率','被飞率排行':'被飞率','被飞率排行榜':'被飞率','被飞率排名':'被飞率','统计时间':'时间','更新时间':'时间','同步时间':'时间'}
     options['action']=alias.get(options['action'],options['action'])
     if options['action']=='赛季':options['action']='周期'
+    if options['action'] in ('最高最低','最高最低对局','极值对局'):options['action']='极值'
     return options
+
+def player_name(value,aliases):
+    name=normalize_name(value);seen=set()
+    while name in aliases and name not in seen:seen.add(name);name=aliases[name]
+    return name
 
 class GroupDataPlugin(Star):
     def __init__(self,context:Context,config=None):
@@ -151,6 +160,32 @@ class GroupDataPlugin(Star):
         if not row or not row['path'] or not Path(row['path']).is_file():
             await event.send(event.plain_result('本群没有这个有效图片记录，或原图暂不可用。'));return
         await event.send(event.chain_result([Comp.Plain(f'精华原图 #{id} · 消息 {row["msg"]}\n'),Comp.Image.fromFileSystem(row['path'])]))
+    async def player_extremes(self,event,matches,aliases,name,modes,action,period_name,days,minimum):
+        metrics=('最高','最低') if action=='极值' else (action,)
+        for mode in modes:
+            mode_name='三麻' if mode==3 else '四麻'
+            stats=aggregate(matches,mode,aliases)
+            player=next((p for p in stats if p['name']==name),None)
+            if not player or player['games']<minimum:
+                await self.card(event,f'群数据 · {period_name} · {mode_name} · {name}',[
+                    '没有符合条件的已确认对局。',f'查询范围：{period_name}，'+(f'近{days}天，' if days else '')+f'至少{minimum}场。',
+                    '旧赛季请在命令后加 S0；可用 /群数据 玩家 查看对应赛季的昵称。']);continue
+            grouped={}
+            for metric in metrics:
+                key='max_points' if metric=='最高' else 'min_points'
+                grouped.setdefault(player[key+'_source'],[]).append(metric)
+            for source_id,labels in grouped.items():
+                match=next((m for m in matches if m['id']==source_id and m['result']['mode']==mode),None)
+                seat=next((p for p in match['result']['players'] if player_name(p['name'],aliases)==name),None) if match else None
+                if not seat:
+                    await event.send(event.plain_result(f'{name} · {period_name} · {mode_name}：对应结算记录暂不可用。'));continue
+                title=' / '.join(labels)+'持点'
+                caption=f'{name} · {period_name} · {mode_name}\n{title}：{seat["points"]:,} 点 · 本局{seat["place"]}位\n结算原图 #{source_id}'
+                if days:caption+=f' · 近{days}天'
+                path=match.get('path')
+                if path and Path(path).is_file():
+                    await event.send(event.chain_result([Comp.Plain(caption+'\n'),Comp.Image.fromFileSystem(path)]))
+                else:await event.send(event.plain_result(caption+'\n原图缓存暂不可用，请联系管理员。'))
     @filter.command('群数据')
     async def group_data(self,event:AstrMessageEvent,arguments:GreedyStr):
         await self.handle(event,arguments)
@@ -300,6 +335,11 @@ class GroupDataPlugin(Star):
                 self.store.audit(scope,event.get_sender_id(),action,rest)
                 await event.send(event.plain_result('昵称别名已更新；原始截图记录保留。'));return
             matches=self.store.matches(scope,days,period_id);aliases=self.store.aliases(scope,period_id)
+            if action=='极值' or (action in ('最高','最低') and rest):
+                if not rest:raise ValueError('用法：/群数据 极值 "完整游戏昵称" [三麻/四麻] [S0/S1]')
+                name=player_name(' '.join(rest),aliases)
+                await self.player_extremes(event,matches,aliases,name,[opt['mode']] if opt['mode'] else [3,4],action,period_name,days,minimum)
+                return
             if action=='最近':
                 count=int(rest[0]) if rest else 5
                 if not 1<=count<=20:raise ValueError('最近场数范围1～20')
@@ -341,8 +381,7 @@ class GroupDataPlugin(Star):
                 if mode==3 and action in ('四位','四位率'):continue
                 stats=aggregate(matches,mode,aliases);path=self.card_dir/(uuid.uuid4().hex+'.png')
                 if action=='个人':
-                    name=normalize_name(' '.join(rest));seen=set()
-                    while name in aliases and name not in seen:seen.add(name);name=aliases[name]
+                    name=player_name(' '.join(rest),aliases)
                     await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name)
                 else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name)
                 await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))

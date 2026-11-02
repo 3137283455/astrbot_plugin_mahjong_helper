@@ -90,7 +90,7 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期'):
             x=58+(i-1)*344
             d.text((x,746),f'{i}位   {p["rank"+str(i)]} 次',font=font(31),fill=INK)
             d.text((x,796),f'{p["rank"+str(i)]/p["games"]:.1%}',font=font(42,True),fill=GOLD)
-        d.text((58,882),'持点原图：/群数据 原图 编号（上方 # 后数字）',font=font(27),fill=MUTED)
+        d.text((58,882),f'最高原图：/群数据 原图 {p["max_points_source"]}    最低原图：/群数据 原图 {p["min_points_source"]}',font=font(27),fill=MUTED)
     footer(d,944,group,days,period_name);im.save(path);return path
 
 def text_card(path,title,lines):
