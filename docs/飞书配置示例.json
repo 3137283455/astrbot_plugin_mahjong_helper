@@ -1,10 +1,11 @@
 {
   "enabled": false,
-  "app_id": "",
-  "app_secret": "",
-  "base_url": "",
-  "sync_strategy": "polling",
-  "poll_interval_seconds": 600,
-  "group_scope": "",
-  "note": "仅为准备模板，尚未接入运行；密钥只填写在服务器插件设置，不提交到公开仓库。实际同步频率按账号配额确定。"
+  "app_token": "",
+  "url": "",
+  "scope": "",
+  "tables": {"periods":"","matches":"","players":"","sync_log":""},
+  "poll_seconds": 600,
+  "editor_ids": [],
+  "bot_open_id": "",
+  "note": "保存为私有数据目录 feishu_target.json。凭证单独保存在同目录 feishu_credentials.json（app_id/app_secret），两者权限0600，不提交公开仓库。未核实编辑者身份前禁止启用。"
 }

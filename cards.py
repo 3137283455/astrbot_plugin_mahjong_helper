@@ -26,12 +26,12 @@ def base(title,subtitle,height):
     d.text((110,143),subtitle,font=font(26),fill=MUTED)
     return im,d
 
-def footer(d,y,group,days):
-    period=f'近{days}天（按加入精华时间）' if days else '全部已识别精华'
+def footer(d,y,group,days,period_name='当前周期'):
+    period=f'近{days}天（按加入精华时间）' if days else period_name+'已确认对局'
     d.text((55,y),f'群 {group} · {period} · 被飞：最终持点 < 0',font=font(25),fill=MUTED)
     d.text((55,y+43),'比例仅代表本群精华样本；昵称来自截图，不等同于发送者。',font=font(25),fill=MUTED)
 
-def overview(path,group,matches,aliases,summary,days=0,selected_mode=None):
+def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period_name='当前周期'):
     modes=(selected_mode,) if selected_mode in (3,4) else (3,4)
     matches=[m for m in matches if m['result']['mode'] in modes]
     title='群数据 · 精华对局档案'+(' · 三麻' if selected_mode==3 else ' · 四麻' if selected_mode==4 else '')
@@ -55,9 +55,9 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None):
             y+=98
     d.text((58,969),'/群数据 被飞率 四麻    /群数据 一位率 三麻    /群数据 个人 昵称',font=font(28),fill=INK)
     d.text((58,1018),'/群数据 最高 四麻    /群数据 最低 三麻    /群数据 帮助',font=font(28),fill=INK)
-    footer(d,1110,group,days);im.save(path);return path
+    footer(d,1110,group,days,period_name);im.save(path);return path
 
-def leaderboard(path,group,mode,metric,stats,days=0,minimum=1):
+def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当前周期'):
     rows=ranking(stats,metric,minimum)[:10];height=max(690,390+len(rows)*91+145)
     im,d=base(f'群数据 · {"三麻" if mode==3 else "四麻"} · {metric}榜',f'每人至少 {minimum} 场  /  比率同时展示次数与场次  /  相同指标并列',height)
     d.text((65,240),'排名      游戏昵称',font=font(28),fill=MUTED)
@@ -74,9 +74,9 @@ def leaderboard(path,group,mode,metric,stats,days=0,minimum=1):
         else:v=f'{int(r["value"]):,}'
         d.text((1020,y+18),fit(d,v,28,350,True),font=font(28,True),fill=RED if metric.startswith('被飞') or metric=='最低' else GOLD)
         y+=91
-    footer(d,height-112,group,days);im.save(path);return path
+    footer(d,height-112,group,days,period_name);im.save(path);return path
 
-def profile(path,group,mode,stats,name,days=0):
+def profile(path,group,mode,stats,name,days=0,period_name='当前周期'):
     im,d=base(f'群数据 · {"三麻" if mode==3 else "四麻"} · 个人档案',fit(ImageDraw.Draw(Image.new('RGB',(1,1))),name,29,1200),1060)
     p=next((s for s in stats if s['name']==name),None)
     if p is None:d.text((65,280),'未找到这个完整游戏昵称；发送 /群数据 玩家 查看昵称。',font=font(34),fill=INK)
@@ -91,7 +91,7 @@ def profile(path,group,mode,stats,name,days=0):
             d.text((x,746),f'{i}位   {p["rank"+str(i)]} 次',font=font(31),fill=INK)
             d.text((x,796),f'{p["rank"+str(i)]/p["games"]:.1%}',font=font(42,True),fill=GOLD)
         d.text((58,882),'持点原图：/群数据 原图 编号（上方 # 后数字）',font=font(27),fill=MUTED)
-    footer(d,944,group,days);im.save(path);return path
+    footer(d,944,group,days,period_name);im.save(path);return path
 
 def text_card(path,title,lines):
     # Wrap long rows; never shrink an entire card into unreadable chat text.

@@ -5,6 +5,7 @@ import sqlite3
 import time
 from pathlib import Path
 from .core import signature, normalize_name
+from . import periods
 
 class Store:
     def __init__(self,path):
@@ -26,6 +27,7 @@ class Store:
         if 'last_import' not in columns:
             self.db.execute('ALTER TABLE groups ADD COLUMN last_import REAL NOT NULL DEFAULT 0')
         self.db.commit()
+        periods.install(self.db)
     def close(self): self.db.close()
     def group(self,scope):
         row=self.db.execute('SELECT * FROM groups WHERE scope=?',(scope,)).fetchone()
@@ -35,7 +37,9 @@ class Store:
     def groups(self):return [dict(r) for r in self.db.execute('SELECT * FROM groups WHERE enabled=1')]
     def audit(self,scope,actor,action,payload):
         self.db.execute('INSERT INTO audit(scope,actor,action,payload,stamp) VALUES(?,?,?,?,?)',(scope,str(actor),action,json.dumps(payload,ensure_ascii=False),time.time()));self.db.commit()
-    def freshness(self,scope):
+    def freshness(self,scope,period=None):
+        selected=periods.select(self,scope,period)
+        if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['freshness']
         group=self.group(scope) or {}
         matches=self.matches(scope)
         def latest(rows):
@@ -46,29 +50,23 @@ class Store:
                 'last_import':group.get('last_import',0),'data_until':latest(matches),
                 'latest_fly':{mode:latest([m for m in flying if m['result']['mode']==mode]) for mode in (3,4)}}
     def _accepted_hashes(self,scope):
-        return {r[0] for r in self.db.execute('''SELECT DISTINCT s.hash FROM sources s
-            JOIN images i ON i.hash=s.hash
-            LEFT JOIN overrides o ON o.scope=s.scope AND o.hash=s.hash
-            WHERE s.scope=? AND s.active=1 AND COALESCE(o.status,i.status)='accepted'
-            AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx)''',(scope,))}
+        return {r['hash'] for r in self.rows(scope) if (r['override_status'] or r['status'])=='accepted'}
     def _touch_import(self,digest,scope=None,from_image=False):
         """Only accepted, active, non-excluded results can advance a group's clock."""
-        extra=' AND s.scope=?' if scope is not None else ''
-        if from_image:extra+=' AND o.status IS NULL'
-        params=[time.time(),digest]+([scope] if scope is not None else [])
-        self.db.execute('''UPDATE groups SET last_import=? WHERE scope IN (
-            SELECT s.scope FROM sources s JOIN images i ON i.hash=s.hash
-            LEFT JOIN overrides o ON o.scope=s.scope AND o.hash=s.hash
-            WHERE s.hash=? AND s.active=1 AND COALESCE(o.status,i.status)='accepted'
-            AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx)'''+extra+')',params)
+        scopes=[scope] if scope else [r[0] for r in self.db.execute('SELECT DISTINCT scope FROM sources WHERE hash=?',(digest,))]
+        for key in scopes:
+            if any(r['hash']==digest and (r['override_status'] or r['status'])=='accepted'
+                   and (not from_image or not r['override_status']) for r in self.rows(key)):
+                self.db.execute('UPDATE groups SET last_import=? WHERE scope=?',(time.time(),key))
     def reconcile(self,scope,entries):
         """Call only after a fully successful listing. Preserve old hash on URL refresh."""
         now=time.time()
         previous=self._accepted_hashes(scope)
         with self.db:
-            self.db.execute('UPDATE sources SET active=0 WHERE scope=?',(scope,))
+            self.db.execute("UPDATE sources SET active=0 WHERE scope=? AND origin='qq'",(scope,))
             for e in entries:
                 self.db.execute('INSERT INTO sources(scope,msg,idx,stamp,seen) VALUES(?,?,?,?,?) ON CONFLICT(scope,msg,idx) DO UPDATE SET active=1,stamp=excluded.stamp,seen=excluded.seen',(scope,e['msg'],e['idx'],e['stamp'],now))
+            periods.assign(self,scope)
             self.db.execute("UPDATE groups SET last_scan=?,error='' WHERE scope=?",(now,scope))
             for digest in self._accepted_hashes(scope)-previous:
                 self._touch_import(digest,scope)
@@ -77,6 +75,7 @@ class Store:
     def is_excluded(self,scope,msg,idx):
         return self.db.execute('SELECT 1 FROM source_exclusions WHERE scope=? AND msg=? AND idx=?',(scope,str(msg),idx)).fetchone() is not None
     def exclude_source(self,scope,row,reason='管理员排除图片来源'):
+        periods.assert_current(self,scope,row)
         if row['scope']!=scope:raise ValueError('不能排除其他群的图片来源')
         self.db.execute('INSERT OR REPLACE INTO source_exclusions VALUES(?,?,?,?,?)',(scope,row['msg'],row['idx'],reason,time.time()));self.db.commit()
     def source_error(self,id,reason):
@@ -98,11 +97,20 @@ class Store:
             if status=='accepted' and result and changed:self._touch_import(digest,from_image=True)
     def scan_error(self,scope,reason):
         self.db.execute('UPDATE groups SET error=? WHERE scope=?',(reason,scope));self.db.commit()
-    def rows(self,scope):
-        return [dict(r) for r in self.db.execute('''SELECT s.*,i.path,i.status,i.result,i.raw,i.reason,i.attempts,i.retry,o.status AS override_status,o.result AS override_result,o.reason AS override_reason FROM sources s LEFT JOIN images i ON i.hash=s.hash LEFT JOIN overrides o ON o.hash=s.hash AND o.scope=s.scope WHERE s.scope=? AND s.active=1 AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx) ORDER BY s.stamp DESC,s.id DESC''',(scope,))]
-    def matches(self,scope,days=0):
-        out=[];seen=set();cut=time.time()-days*86400 if days else 0;aliases=self.aliases(scope)
-        for r in self.rows(scope):
+    def rows(self,scope,period=None):
+        selected=periods.select(self,scope,period)
+        if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['rows']
+        ids=periods.current_ids(self,scope)
+        return [dict(r) for r in self.db.execute('''SELECT s.*,i.path,i.status,i.result,i.raw,i.reason,i.attempts,i.retry,o.status AS override_status,o.result AS override_result,o.reason AS override_reason FROM sources s LEFT JOIN images i ON i.hash=s.hash LEFT JOIN overrides o ON o.hash=s.hash AND o.scope=s.scope WHERE s.scope=? AND s.active=1 AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx) ORDER BY s.stamp DESC,s.id DESC''',(scope,)) if ids is None or r['id'] in ids]
+    def matches(self,scope,days=0,period=None):
+        selected=periods.select(self,scope,period)
+        cut=time.time()-days*86400 if days else 0
+        if selected and selected['state']=='archived':
+            return [r for r in json.loads(selected['snapshot'])['matches'] if r['stamp']>=cut]
+        out=[];seen=set();aliases=self.aliases(scope)
+        rows=self.rows(scope)
+        if selected:rows.sort(key=lambda r:r['id']) # Stable first source for an online record ID.
+        for r in rows:
             status=r['override_status'] or r['status'];payload=r['override_result'] if r['override_status'] else r['result']
             if status!='accepted' or not payload or r['stamp']<cut:continue
             result=json.loads(payload)
@@ -115,7 +123,18 @@ class Store:
             if sig in seen:continue
             seen.add(sig);out.append({**r,'result':result})
         return out
-    def aliases(self,scope):return {r['old']:r['new'] for r in self.db.execute('SELECT old,new FROM aliases WHERE scope=?',(scope,))}
+    def aliases(self,scope,period=None):
+        selected=periods.select(self,scope,period)
+        if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['aliases']
+        return {r['old']:r['new'] for r in self.db.execute('SELECT old,new FROM aliases WHERE scope=?',(scope,))}
+    def training_rows(self,scope):
+        """Keep explicitly verified glyph evidence without counting archived games."""
+        rows=self.rows(scope);seen={r['hash'] for r in rows}
+        for p in periods.all_periods(self,scope):
+            if p['state']!='archived':continue
+            for row in json.loads(p['snapshot'])['rows']:
+                if row['hash'] not in seen:rows.append(row);seen.add(row['hash'])
+        return rows
     def merge(self,scope,old,new):
         old=normalize_name(old);new=normalize_name(new);aliases=self.aliases(scope)
         if not old or not new or old==new:raise ValueError('请给出两个不同的完整游戏昵称')
@@ -135,13 +154,24 @@ class Store:
         self.db.execute('INSERT OR REPLACE INTO aliases VALUES(?,?,?)',(scope,old,new));self.db.commit()
     def unmerge(self,scope,old):
         self.db.execute('DELETE FROM aliases WHERE scope=? AND old=?',(scope,normalize_name(old)));self.db.commit()
-    def get_source(self,scope,id):
-        return next((r for r in self.rows(scope) if r['id']==id),None)
+    def get_source(self,scope,id,period=None):
+        return next((r for r in self.rows(scope,period) if r['id']==id),None)
+    def original_source(self,scope,id):
+        row=self.get_source(scope,id)
+        if row:return row
+        for p in periods.all_periods(self,scope):
+            if p['state']=='archived':
+                row=self.get_source(scope,id,p['id'])
+                if row:return row
+        return None
     def override(self,scope,row,status,result=None,reason='人工处理'):
+        periods.assert_current(self,scope,row)
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO overrides VALUES(?,?,?,?,?)',(scope,row['hash'],status,json.dumps(result,ensure_ascii=False) if result else None,reason))
             if status=='accepted' and result:self._touch_import(row['hash'],scope)
-    def summary(self,scope):
+    def summary(self,scope,period=None):
+        selected=periods.select(self,scope,period)
+        if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['summary']
         rows=self.rows(scope);counts={};hashes=set()
         for r in rows:
             status=r['override_status'] or r['status'] or 'download_error'

@@ -43,6 +43,26 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         stats=[{'name':'次数多','games':10,'fly':3},{'name':'比例高','games':2,'fly':1}]
         self.assertEqual(ranking(stats,parse_query('被飞榜')['action'])[0]['name'],'次数多')
         self.assertEqual(ranking(stats,parse_query('被飞率榜')['action'])[0]['name'],'比例高')
+    def test_period_parameters_remain_order_independent(self):
+        self.assertEqual(parse_query('被飞榜 四麻 历史 30天'),parse_query('30天 历史 被飞榜 四麻'))
+        self.assertEqual(parse_query('个人 "昵称 空格" 三麻 周期=P123')['period'],'P123')
+    async def test_archive_commands_read_history_and_cannot_modify_it(self):
+        from astrbot_plugin_group_data import periods
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            p=self.setup_plugin(d);scope='12345:987654321';p.store.reconcile(scope,[{'msg':'1','idx':0,'stamp':10}])
+            row=p.store.source(scope,'1',0);p.store.attach(row['id'],'image','fake.png');p.store.save('image','accepted',validate(result()))
+            periods.cutover(p.store,scope)
+            e=Event(admin=True)
+            with patch('astrbot_plugin_group_data.main.cards.overview',wraps=cards.overview) as render:
+                await p.handle(e,'三麻 历史')
+            self.assertEqual(len(render.call_args.args[2]),1)
+            await p.handle(e,'忽略 1 历史');self.assertIn('只读',e.sent[-1])
+            await p.handle(e,'关闭 历史');self.assertTrue(p.store.group(scope)['enabled'])
+            await p.handle(e,'时间');self.assertIn('本周期尚无新结果入库',e.sent[-1])
+            await p.handle(e,'周期');self.assertIsInstance(e.sent[-1],list)
+            await p.handle(e,'最近 5 历史');self.assertIsInstance(e.sent[-1],list)
+            await p.handle(e,'同桌 甲 乙 三麻 历史');self.assertIsInstance(e.sent[-1],list)
     async def test_member_can_query_but_cannot_modify(self):
         with tempfile.TemporaryDirectory() as d:
             p=self.setup_plugin(d);e=Event()

@@ -73,7 +73,8 @@ class VerifiedNames:
     def templates(self,scope):
         # Overrides are the explicit administrator verification boundary. Mere
         # agreement between OCR/LLM passes is never used as a training label.
-        rows=[r for r in self.store.rows(scope) if r.get('override_status')=='accepted' and r.get('override_result')]
+        evidence=self.store.training_rows(scope) if hasattr(self.store,'training_rows') else self.store.rows(scope)
+        rows=[r for r in evidence if r.get('override_status')=='accepted' and r.get('override_result')]
         key=tuple(sorted((r['hash'],r['override_result']) for r in rows))
         if self.cache.get(scope,{}).get('key')==key:return self.cache[scope]['items']
         items=[];counts={}

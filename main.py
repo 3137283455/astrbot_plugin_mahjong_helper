@@ -17,6 +17,7 @@ from .core import ALIASES,METRICS,aggregate,normalize_name,parse_json,validate,r
 from .store import Store
 from .source import EssenceSource,unwrap
 from .recognizer import Recognizer
+from . import periods
 
 HELP=[
  '/群数据                         三麻 / 四麻总览',
@@ -29,6 +30,12 @@ HELP=[
  '/群数据 最低 三麻             最低持点榜 + 第一条记录原图',
  '/群数据 原图 编号             查看记录对应的精华截图',
  '/群数据 玩家 / 记录 [页码] / 状态 / 帮助',
+ '/群数据 周期                  查看当前周期与封存周期',
+ '/群数据 被飞榜 四麻 历史     查询封存数据；默认只查新周期',
+ '/群数据 最近 5 四麻           最近5场完整结算（最多20场）',
+ '/群数据 对比 "甲" "乙" 四麻   比较场次、顺位和被飞',
+ '/群数据 同桌 "甲" "乙" 三麻   只统计两人同时出场的对局',
+ '/群数据 表格                  在线明细和玩家统计',
  '榜单：被飞、被飞率、一位、二位、三位、四位、末位及各自比率；',
  '还有场次、平均顺位、平均持点、最高、最低。模式不填则分别发三麻和四麻。',
  '被飞=最终持点小于0；比例分母是该玩家在本群精华中的出场次数。',
@@ -40,17 +47,23 @@ HELP=[
  '别名：/群数据 合并 "旧昵称" "新昵称"；撤销别名：/群数据 取消合并 "旧昵称"',
  '每约2分钟检查精华变更，识别异步进行；取消精华后不再计入。',
  '管理员 /群数据 时间：查看数据截至日期、各模式最新被飞和程序检查时间。',
+ '管理员 /群数据 同步：查看在线同步状态；/群数据 同步更新 立即同步。',
+ '正常终局、被飞终局都录入；历史数据已封存，不与新周期混算。',
  '群聊也可@慧慧说“看看本群三麻被飞榜”；管理操作仅接受明确命令。',
 ]
-WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并'}
-ADMIN_READS={'待确认','核对','时间'}
+WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并','同步更新'}
+ADMIN_READS={'待确认','核对','时间','同步'}
 
 def parse_query(arguments):
     try:tokens=shlex.split(str(arguments))
     except ValueError:raise ValueError('引号未闭合，含空格的昵称请用一对英文双引号包住')
-    options={'mode':None,'days':0,'minimum':1,'action':'总览','rest':[]}
+    options={'mode':None,'days':0,'minimum':1,'action':'总览','rest':[],'period':None}
     for token in tokens:
-        if token in ALIASES and token not in ('3','4'):
+        if token in ('历史','上一期','当前') or token.startswith('周期='):
+            choice=token.removeprefix('周期=')
+            if options['period'] and options['period']!=choice:raise ValueError('一次只能选择一个统计周期')
+            options['period']=choice
+        elif token in ALIASES and token not in ('3','4'):
             mode=ALIASES[token]
             if options['mode'] and options['mode']!=mode:raise ValueError('一次选择一种模式；不填则分别显示三麻和四麻')
             options['mode']=mode
@@ -77,6 +90,17 @@ class GroupDataPlugin(Star):
         self.source=EssenceSource(self.store,self.folder/'images')
         self.recognizer=Recognizer(self.context,self.config,self.store)
         self.tasks=[asyncio.create_task(self._poll()),asyncio.create_task(self.recognizer.loop()),asyncio.create_task(self.recognizer.llm_loop())]
+        self.online=None
+        target=self.folder/'feishu_target.json'
+        if target.is_file():
+            try:
+                settings=json.loads(target.read_text(encoding='utf-8'))
+                if settings.get('enabled'):
+                    from .online import OnlineSync
+                    self.online=OnlineSync(self.store,self.folder,settings)
+                    self.tasks.append(asyncio.create_task(self.online.loop()))
+            except (ValueError,KeyError,OSError):
+                logger.warning('群数据飞书配置无效，已暂停在线同步；本地命令正常保留')
         logger.info('群数据已加载：只录入完整雀魂终局结算截图')
     async def terminate(self):
         tasks=[*self.tasks,*self.jobs]
@@ -120,7 +144,7 @@ class GroupDataPlugin(Star):
         await asyncio.to_thread(cards.text_card,path,title,lines)
         await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))
     async def original(self,event,scope,id):
-        row=self.store.get_source(scope,id)
+        row=self.store.original_source(scope,id)
         if not row or not row['path'] or not Path(row['path']).is_file():
             await event.send(event.plain_result('本群没有这个有效图片记录，或原图暂不可用。'));return
         await event.send(event.chain_result([Comp.Plain(f'精华原图 #{id} · 消息 {row["msg"]}\n'),Comp.Image.fromFileSystem(row['path'])]))
@@ -140,6 +164,9 @@ class GroupDataPlugin(Star):
                 if not await self.admin(event):
                     await event.send(event.plain_result('这项操作仅限本群群主、管理员或机器人管理员。'));return
             if action=='帮助':await self.card(event,'群数据 · 使用帮助',HELP);return
+            if opt['period'] and action in WRITES:
+                target_period=periods.select(self.store,scope,opt['period'])
+                if target_period and target_period['state']=='archived':raise ValueError('封存周期只读；修改当前数据请去掉“历史”参数')
             if action in ('开启','关闭'):
                 self.store.enable(scope,event.get_self_id(),gid,action=='开启')
                 self.store.audit(scope,event.get_sender_id(),action,{})
@@ -148,8 +175,41 @@ class GroupDataPlugin(Star):
             group=self.store.group(scope)
             if not group:
                 await self.card(event,'群数据 · 尚未开启',['请本群管理员发送 /群数据 开启。','开启后读取本群精华图片，只把完整雀魂终局结算录入。','使用 /群数据 帮助 查看规则。']);return
+            selected=periods.select(self.store,scope,opt['period'])
+            period_id=selected['id'] if selected else None
+            period_name=selected['name'] if selected else '当前数据'
+            if selected and selected['state']=='archived' and action in WRITES:
+                raise ValueError('封存周期只读；修改当前数据请去掉“历史”参数')
+            if action=='周期':
+                items=periods.all_periods(self.store,scope)
+                await self.card(event,'群数据 · 统计周期',[
+                    *[f'{p["name"]}（{"当前" if p["state"]=="current" else "已封存"}） · {len(self.store.matches(scope,period=p["id"]))} 场 · {p["id"]}' for p in items],
+                    '默认查询当前周期；在任意查询后加“历史”可查封存数据。',
+                    '指定其他周期：在查询后加 周期=周期ID；所有参数可调换顺序。',
+                    '正常结算和被飞结算均统计；比例只代表本群精华样本。']);return
+            if action in ('同步','同步更新','表格'):
+                online=getattr(self,'online',None)
+                if not online or online.scope!=scope:raise ValueError('本群尚未配置在线表格同步')
+                if action=='表格':
+                    await event.send(event.plain_result('群数据在线表格：'+online.target['url']+'\n查看与编辑权限由飞书控制；修改对局明细后自动重算统计。'));return
+                if action=='同步更新':
+                    if online.lock.locked():raise ValueError('正在同步，请稍后通过 /群数据 同步 查看结果')
+                    async def synchronize():
+                        try:
+                            info=await online.once()
+                            await event.send(event.plain_result(f'在线同步完成；当前周期 {info["games"]} 场，待处理项 {len(info["errors"])}。'))
+                        except Exception as exc:
+                            logger.warning('群数据在线同步失败：%s',type(exc).__name__)
+                            await event.send(event.plain_result('在线同步暂时失败，本地统计保留；稍后自动重试。'))
+                    self.spawn(synchronize());return
+                info=online.get('last_sync',{});error=online.get('last_sync_error',{})
+                lines=['群数据 · 在线同步',f'自动同步间隔：{online.interval} 秒',
+                       '最近完成：'+(datetime.fromtimestamp(info['stamp'],timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S') if info.get('stamp') else '尚未完成'),
+                       *info.get('errors',[])]
+                if error.get('stamp',0)>info.get('stamp',0):lines.append('最近异常：'+error.get('message',error.get('type','未知')))
+                await event.send(event.plain_result('\n'.join(lines)));return
             if action=='时间':
-                info=self.store.freshness(scope);s=self.store.summary(scope)
+                info=self.store.freshness(scope,period_id);s=self.store.summary(scope,period_id)
                 tz=timezone(timedelta(hours=8))
                 def stamp(value,missing):
                     return datetime.fromtimestamp(float(value),tz).strftime('%Y-%m-%d %H:%M:%S') if value else missing
@@ -157,12 +217,13 @@ class GroupDataPlugin(Star):
                     return stamp(value['stamp'],'暂无已确认记录')+(f'（记录 #{value["id"]}）' if value['id'] is not None else '')
                 lines=[
                     '群数据 · 更新时间（北京时间）',
+                    '统计周期：'+period_name+(f' · {period_id}' if period_id else ''),
                     '查询时间：'+stamp(info['generated_at'],''),
                     '数据截至（加入精华时间）：'+record(info['data_until']),
                     '三麻最新被飞精华：'+record(info['latest_fly'][3]),
                     '四麻最新被飞精华：'+record(info['latest_fly'][4]),
                     '最近成功检查精华：'+stamp(info['last_scan'],'尚未成功检查'),
-                    '最近结果入库（程序处理时间）：'+stamp(info['last_import'],'历史处理时间未记录；不代表没有历史数据'),
+                    '最近结果入库（程序处理时间）：'+stamp(info['last_import'],'本周期尚无新结果入库' if selected and selected['state']=='current' else '历史处理时间未记录；不代表没有历史数据'),
                     f'自动检查：{"开启" if group["enabled"] else "暂停"}；检查间隔至少 {max(60,int(self.config.get("poll_seconds",120)))} 秒',
                     f'已录入：{s["games"]} 场；待识别：{s.get("new",0)} 张；待辅助识别：{s.get("llm_pending",0)} 张',
                     f'待确认：{s.get("review",0)} 张；本地异常：{s.get("local_error",0)} 张；读取失败：{s.get("download_error",0)} 张',
@@ -185,7 +246,7 @@ class GroupDataPlugin(Star):
                 if len(rest)!=1:raise ValueError('用法：/群数据 原图 编号')
                 await self.original(event,scope,int(rest[0]));return
             if action in ('待确认','记录'):
-                rows=[r for r in self.store.rows(scope) if action=='记录' or (r['override_status'] or r['status']) in ('review','error','llm_pending','local_error') or not r['hash']]
+                rows=[r for r in self.store.rows(scope,period_id) if action=='记录' or (r['override_status'] or r['status']) in ('review','error','llm_pending','local_error') or not r['hash']]
                 page=int(rest[0]) if rest else 1
                 pages=max(1,(len(rows)+19)//20)
                 if not 1<=page<=pages:raise ValueError(f'页码范围1～{pages}')
@@ -194,7 +255,7 @@ class GroupDataPlugin(Star):
                 await self.card(event,'群数据 · '+('图片记录' if action=='记录' else '待核对图片'),[f'共 {len(rows)} 条，第{page}/{pages}页；下一页 /群数据 {action} {min(page+1,pages)}',*(lines or ['当前没有待核对项。']),'查看候选值 /群数据 核对 编号；查看原图 /群数据 原图 编号']);return
             if action in ('核对','确认','忽略','重识','修正'):
                 if not rest:raise ValueError('请在操作后填写图片记录编号')
-                row=self.store.get_source(scope,int(rest[0]))
+                row=self.store.get_source(scope,int(rest[0]),period_id)
                 if not row:raise ValueError('本群没有这个有效精华图片记录')
                 if action=='忽略' and not row['hash']:
                     self.store.exclude_source(scope,row,'管理员忽略无法读取的精华图片')
@@ -234,10 +295,37 @@ class GroupDataPlugin(Star):
                 else:raise ValueError('用法：/群数据 合并 "旧昵称" "新昵称" 或 /群数据 取消合并 "旧昵称"')
                 self.store.audit(scope,event.get_sender_id(),action,rest)
                 await event.send(event.plain_result('昵称别名已更新；原始截图记录保留。'));return
-            matches=self.store.matches(scope,days);aliases=self.store.aliases(scope)
+            matches=self.store.matches(scope,days,period_id);aliases=self.store.aliases(scope,period_id)
+            if action=='最近':
+                count=int(rest[0]) if rest else 5
+                if not 1<=count<=20:raise ValueError('最近场数范围1～20')
+                rows=sorted([m for m in matches if not opt['mode'] or m['result']['mode']==opt['mode']],key=lambda m:(m['stamp'],m['id']),reverse=True)[:count]
+                await self.card(event,'群数据 · 最近对局 · '+period_name,[
+                    *[f'#{m["id"]} · {m["result"]["mode"]}麻 · '+ ' / '.join(f'{p["place"]}位 {p["name"]} {p["points"]:,}' for p in m['result']['players']) for m in rows],
+                    '用 /群数据 原图 编号 查看结算；没有记录表示本周期尚无对应对局。']);return
+            if action in ('对比','同桌'):
+                if len(rest)!=2:raise ValueError('用法：/群数据 '+action+' "甲完整昵称" "乙完整昵称" [三麻/四麻]')
+                def resolved(name):
+                    name=normalize_name(name);seen=set()
+                    while name in aliases and name not in seen:seen.add(name);name=aliases[name]
+                    return name
+                names=[resolved(n) for n in rest]
+                if len(set(names))!=2:raise ValueError('请填写两个不同的玩家')
+                lines=[period_name+'；只计算本群已确认的完整结算。']
+                for mode in ([opt['mode']] if opt['mode'] else [3,4]):
+                    selected_matches=[m for m in matches if m['result']['mode']==mode]
+                    if action=='同桌':selected_matches=[m for m in selected_matches if all(n in [resolved(p['name']) for p in m['result']['players']] for n in names)]
+                    stats=aggregate(selected_matches,mode,aliases);lines.append(f'{mode}麻 · 样本 {len(selected_matches)} 场')
+                    for name in names:
+                        player=next((s for s in stats if s['name']==name),None)
+                        if player:
+                            lines.extend([f'{name}：{player["games"]}场 · 平均顺位{float(player["avg_place"]):.2f}',
+                                f'一位{player["rank1"]}次（{player["rank1"]/player["games"]:.1%}） · 二位{player["rank2"]}次（{player["rank2"]/player["games"]:.1%}） · 被飞{player["fly"]}次（{player["fly"]/player["games"]:.1%}）'])
+                        else:lines.append(name+'：无对应样本')
+                await self.card(event,'群数据 · '+action,lines);return
             if action=='总览':
                 path=self.card_dir/(uuid.uuid4().hex+'.png')
-                await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope),days,opt['mode'])
+                await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope,period_id),days,opt['mode'],period_name=period_name)
                 await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]));return
             modes=[opt['mode']] if opt['mode'] else [3,4]
             if action=='玩家':
@@ -251,8 +339,8 @@ class GroupDataPlugin(Star):
                 if action=='个人':
                     name=normalize_name(' '.join(rest));seen=set()
                     while name in aliases and name not in seen:seen.add(name);name=aliases[name]
-                    await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days)
-                else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum)
+                    await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name)
+                else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name)
                 await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))
                 if action in ('最高','最低'):
                     rows=ranking(stats,action,minimum)
