@@ -29,6 +29,15 @@ class Store:
         self.db.commit()
         periods.install(self.db)
     def close(self): self.db.close()
+    def subscribe(self,callback):
+        if not hasattr(self,'_listeners'):self._listeners=[]
+        self._listeners.append(callback)
+    def _notify(self,scope):
+        for callback in tuple(getattr(self,'_listeners',())):callback(scope)
+    def _notify_hash(self,digest):
+        scopes=[r[0] for r in self.db.execute('SELECT DISTINCT scope FROM sources WHERE hash=? AND active=1',(digest,))]
+        for scope in scopes:
+            if any(r['hash']==digest for r in self.rows(scope)):self._notify(scope)
     def group(self,scope):
         row=self.db.execute('SELECT * FROM groups WHERE scope=?',(scope,)).fetchone()
         return dict(row) if row else None
@@ -65,6 +74,7 @@ class Store:
         """Call only after a fully successful listing. Preserve old hash on URL refresh."""
         now=time.time()
         previous=self._accepted_hashes(scope)
+        previous_rows={(r['id'],r['hash']) for r in self.rows(scope)}
         with self.db:
             self.db.execute("UPDATE sources SET active=0 WHERE scope=? AND origin='qq'",(scope,))
             for e in entries:
@@ -73,6 +83,7 @@ class Store:
             self.db.execute("UPDATE groups SET last_scan=?,error='' WHERE scope=?",(now,scope))
             for digest in self._accepted_hashes(scope)-previous:
                 self._touch_import(digest,scope)
+        if previous_rows!={(r['id'],r['hash']) for r in self.rows(scope)}:self._notify(scope)
     def source(self,scope,msg,idx):
         return dict(self.db.execute('SELECT * FROM sources WHERE scope=? AND msg=? AND idx=?',(scope,msg,idx)).fetchone())
     def is_excluded(self,scope,msg,idx):
@@ -81,6 +92,7 @@ class Store:
         periods.assert_current(self,scope,row)
         if row['scope']!=scope:raise ValueError('不能排除其他群的图片来源')
         self.db.execute('INSERT OR REPLACE INTO source_exclusions VALUES(?,?,?,?,?)',(scope,row['msg'],row['idx'],reason,time.time()));self.db.commit()
+        self._notify(scope)
     def source_error(self,id,reason):
         self.db.execute('UPDATE sources SET error=? WHERE id=?',(reason,id));self.db.commit()
     def attach(self,id,digest,path):
@@ -89,6 +101,7 @@ class Store:
             self.db.execute('INSERT OR IGNORE INTO images(hash,path) VALUES(?,?)',(digest,str(path)))
             self.db.execute("UPDATE sources SET hash=?,error='' WHERE id=?",(digest,id))
             if previous and previous['hash']!=digest:self._touch_import(digest,previous['scope'])
+        if previous and previous['hash']!=digest:self._notify_hash(digest)
     def image(self,digest):
         row=self.db.execute('SELECT * FROM images WHERE hash=?',(digest,)).fetchone()
         return dict(row) if row else None
@@ -98,6 +111,7 @@ class Store:
         with self.db:
             self.db.execute('UPDATE images SET status=?,result=?,raw=?,reason=?,model=?,attempts=attempts+1,retry=? WHERE hash=?',(status,json.dumps(result,ensure_ascii=False) if result else None,json.dumps(raw,ensure_ascii=False) if raw is not None else None,reason,model,retry,digest))
             if status=='accepted' and result and changed:self._touch_import(digest,from_image=True)
+        if previous and (previous['status']!=status or json.loads(previous['result'] or 'null')!=result):self._notify_hash(digest)
     def scan_error(self,scope,reason):
         self.db.execute('UPDATE groups SET error=? WHERE scope=?',(reason,scope));self.db.commit()
     def rows(self,scope,period=None):
@@ -155,8 +169,10 @@ class Store:
                 names.append(n)
             if len(set(names))!=len(names):raise ValueError('这两个昵称出现在同一局，不能合并成一人')
         self.db.execute('INSERT OR REPLACE INTO aliases VALUES(?,?,?)',(scope,old,new));self.db.commit()
+        self._notify(scope)
     def unmerge(self,scope,old):
         self.db.execute('DELETE FROM aliases WHERE scope=? AND old=?',(scope,normalize_name(old)));self.db.commit()
+        self._notify(scope)
     def get_source(self,scope,id,period=None):
         return next((r for r in self.rows(scope,period) if r['id']==id),None)
     def original_source(self,scope,id):
@@ -172,6 +188,7 @@ class Store:
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO overrides VALUES(?,?,?,?,?)',(scope,row['hash'],status,json.dumps(result,ensure_ascii=False) if result else None,reason))
             if status=='accepted' and result:self._touch_import(row['hash'],scope)
+        self._notify(scope)
     def summary(self,scope,period=None):
         selected=periods.select(self,scope,period)
         if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['summary']

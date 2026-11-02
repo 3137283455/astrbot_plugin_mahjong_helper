@@ -4,13 +4,31 @@ from pathlib import Path
 from unittest.mock import AsyncMock,patch
 from astrbot_plugin_group_data.store import Store
 from astrbot_plugin_group_data.source import EssenceSource
+from astrbot_plugin_group_data import periods
+from test_periods import normal
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
  async def test_failed_listing_does_not_clear_existing_sources(self):
   with tempfile.TemporaryDirectory() as d:
    store=Store(Path(d)/'state.db');self.addCleanup(store.close);store.enable('b:g','b','g');store.reconcile('b:g',[{'msg':'1','idx':0,'stamp':1}])
+   changes=[];store.subscribe(changes.append)
    src=EssenceSource(store,Path(d)/'images');bot=type('Bot',(),{'call_action':AsyncMock(side_effect=RuntimeError('offline'))})()
    self.assertFalse(await src.sync('b:g',bot,123));self.assertEqual(len(store.rows('b:g')),1)
+   self.assertEqual(changes,[])
+ async def test_successful_essence_removal_notifies_sync_and_keeps_s0_frozen(self):
+  with tempfile.TemporaryDirectory() as d:
+   store=Store(Path(d)/'state.db');self.addCleanup(store.close);scope='b:g';store.enable(scope,'b','g')
+   image=Path(d)/'cached.png';image.write_bytes(b'cached')
+   store.reconcile(scope,[{'msg':'1','idx':0,'stamp':1}]);old=store.source(scope,'1',0);store.attach(old['id'],'old',image);store.save('old','accepted',normal())
+   periods.cutover(store,scope)
+   store.reconcile(scope,[{'msg':str(n),'idx':0,'stamp':n} for n in (1,2)]);current=store.source(scope,'2',0);store.attach(current['id'],'new',image);store.save('new','accepted',normal())
+   self.assertEqual(len(store.matches(scope)),1)
+   changed=[];store.subscribe(changed.append)
+   bot=type('Bot',(),{'call_action':AsyncMock(return_value=[{'message_id':1,'content':[{'type':'image','data':{'url':'https://qpic.cn/cached'}}]}])})()
+   source=EssenceSource(store,Path(d)/'images')
+   self.assertTrue(await source.sync(scope,bot,123))
+   self.assertEqual(store.matches(scope),[]);self.assertEqual(len(store.matches(scope,period='S0')),1)
+   self.assertEqual(changed,[scope]);self.assertEqual(store.source(scope,'2',0)['active'],0)
  async def test_expired_image_uses_same_original_message(self):
   with tempfile.TemporaryDirectory() as d:
    store=Store(Path(d)/'state.db');self.addCleanup(store.close);store.enable('b:g','b','g');src=EssenceSource(store,Path(d)/'images')

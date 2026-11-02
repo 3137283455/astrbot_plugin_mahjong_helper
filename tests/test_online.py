@@ -1,4 +1,5 @@
 import copy
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,6 +94,36 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         await self.online.once();self.assertEqual(self.store.matches(self.scope),[])
         self.fake.edit(rid,{'确认状态':'已确认'});await self.online.once()
         self.assertEqual(len(self.store.matches(self.scope)),1)
+    async def test_essence_removal_and_restore_wake_sync_without_waiting_for_periodic_pull(self):
+        key,rid,source=await self.current();self.online.interval=3600
+        completed=asyncio.Queue();original=self.online.once
+        async def tracked():
+            result=await original();completed.put_nowait(result);return result
+        self.online.once=tracked;task=asyncio.create_task(self.online.loop())
+        try:
+            await asyncio.wait_for(completed.get(),5)
+            self.store.reconcile(self.scope,[{'msg':'1','idx':0,'stamp':200}])
+            info=await asyncio.wait_for(completed.get(),5)
+            self.assertEqual(info['games'],0)
+            self.assertEqual(self.fake.rows['matches'][rid]['fields']['确认状态'],'停用')
+            current=periods.select(self.store,self.scope)['id']
+            self.assertTrue(all(normalize(r['fields']).get('场次')==0 for r in self.fake.rows['players'].values() if r['fields']['周期ID']==current))
+            self.assertEqual(len(self.store.matches(self.scope,period='S0')),1)
+            self.store.reconcile(self.scope,[{'msg':str(n),'idx':0,'stamp':200} for n in (1,2)])
+            info=await asyncio.wait_for(completed.get(),5)
+            self.assertEqual(info['games'],1)
+            self.assertEqual(self.fake.rows['matches'][rid]['fields']['确认状态'],'已确认')
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):await task
+    async def test_unchanged_scan_and_other_groups_do_not_wake_online_sync(self):
+        await self.current();self.online.wake.clear()
+        self.store.reconcile(self.scope,[{'msg':str(n),'idx':0,'stamp':200} for n in (1,2)])
+        self.store.save('new','accepted',normal())
+        self.assertFalse(self.online.wake.is_set())
+        self.store.enable('other:group','other','group')
+        self.store.reconcile('other:group',[{'msg':'1','idx':0,'stamp':200}])
+        self.assertFalse(self.online.wake.is_set())
     async def test_archive_edits_restored_and_listing_failure_keeps_all_local_data(self):
         await self.online.once();rid=next(iter(self.fake.rows['matches']))
         self.fake.edit(rid,{'一位昵称':'不能改历史'})

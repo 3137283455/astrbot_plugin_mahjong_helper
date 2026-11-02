@@ -51,6 +51,11 @@ class OnlineSync:
         self.allowed=set(target.get('editor_ids',[]));self.bot_id=target.get('bot_open_id','')
         if not self.allowed:raise ValueError('飞书管理员名单不能为空')
         self.interval=max(120,int(target.get('poll_seconds',600)))
+        self.wake=asyncio.Event()
+        self.store.subscribe(self._changed)
+
+    def _changed(self,scope):
+        if scope==self.scope:self.wake.set()
 
     def get(self,key,default=None):
         row=self.store.db.execute('SELECT value FROM online_state WHERE key=?',(key,)).fetchone()
@@ -326,9 +331,16 @@ class OnlineSync:
 
     async def loop(self):
         while True:
+            self.wake.clear()
             try:await self.once()
             except asyncio.CancelledError:raise
             except Exception as exc:
                 # API/network failures never reconcile deletions or clear statistics.
                 self.put('last_sync_error',{'stamp':time.time(),'type':type(exc).__name__,'message':str(exc) if isinstance(exc,(ValueError,FeishuError)) else '网络或同步异常，将自动重试'})
-            await asyncio.sleep(self.interval)
+                # Keep failures from causing a tight retry loop when local data changes.
+                await asyncio.sleep(min(60,self.interval));continue
+            try:
+                await asyncio.wait_for(self.wake.wait(),timeout=self.interval)
+                # Coalesce attachment/recognition changes from the same message.
+                await asyncio.sleep(1)
+            except asyncio.TimeoutError:pass

@@ -20,13 +20,14 @@ async def configure(args):
     client=Feishu(args.data_dir/'feishu_credentials.json',target['app_token'])
     specs={
         'periods':[('当前周期',[('状态','进行中')]),('历史周期',[('状态','已封存')])],
-        'matches':[('当前周期全部',[('周期ID',current),('确认状态','已确认')]),
+        'matches':[('表格',[('确认状态','已确认')]),
+                   ('当前周期全部',[('周期ID',current),('确认状态','已确认')]),
                    ('当前周期三麻',[('周期ID',current),('模式','3'),('确认状态','已确认')]),
                    ('当前周期四麻',[('周期ID',current),('模式','4'),('确认状态','已确认')]),
                    ('待核对',[('周期ID',current),('确认状态','待核对')]),
                    ('已停用',[('周期ID',current),('确认状态','停用')]),
                    ('历史归档',[('周期ID',historic)])],
-        'players':[('当前三麻统计',[('周期ID',current),('模式','3')]),
+        'players':[('表格',[]),('当前三麻统计',[('周期ID',current),('模式','3')]),
                    ('当前四麻统计',[('周期ID',current),('模式','4')]),
                    ('历史三麻统计',[('周期ID',historic),('模式','3')]),
                    ('历史四麻统计',[('周期ID',historic),('模式','4')])]}
@@ -42,18 +43,20 @@ async def configure(args):
         existing={r['view_name']:r['view_id'] for r in await client.listing(base+'/views')}
         hidden=[fields[n]['field_id'] for n in ('对局ID','群标识','周期ID','数据版本','统计ID','玩家标识') if n in fields and not fields[n].get('is_primary')]
         for legacy_name,conditions in views:
-            name=rename[legacy_name]
+            name=('有效对局（全部赛季）' if key=='matches' else '有效玩家统计（全部赛季）') if legacy_name=='表格' else rename[legacy_name]
+            conditions=[(c[0],'is',c[1]) if len(c)==2 else c for c in conditions]
+            if key=='players':conditions=[*conditions,('场次','isGreater','0')]
             vid=existing.get(name) or existing.get(legacy_name)
             if not vid:
                 result=await client.request('POST',base+'/views',{'view_name':name,'view_type':'grid'})
                 vid=result['view']['view_id']
             body={'view_name':name,'property':{'hidden_fields':hidden,'filter_info':{'conjunction':'and','conditions':[
-                {'field_id':fields[field]['field_id'],'field_type':fields[field]['type'],'operator':'is','value':json.dumps([value],ensure_ascii=False)} for field,value in conditions]}}}
+                {'field_id':fields[field]['field_id'],'field_type':fields[field]['type'],'operator':operator,'value':json.dumps([value],ensure_ascii=False)} for field,operator,value in conditions]}}}
             await client.request('PATCH',base+'/views/'+vid,body)
             # Verify that the server really applies each filter, not merely its name.
             rows=await client.listing(base+'/records',{'view_id':vid})
             from astrbot_plugin_group_data.online import normalize
-            assert all(all(str(normalize(r['fields']).get(f))==v for f,v in conditions) for r in rows),(key,name)
+            assert all(all((float(normalize(r['fields']).get(f,0))>float(v)) if op=='isGreater' else str(normalize(r['fields']).get(f))==v for f,op,v in conditions) for r in rows),(key,name)
             configured[key+':'+name]={'view_id':vid,'records':len(rows)}
     target['views']=configured
     from urllib.parse import urlsplit,urlunsplit,urlencode

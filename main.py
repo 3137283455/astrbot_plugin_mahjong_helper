@@ -207,6 +207,7 @@ class GroupDataPlugin(Star):
                     self.spawn(synchronize());return
                 info=online.get('last_sync',{});error=online.get('last_sync_error',{})
                 lines=['群数据 · 在线同步',f'自动同步间隔：{online.interval} 秒',
+                       '本地对局变化后主动同步；在线修改按定期间隔检查。',
                        '最近完成：'+(datetime.fromtimestamp(info['stamp'],timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S') if info.get('stamp') else '尚未完成'),
                        *info.get('errors',[])]
                 if error.get('stamp',0)>info.get('stamp',0):lines.append('最近异常：'+error.get('message',error.get('type','未知')))
