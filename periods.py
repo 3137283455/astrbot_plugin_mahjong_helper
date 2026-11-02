@@ -47,7 +47,7 @@ def select(store, scope, period=None):
     return found
 
 
-def cutover(store, scope, name='新周期', now=None):
+def cutover(store, scope, name='新周期', now=None, baseline_source_max=None):
     if select(store,scope):raise ValueError('已经切换过周期，不能重复清零')
     if not store.group(scope):raise ValueError('该群尚未接入')
     now=time.time() if now is None else now
@@ -55,18 +55,35 @@ def cutover(store, scope, name='新周期', now=None):
               'summary':store.summary(scope),'freshness':store.freshness(scope),
               'sources':[dict(r) for r in store.db.execute('SELECT * FROM sources WHERE scope=? ORDER BY id',(scope,))],
               'exclusions':[dict(r) for r in store.db.execute('SELECT * FROM source_exclusions WHERE scope=?',(scope,))]}
+    carried=0;previous_import=snapshot['freshness']['last_import']
+    if baseline_source_max is not None:
+        for key in ('matches','rows','sources'):snapshot[key]=[r for r in snapshot[key] if r['id']<=baseline_source_max]
+        def latest(rows):
+            row=max(rows,key=lambda r:(r['stamp'],r['id']),default=None)
+            return {'stamp':row['stamp'],'id':row['id']} if row else {'stamp':0,'id':None}
+        snapshot['freshness']['data_until']=latest(snapshot['matches'])
+        for mode in (3,4):
+            snapshot['freshness']['latest_fly'][mode]=latest([m for m in snapshot['matches'] if m['result']['mode']==mode and any(p['points']<0 for p in m['result']['players'])])
+        # A group-wide import clock cannot attribute a new processing time to old games.
+        snapshot['freshness']['last_import']=0
+        rows=snapshot['rows'];counts={}
+        for row in rows:
+            status=row['override_status'] or row['status'] or 'download_error';counts[status]=counts.get(status,0)+1
+        snapshot['summary']={'images':len(rows),'unique_images':len({r['hash'] for r in rows if r['hash']}),'games':len(snapshot['matches']),**counts}
+        carried=store.db.execute('SELECT COUNT(*) FROM sources WHERE scope=? AND id>?',(scope,baseline_source_max)).fetchone()[0]
     checksum=hashlib.sha256(packed(snapshot).encode()).hexdigest()
     old='H'+uuid.uuid4().hex[:12];new='P'+uuid.uuid4().hex[:12]
     stamps=[r['stamp'] for r in snapshot['sources'] if r['stamp']]
     with store.db:
         store.db.execute('INSERT INTO periods VALUES(?,?,?,?,?,?,?,?)',
             (old,scope,'历史封存','archived',min(stamps,default=now),now,packed(snapshot),checksum))
-        store.db.execute('INSERT INTO source_periods SELECT id,? FROM sources WHERE scope=?',(old,scope))
         store.db.execute('INSERT INTO periods VALUES(?,?,?,?,?,?,?,?)',(new,scope,name,'current',now,0,None,''))
-        store.db.execute('UPDATE groups SET last_import=0 WHERE scope=?',(scope,))
+        store.db.execute('INSERT INTO source_periods SELECT id,CASE WHEN id<=? THEN ? ELSE ? END FROM sources WHERE scope=?',
+                         (baseline_source_max if baseline_source_max is not None else 2**63-1,old,new,scope))
+        store.db.execute('UPDATE groups SET last_import=? WHERE scope=?',(previous_import if carried else 0,scope))
         store.db.execute('INSERT INTO audit(scope,actor,action,payload,stamp) VALUES(?,?,?,?,?)',
-                         (scope,'system','封存切换',packed({'old':old,'new':new,'checksum':checksum}),now))
-    return {'archived':old,'current':new,'started':now,'games':len(snapshot['matches']),'checksum':checksum}
+                         (scope,'system','封存切换',packed({'old':old,'new':new,'checksum':checksum,'baseline_source_max':baseline_source_max,'carried_sources':carried}),now))
+    return {'archived':old,'current':new,'started':now,'games':len(snapshot['matches']),'checksum':checksum,'baseline_source_max':baseline_source_max,'carried_sources':carried}
 
 
 def assign(store, scope):

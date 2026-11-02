@@ -73,6 +73,16 @@ class PeriodTests(unittest.TestCase):
         with self.assertRaises(Exception):periods.cutover(self.store,self.scope)
         self.assertEqual(periods.all_periods(self.store,self.scope),[])
         self.assertEqual(len(self.store.matches(self.scope)),1)
+    def test_new_sources_arriving_during_preparation_stay_in_new_period(self):
+        old=self.seed(1)
+        self.seed(2,'new',['新甲','新乙','新丙','新丁'])
+        changed=self.store.freshness(self.scope)['last_import']
+        report=periods.cutover(self.store,self.scope,baseline_source_max=old['id'])
+        self.assertEqual(report['games'],1);self.assertEqual(report['carried_sources'],1)
+        self.assertEqual(len(self.store.matches(self.scope)),1)
+        self.assertEqual(self.store.matches(self.scope,period='历史')[0]['id'],old['id'])
+        self.assertEqual(self.store.freshness(self.scope)['last_import'],changed)
+        self.assertEqual(self.store.freshness(self.scope,'历史')['data_until']['id'],old['id'])
 
 
 if __name__=='__main__':unittest.main()

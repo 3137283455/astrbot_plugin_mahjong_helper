@@ -35,13 +35,17 @@ def run(args):
     try:
         if periods.select(store,args.scope):raise ValueError('已有当前周期，拒绝再次切换')
         matches=store.matches(args.scope)
+        if args.baseline_source_max is not None:matches=[m for m in matches if m['id']<=args.baseline_source_max]
         if len(matches)!=args.expected_games:raise ValueError('对局数与核对基线不符，未切换')
         for row in matches:
             if not row['path'] or not Path(row['path']).is_file():raise ValueError('已确认对局缺少原图，未切换')
-        latest=store.freshness(args.scope)['latest_fly']
+        latest={}
+        for mode in (3,4):
+            row=max((m for m in matches if m['result']['mode']==mode and any(p['points']<0 for p in m['result']['players'])),key=lambda m:(m['stamp'],m['id']),default=None)
+            latest[mode]={'id':row['id'],'stamp':row['stamp']} if row else {'id':None,'stamp':0}
         if {3:latest[3]['id'],4:latest[4]['id']}!={3:args.three_latest,4:args.four_latest}:raise ValueError('最新被飞与核对基线不符，未切换')
-        result=periods.cutover(store,args.scope)
-        assert store.summary(args.scope)['games']==0
+        result=periods.cutover(store,args.scope,baseline_source_max=args.baseline_source_max)
+        result['new_period_games']=store.summary(args.scope)['games']
         assert len(store.matches(args.scope,period='历史'))==args.expected_games
         result.update({'backup':str(backup),'originals_backed_up':len(manifest),'scope':args.scope,
                        'started_beijing':datetime.fromtimestamp(result['started'],timezone(timedelta(hours=8))).isoformat(timespec='seconds'),
@@ -55,4 +59,5 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--data-dir',required=True,type=Path);p.add_argument('--backups',required=True,type=Path)
     p.add_argument('--scope',required=True);p.add_argument('--expected-games',required=True,type=int)
     p.add_argument('--three-latest',required=True,type=int);p.add_argument('--four-latest',required=True,type=int)
+    p.add_argument('--baseline-source-max',type=int)
     run(p.parse_args())
