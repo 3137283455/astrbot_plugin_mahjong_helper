@@ -80,17 +80,17 @@ class Recognizer:
                 if any(any(mark in word for mark in ('终局','終局','对局终结','對局終結')) for word in words):
                     raise ValueError('模型判断与可见终局标记不一致，请核对')
                 self.store.save(digest,'ignored',raw=raw+local_meta+[pipeline_meta],reason=str(first.get('reason','非结算画面'))[:240],model=model);return
-            result=validate(apply_verified(first,evidence))
+            result=self.checked(first,ocr,evidence)
             previous=json.loads(row.get('raw') or '[]')
             ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
             for place,name in self._trusted(ocr,evidence,result).items():
                 if place>len(result['players']) or result['players'][place-1]['name']!=name:
                     raise ValueError('模型昵称与本地清晰文字不一致，请人工核对')
             second=await self.read(provider,row['path'],PROMPT+'\n请独立仔细复核每个昵称、最终顺位和持点的正负号，不要猜测。');raw.append(second)
-            checked=validate(apply_verified(second,evidence))
+            checked=self.checked(second,ocr,evidence)
             if not same_reading(result,checked):
                 third=await self.read(provider,row['path'],PROMPT+'\n请重新独立读取每个昵称和持点，不猜测模糊字符。');raw.append(third)
-                result=consensus([result,checked,validate(apply_verified(third,evidence))])
+                result=consensus([result,checked,self.checked(third,ocr,evidence)])
             previous=json.loads(row.get('raw') or '[]')
             ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
             for place,name in self._trusted(ocr,evidence,result).items():
@@ -116,6 +116,21 @@ class Recognizer:
         finally:self.running.discard(digest)
     def _match_verified(self,row,ocr):
         return self.verified_names.match(row,ocr)
+    @staticmethod
+    def checked(reading,ocr,evidence):
+        result=validate(apply_verified(reading,evidence))
+        if result is None:return None
+        # Model OCR can invent a space inside Latin names. Only two independent
+        # local readings with crop agreement may settle that whitespace; never
+        # substitute a different character or globally merge player names.
+        trusted=trusted_names(ocr)
+        players=[]
+        for player in result['players']:
+            local=trusted.get(player['place'])
+            name=player['name']
+            if local and ''.join(name.split())==''.join(local.split()):name=local
+            players.append({**player,'name':name})
+        return validate({'is_result':True,'confidence':1,**result,'players':players})
     @staticmethod
     def _trusted(ocr,evidence,result):
         trusted=trusted_names(ocr)

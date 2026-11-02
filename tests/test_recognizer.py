@@ -85,4 +85,24 @@ class RecognizerTests(unittest.IsolatedAsyncioTestCase):
     await rec.local(row)
    self.assertEqual(json.loads(store.image('h')['result'])['players'][0]['name'],'慪龢')
    rec.context.get_using_provider_async.assert_not_awaited()
+ async def test_model_invented_space_uses_two_trusted_local_reads(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   rec.read=AsyncMock(side_effect=[result(names=['shao jue','乙','丙']),result(names=['shaojue','乙','丙'])])
+   with patch('astrbot_plugin_group_data.recognizer.trusted_names',return_value={1:'shaojue'}):await rec.llm(row)
+   self.assertEqual(store.image('h')['status'],'accepted')
+   self.assertEqual(json.loads(store.image('h')['result'])['players'][0]['name'],'shaojue')
+   self.assertEqual(json.loads(store.image('h')['raw'])[0]['players'][0]['name'],'shao jue')
+   self.assertEqual(rec.read.await_count,2)
+ async def test_real_character_conflict_still_requires_review(self):
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider);rec.read=AsyncMock(return_value=result(names=['慪龢','乙','丙']))
+   with patch('astrbot_plugin_group_data.recognizer.trusted_names',return_value={1:'鱈灥'}):await rec.llm(row)
+   self.assertEqual(store.image('h')['status'],'review');self.assertFalse(store.matches('b:g'))
+ def test_unverified_spaces_are_not_globally_normalized(self):
+  with patch('astrbot_plugin_group_data.recognizer.trusted_names',return_value={}):
+   self.assertEqual(Recognizer.checked(result(names=['shao jue','乙','丙']),None,[])['players'][0]['name'],'shao jue')
 if __name__=='__main__':unittest.main()
