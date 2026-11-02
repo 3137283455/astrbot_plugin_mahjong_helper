@@ -46,6 +46,9 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
     def test_period_parameters_remain_order_independent(self):
         self.assertEqual(parse_query('被飞榜 四麻 历史 30天'),parse_query('30天 历史 被飞榜 四麻'))
         self.assertEqual(parse_query('个人 "昵称 空格" 三麻 周期=P123')['period'],'P123')
+        self.assertEqual(parse_query('被飞榜 四麻 S0 30天'),parse_query('30天 s0赛季 被飞榜 四麻'))
+        self.assertEqual(parse_query('赛季')['action'],'周期')
+        self.assertEqual(parse_query('S1')['period'],'S1')
     async def test_archive_commands_read_history_and_cannot_modify_it(self):
         from astrbot_plugin_group_data import periods
         from unittest.mock import patch
@@ -61,6 +64,12 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             await p.handle(e,'关闭 历史');self.assertTrue(p.store.group(scope)['enabled'])
             await p.handle(e,'时间');self.assertIn('本周期尚无新结果入库',e.sent[-1])
             await p.handle(e,'时间 历史');self.assertIn('三麻最新被飞精华',e.sent[-1]);self.assertNotIn('暂时失败',e.sent[-1])
+            await p.handle(e,'时间 S0');self.assertIn('S0赛季',e.sent[-1])
+            await p.handle(e,'忽略 1 S0');self.assertIn('只读',e.sent[-1])
+            with patch('astrbot_plugin_group_data.main.cards.overview',wraps=cards.overview) as current_render:
+                await p.handle(e,'')
+            self.assertEqual(current_render.call_args.kwargs['period_name'],'S1赛季')
+            self.assertEqual(len(current_render.call_args.args[2]),0)
             await p.handle(e,'周期');self.assertIsInstance(e.sent[-1],list)
             await p.handle(e,'最近 5 历史');self.assertIsInstance(e.sent[-1],list)
             await p.handle(e,'同桌 甲 乙 三麻 历史');self.assertIsInstance(e.sent[-1],list)

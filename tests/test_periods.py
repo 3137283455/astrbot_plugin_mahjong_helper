@@ -59,6 +59,16 @@ class PeriodTests(unittest.TestCase):
         self.store.reconcile('bot:other',[{'msg':'1','idx':0,'stamp':100}]);r=self.store.source('bot:other','1',0)
         self.store.attach(r['id'],'a','test.png');periods.cutover(self.store,self.scope)
         self.assertEqual(len(self.store.matches('bot:other')),1)
+    def test_season_names_select_exact_period_without_changing_default_or_history(self):
+        self.seed(1);periods.cutover(self.store,self.scope)
+        self.seed(2,'new',['新甲','新乙','新丙','新丁'])
+        for token in ('S0','s0','S0赛季'):
+            self.assertEqual(periods.select(self.store,self.scope,token)['name'],'S0赛季')
+            self.assertEqual(len(self.store.matches(self.scope,period=token)),1)
+        self.assertEqual(periods.select(self.store,self.scope)['name'],'S1赛季')
+        self.assertEqual(self.store.matches(self.scope),self.store.matches(self.scope,period='S1'))
+        self.assertEqual(self.store.matches(self.scope,period='历史'),self.store.matches(self.scope,period='S0'))
+        with self.assertRaises(ValueError):periods.select(self.store,self.scope,'S2')
     def test_manual_rare_name_evidence_survives_without_entering_new_statistics(self):
         row=self.seed(1);row=self.store.get_source(self.scope,row['id'])
         self.store.override(self.scope,row,'accepted',normal(['慪龢','鱈灥','I咲仡','姊睇归']))

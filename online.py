@@ -73,7 +73,7 @@ class OnlineSync:
 
     def detail(self,scope,period,match,status='已确认'):
         data=match['result'];key=scope+':'+period['id']+':'+str(match['id'])
-        fields={'对局ID':key,'群标识':scope,'周期ID':period['id'],'模式':data['mode'],
+        fields={'对局ID':key,'群标识':scope,'周期ID':period['id'],'赛季':period['name'],'模式':data['mode'],
                 '精华来源编号':match['id'],'精华时间':match['stamp']*1000,'确认状态':status,
                 **self.annotations(key)}
         for i,p in enumerate(data['players']):fields[NAMES[i]]=p['name'];fields[POINTS[i]]=p['points']
@@ -94,7 +94,7 @@ class OnlineSync:
             for mode in (3,4):
                 for s in aggregate(matches,mode,aliases):
                     key=pid+':'+str(mode)+':'+digest(s['name'])[:24]
-                    fields={'统计ID':key,'群标识':scope,'周期ID':pid,'模式':mode,'玩家标识':s['name'],'显示昵称':s['name'],
+                    fields={'统计ID':key,'群标识':scope,'周期ID':pid,'赛季':p['name'],'模式':mode,'玩家标识':s['name'],'显示昵称':s['name'],
                             '场次':s['games'],'被飞次数':s['fly'],'被飞率':s['fly']/s['games'],
                             '平均顺位':float(s['avg_place']),'平均终局持点':float(s['avg_points']),
                             '最高终局持点':s['max_points'],'最低终局持点':s['min_points'],
@@ -110,7 +110,7 @@ class OnlineSync:
             old=json.loads(link['baseline']);pid=old.get('周期ID')
             p=next((p for p in periods.all_periods(self.store,scope) if p['id']==pid),None)
             if not p:continue
-            fields={**old,**self.annotations(key),'确认状态':'停用','同步状态':'已同步'}
+            fields={**old,**self.annotations(key),'赛季':p['name'],'确认状态':'停用','同步状态':'已同步'}
             source=self.store.get_source(scope,int(old.get('精华来源编号',0)))
             payload=(source.get('override_result') or source.get('result')) if source else None
             if payload:

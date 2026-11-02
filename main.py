@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+import re
 import time
 import uuid
 from contextlib import suppress
@@ -30,8 +31,8 @@ HELP=[
  '/群数据 最低 三麻             最低持点榜 + 第一条记录原图',
  '/群数据 原图 编号             查看记录对应的精华截图',
  '/群数据 玩家 / 记录 [页码] / 状态 / 帮助',
- '/群数据 周期                  查看当前周期与封存周期',
- '/群数据 被飞榜 四麻 历史     查询封存数据；默认只查新周期',
+ '/群数据 赛季                  查看赛季列表；默认查询 S1赛季',
+ '/群数据 被飞榜 四麻 S0       查询 S0赛季；加 S1 查当前赛季',
  '/群数据 最近 5 四麻           最近5场完整结算（最多20场）',
  '/群数据 对比 "甲" "乙" 四麻   比较场次、顺位和被飞',
  '/群数据 同桌 "甲" "乙" 三麻   只统计两人同时出场的对局',
@@ -48,7 +49,7 @@ HELP=[
  '每约2分钟检查精华变更，识别异步进行；取消精华后不再计入。',
  '管理员 /群数据 时间：查看数据截至日期、各模式最新被飞和程序检查时间。',
  '管理员 /群数据 同步：查看在线同步状态；/群数据 同步更新 立即同步。',
- '正常终局、被飞终局都录入；历史数据已封存，不与新周期混算。',
+ '正常终局、被飞终局都录入；S0赛季已封存，与S1赛季独立统计。',
  '群聊也可@慧慧说“看看本群三麻被飞榜”；管理操作仅接受明确命令。',
 ]
 WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并','同步更新'}
@@ -59,8 +60,9 @@ def parse_query(arguments):
     except ValueError:raise ValueError('引号未闭合，含空格的昵称请用一对英文双引号包住')
     options={'mode':None,'days':0,'minimum':1,'action':'总览','rest':[],'period':None}
     for token in tokens:
-        if token in ('历史','上一期','当前') or token.startswith('周期='):
-            choice=token.removeprefix('周期=')
+        if token in ('历史','上一期','当前') or token.startswith(('周期=','赛季=')) or re.fullmatch(r'(?i)S\d+(?:赛季)?',token):
+            choice=token.removeprefix('周期=').removeprefix('赛季=')
+            if re.fullmatch(r'(?i)S\d+(?:赛季)?',choice):choice=choice.upper().removesuffix('赛季')
             if options['period'] and options['period']!=choice:raise ValueError('一次只能选择一个统计周期')
             options['period']=choice
         elif token in ALIASES and token not in ('3','4'):
@@ -78,6 +80,7 @@ def parse_query(arguments):
     if rest:options['action']=rest.pop(0)
     alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞次数榜':'被飞','被飞率榜':'被飞率','被飞率排行':'被飞率','被飞率排行榜':'被飞率','被飞率排名':'被飞率','统计时间':'时间','更新时间':'时间','同步时间':'时间'}
     options['action']=alias.get(options['action'],options['action'])
+    if options['action']=='赛季':options['action']='周期'
     return options
 
 class GroupDataPlugin(Star):
@@ -182,10 +185,10 @@ class GroupDataPlugin(Star):
                 raise ValueError('封存周期只读；修改当前数据请去掉“历史”参数')
             if action=='周期':
                 items=periods.all_periods(self.store,scope)
-                await self.card(event,'群数据 · 统计周期',[
+                await self.card(event,'群数据 · 赛季列表',[
                     *[f'{p["name"]}（{"当前" if p["state"]=="current" else "已封存"}） · {len(self.store.matches(scope,period=p["id"]))} 场 · {p["id"]}' for p in items],
-                    '默认查询当前周期；在任意查询后加“历史”可查封存数据。',
-                    '指定其他周期：在查询后加 周期=周期ID；所有参数可调换顺序。',
+                    '默认查询 S1赛季；查询后加 S0 查旧赛季，加 S1 查当前赛季。',
+                    '例如 /群数据 被飞榜 四麻 S0；赛季、模式等参数顺序可调换。',
                     '正常结算和被飞结算均统计；比例只代表本群精华样本。']);return
             if action in ('同步','同步更新','表格'):
                 online=getattr(self,'online',None)

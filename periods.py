@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import re
 import time
 import uuid
 
@@ -42,12 +43,14 @@ def select(store, scope, period=None):
     if period in ('历史','上一期'):
         found=next((r for r in rows if r['state']=='archived'),None)
     else:
-        found=next((r for r in rows if r['id']==period),None)
+        season=str(period).upper().removesuffix('赛季')
+        name=season+'赛季' if re.fullmatch(r'S\d+',season) else str(period)
+        found=next((r for r in rows if r['id']==period or r['name']==name),None)
     if not found:raise ValueError('没有这个统计周期，发送 /群数据 周期 查看')
     return found
 
 
-def cutover(store, scope, name='新周期', now=None, baseline_source_max=None):
+def cutover(store, scope, name='S1赛季', now=None, baseline_source_max=None):
     if select(store,scope):raise ValueError('已经切换过周期，不能重复清零')
     if not store.group(scope):raise ValueError('该群尚未接入')
     now=time.time() if now is None else now
@@ -76,7 +79,7 @@ def cutover(store, scope, name='新周期', now=None, baseline_source_max=None):
     stamps=[r['stamp'] for r in snapshot['sources'] if r['stamp']]
     with store.db:
         store.db.execute('INSERT INTO periods VALUES(?,?,?,?,?,?,?,?)',
-            (old,scope,'历史封存','archived',min(stamps,default=now),now,packed(snapshot),checksum))
+            (old,scope,'S0赛季','archived',min(stamps,default=now),now,packed(snapshot),checksum))
         store.db.execute('INSERT INTO periods VALUES(?,?,?,?,?,?,?,?)',(new,scope,name,'current',now,0,None,''))
         store.db.execute('INSERT INTO source_periods SELECT id,CASE WHEN id<=? THEN ? ELSE ? END FROM sources WHERE scope=?',
                          (baseline_source_max if baseline_source_max is not None else 2**63-1,old,new,scope))

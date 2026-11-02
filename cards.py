@@ -27,14 +27,14 @@ def base(title,subtitle,height):
     return im,d
 
 def footer(d,y,group,days,period_name='当前周期'):
-    period=f'近{days}天（按加入精华时间）' if days else period_name+'已确认对局'
+    period=period_name+(f' · 近{days}天（按加入精华时间）' if days else ' · 已确认对局')
     d.text((55,y),f'群 {group} · {period} · 被飞：最终持点 < 0',font=font(25),fill=MUTED)
     d.text((55,y+43),'比例仅代表本群精华样本；昵称来自截图，不等同于发送者。',font=font(25),fill=MUTED)
 
 def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period_name='当前周期'):
     modes=(selected_mode,) if selected_mode in (3,4) else (3,4)
     matches=[m for m in matches if m['result']['mode'] in modes]
-    title='群数据 · 精华对局档案'+(' · 三麻' if selected_mode==3 else ' · 四麻' if selected_mode==4 else '')
+    title='群数据 · '+period_name+(' · 三麻总览' if selected_mode==3 else ' · 四麻总览' if selected_mode==4 else ' · 对局总览')
     im,d=base(title,f'三麻 / 四麻独立统计    已录入 {len(matches)} 场    待识别 {summary.get("new",0)} 张    待确认 {summary.get("review",0)+summary.get("llm_pending",0)} 张',1250)
     for col,mode in enumerate(modes):
         x=48+col*692;panel_width=1344 if len(modes)==1 else 654;stats=aggregate(matches,mode,aliases);games=sum(s['games'] for s in stats)//mode
@@ -59,7 +59,7 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
 
 def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当前周期'):
     rows=ranking(stats,metric,minimum)[:10];height=max(690,390+len(rows)*91+145)
-    im,d=base(f'群数据 · {"三麻" if mode==3 else "四麻"} · {metric}榜',f'每人至少 {minimum} 场  /  比率同时展示次数与场次  /  相同指标并列',height)
+    im,d=base(f'群数据 · {period_name} · {"三麻" if mode==3 else "四麻"} · {metric}榜',f'每人至少 {minimum} 场  /  比率同时展示次数与场次  /  相同指标并列',height)
     d.text((65,240),'排名      游戏昵称',font=font(28),fill=MUTED)
     d.text((855,240),'场次',font=font(28),fill=MUTED);d.text((1080,240),metric,font=font(28),fill=MUTED)
     y=295
@@ -77,7 +77,7 @@ def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当�
     footer(d,height-112,group,days,period_name);im.save(path);return path
 
 def profile(path,group,mode,stats,name,days=0,period_name='当前周期'):
-    im,d=base(f'群数据 · {"三麻" if mode==3 else "四麻"} · 个人档案',fit(ImageDraw.Draw(Image.new('RGB',(1,1))),name,29,1200),1060)
+    im,d=base(f'群数据 · {period_name} · {"三麻" if mode==3 else "四麻"} · 个人档案',fit(ImageDraw.Draw(Image.new('RGB',(1,1))),name,29,1200),1060)
     p=next((s for s in stats if s['name']==name),None)
     if p is None:d.text((65,280),'未找到这个完整游戏昵称；发送 /群数据 玩家 查看昵称。',font=font(34),fill=INK)
     else:
