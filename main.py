@@ -254,6 +254,24 @@ class MahjongHelperPlugin(Star):
             return
         # Removing completed tools also blocks repeated calls in one model batch.
         tools.remove_tool(tool.name)
+        if (tool.name == "group_data" and getattr(event, "_has_send_oper", False)
+                and not event.get_extra("mahjong_ai_group_context_saved")):
+            key = event.get_extra("mahjong_ai_chat_key")
+            query = tool_args.get("query", "") if isinstance(tool_args, dict) else None
+            if key and isinstance(query, str) and len(query) <= 500:
+                # Preserve only plain conversational context, never executable tool
+                # calls or invented statistics. Group/sender/conversation isolation
+                # is the same as normal chat history.
+                history = list(self._ai_chats.get(key, (0, []))[1])
+                history.extend([
+                    {"role": "user", "content": event.get_extra("mahjong_ai_chat_prompt", "")[:3000]},
+                    {"role": "assistant", "content": "上一轮群数据查询已结束，参数记录："
+                     + json.dumps({"query": query}, ensure_ascii=False)
+                     + "。新消息可以继续查询或重新查看原图。"},
+                ])
+                self._ai_chats[key] = (time.monotonic(), history[-24:])
+                self._ai_chats.move_to_end(key)
+                event.set_extra("mahjong_ai_group_context_saved", True)
         if tool_result is None:
             tools.tools.clear()
             return
@@ -477,7 +495,7 @@ class MahjongHelperPlugin(Star):
         """查询当前QQ群精华截图统计并发送图片卡片，与牌谱屋战绩独立。
 
         Args:
-            query(string): 群数据查询参数，留空看总览；被飞榜默认按次数，用三麻 被飞榜或四麻 被飞。只有明确要求比例时才用被飞率。还支持四麻 一位、最低 三麻、个人 完整游戏昵称 四麻、状态、帮助，以及30天和至少5场筛选。只查询当前群，不代操作其他群、不修改数据。
+            query(string): 群数据命令参数；新查询默认S1，旧赛季加S0。例如个人 清风难胡 S0、最高 清风难胡 三麻 S0、最低 清风难胡 四麻 S0、极值 清风难胡 S0。连续追问须补全上轮玩家、赛季和模式，不能因用户省略就重置。极值直接发送该玩家的最高最低结算图，不能漏掉昵称变成全群榜首。被飞榜按次数，明确要比例才用被飞率；支持30天、至少5场筛选和参数换序。只读查询当前QQ群。
         """
         if not self._claim_ai_action(event):
             return

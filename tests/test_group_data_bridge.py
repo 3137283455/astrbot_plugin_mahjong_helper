@@ -5,6 +5,38 @@ from test_ai_entry import Event,plugin,tools
 from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS
 from astrbot.core.provider.entities import ProviderRequest
 class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
+ async def test_sent_group_query_is_retained_for_followups_without_replaying_tool_calls(self):
+  from astrbot.core.agent.tool import FunctionTool
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);p.context.get_registered_star=lambda name:None
+   e=Event(text='看看清风难胡S0三麻最高那局');e.set_extra('mahjong_ai_started',True)
+   req=ProviderRequest(prompt=e.message_str,func_tool=tools('group_data'))
+   await p.ai_limit_request(e,req)
+   e._has_send_oper=True;tool=FunctionTool(name='group_data',description='',parameters={})
+   await p.ai_tool_finished(e,tool,{'query':'最高 清风难胡 三麻 S0'},None)
+   await p.ai_tool_finished(e,tool,{'query':'最高 清风难胡 三麻 S0'},None)
+   follow=Event(text='那四麻最低呢',message_id='2');follow.set_extra('mahjong_ai_started',True)
+   next_req=ProviderRequest(prompt=follow.message_str,func_tool=tools('group_data'))
+   await p.ai_limit_request(follow,next_req)
+   self.assertEqual(len(next_req.contexts),2)
+   self.assertIn('最高 清风难胡 三麻 S0',next_req.contexts[-1]['content'])
+   self.assertEqual([r['role'] for r in next_req.contexts],['user','assistant'])
+   self.assertTrue(all('tool_calls' not in r for r in next_req.contexts))
+   self.assertEqual(e.sent,[])
+ async def test_group_query_context_does_not_cross_senders_or_groups(self):
+  from astrbot.core.agent.tool import FunctionTool
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);p.context.get_registered_star=lambda name:None
+   e=Event(text='清风难胡S0资料');e.set_extra('mahjong_ai_started',True)
+   req=ProviderRequest(prompt=e.message_str,func_tool=tools('group_data'));await p.ai_limit_request(e,req)
+   e._has_send_oper=True
+   await p.ai_tool_finished(e,FunctionTool(name='group_data',description='',parameters={}),{'query':'个人 清风难胡 S0'},None)
+   for other in [Event(text='那最高呢',group='other'),Event(text='那最高呢')]:
+    if other.group=='group':other.get_sender_id=lambda:'another-user'
+    other.set_extra('mahjong_ai_started',True)
+    other_req=ProviderRequest(prompt=other.message_str,func_tool=tools('group_data'))
+    await p.ai_limit_request(other,other_req)
+    self.assertEqual(other_req.contexts,[])
  async def test_unqualified_fly_board_is_count_even_if_model_chooses_rate(self):
   from astrbot_plugin_mahjong_helper.group_data_bridge import run_group_data
   calls=[]

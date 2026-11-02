@@ -227,7 +227,8 @@ class AIEntryTests(unittest.IsolatedAsyncioTestCase):
             await p.ai_before_model(event)
             req = ProviderRequest(prompt=event.message_str)
             await p.ai_limit_request(event, req)
-            self.assertEqual(req.system_prompt, "慧慧自定义设定")
+            self.assertTrue(req.system_prompt.startswith("慧慧自定义设定\n"))
+            self.assertIn("https://www.maj-soul.net/",req.system_prompt)
 
     async def test_private_feature_request_reaches_tools_without_mention(self):
         with tempfile.TemporaryDirectory() as d:
