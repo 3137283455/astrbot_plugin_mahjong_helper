@@ -34,6 +34,15 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parse_query('被飞排行榜')['action'],'被飞')
         self.assertEqual(parse_query('原图 3')['rest'],['3'])
         self.assertEqual(parse_query('个人 "昵称 有空格" 四麻')['rest'],['昵称 有空格'])
+    def test_fly_board_default_is_count_and_rate_requires_explicit_name(self):
+        from astrbot_plugin_group_data.core import ranking
+        for word in ['被飞榜','被飞排行榜','被飞排行','被飞次数榜','被飞最多']:
+            self.assertEqual(parse_query(word+' 四麻')['action'],'被飞')
+        for word in ['被飞率','被飞率榜','被飞率排行榜']:
+            self.assertEqual(parse_query('四麻 '+word)['action'],'被飞率')
+        stats=[{'name':'次数多','games':10,'fly':3},{'name':'比例高','games':2,'fly':1}]
+        self.assertEqual(ranking(stats,parse_query('被飞榜')['action'])[0]['name'],'次数多')
+        self.assertEqual(ranking(stats,parse_query('被飞率榜')['action'])[0]['name'],'比例高')
     async def test_member_can_query_but_cannot_modify(self):
         with tempfile.TemporaryDirectory() as d:
             p=self.setup_plugin(d);e=Event()
