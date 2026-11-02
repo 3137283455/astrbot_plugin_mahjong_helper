@@ -5,6 +5,23 @@ from test_ai_entry import Event,plugin,tools
 from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS
 from astrbot.core.provider.entities import ProviderRequest
 class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
+ async def test_unqualified_fly_board_is_count_even_if_model_chooses_rate(self):
+  from astrbot_plugin_mahjong_helper.group_data_bridge import run_group_data
+  calls=[]
+  async def handle(event,query,allow_write):calls.append(query)
+  context=SimpleNamespace(get_registered_star=lambda name:SimpleNamespace(activated=True,star_cls=SimpleNamespace(handle=handle)))
+  await run_group_data(context,Event(text='看看本群四麻被飞榜'),'四麻 被飞率 30天')
+  await run_group_data(context,Event(text='谁被飞最多'),'被飞率榜 三麻')
+  await run_group_data(context,Event(text='看看被飞次数榜'),'30天 被飞率 四麻')
+  self.assertEqual(calls,['四麻 被飞 30天','被飞 三麻','30天 被飞 四麻'])
+ async def test_explicit_rates_and_follow_up_filters_remain_rate(self):
+  from astrbot_plugin_mahjong_helper.group_data_bridge import run_group_data
+  calls=[]
+  async def handle(event,query,allow_write):calls.append(query)
+  context=SimpleNamespace(get_registered_star=lambda name:SimpleNamespace(activated=True,star_cls=SimpleNamespace(handle=handle)))
+  for text in ['看看被飞率榜','被飞占比最高的是谁','换成四麻']:
+   await run_group_data(context,Event(text=text),'四麻 被飞率')
+  self.assertEqual(calls,['四麻 被飞率']*3)
  async def test_read_only_native_reuse_and_no_repeated_messages(self):
   with tempfile.TemporaryDirectory() as d:
    p=plugin(d);calls=[]
