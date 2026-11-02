@@ -19,7 +19,13 @@ class Store:
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,scope TEXT,actor TEXT,action TEXT,payload TEXT,stamp REAL);
         CREATE INDEX IF NOT EXISTS source_group ON sources(scope,active);
         CREATE TABLE IF NOT EXISTS source_exclusions(scope TEXT,msg TEXT,idx INTEGER,reason TEXT,stamp REAL,PRIMARY KEY(scope,msg,idx));
-        ''');self.db.commit()
+        ''')
+        # Existing databases have no reliable historical recognition timestamp.
+        # Add the column without guessing from file mtimes or essence dates.
+        columns={r['name'] for r in self.db.execute('PRAGMA table_info(groups)')}
+        if 'last_import' not in columns:
+            self.db.execute('ALTER TABLE groups ADD COLUMN last_import REAL NOT NULL DEFAULT 0')
+        self.db.commit()
     def close(self): self.db.close()
     def group(self,scope):
         row=self.db.execute('SELECT * FROM groups WHERE scope=?',(scope,)).fetchone()
@@ -29,14 +35,37 @@ class Store:
     def groups(self):return [dict(r) for r in self.db.execute('SELECT * FROM groups WHERE enabled=1')]
     def audit(self,scope,actor,action,payload):
         self.db.execute('INSERT INTO audit(scope,actor,action,payload,stamp) VALUES(?,?,?,?,?)',(scope,str(actor),action,json.dumps(payload,ensure_ascii=False),time.time()));self.db.commit()
+    def freshness(self,scope):
+        group=self.group(scope) or {}
+        return {'generated_at':time.time(),'last_scan':group.get('last_scan',0),
+                'last_import':group.get('last_import',0)}
+    def _accepted_hashes(self,scope):
+        return {r[0] for r in self.db.execute('''SELECT DISTINCT s.hash FROM sources s
+            JOIN images i ON i.hash=s.hash
+            LEFT JOIN overrides o ON o.scope=s.scope AND o.hash=s.hash
+            WHERE s.scope=? AND s.active=1 AND COALESCE(o.status,i.status)='accepted'
+            AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx)''',(scope,))}
+    def _touch_import(self,digest,scope=None,from_image=False):
+        """Only accepted, active, non-excluded results can advance a group's clock."""
+        extra=' AND s.scope=?' if scope is not None else ''
+        if from_image:extra+=' AND o.status IS NULL'
+        params=[time.time(),digest]+([scope] if scope is not None else [])
+        self.db.execute('''UPDATE groups SET last_import=? WHERE scope IN (
+            SELECT s.scope FROM sources s JOIN images i ON i.hash=s.hash
+            LEFT JOIN overrides o ON o.scope=s.scope AND o.hash=s.hash
+            WHERE s.hash=? AND s.active=1 AND COALESCE(o.status,i.status)='accepted'
+            AND NOT EXISTS (SELECT 1 FROM source_exclusions x WHERE x.scope=s.scope AND x.msg=s.msg AND x.idx=s.idx)'''+extra+')',params)
     def reconcile(self,scope,entries):
         """Call only after a fully successful listing. Preserve old hash on URL refresh."""
         now=time.time()
+        previous=self._accepted_hashes(scope)
         with self.db:
             self.db.execute('UPDATE sources SET active=0 WHERE scope=?',(scope,))
             for e in entries:
                 self.db.execute('INSERT INTO sources(scope,msg,idx,stamp,seen) VALUES(?,?,?,?,?) ON CONFLICT(scope,msg,idx) DO UPDATE SET active=1,stamp=excluded.stamp,seen=excluded.seen',(scope,e['msg'],e['idx'],e['stamp'],now))
             self.db.execute("UPDATE groups SET last_scan=?,error='' WHERE scope=?",(now,scope))
+            for digest in self._accepted_hashes(scope)-previous:
+                self._touch_import(digest,scope)
     def source(self,scope,msg,idx):
         return dict(self.db.execute('SELECT * FROM sources WHERE scope=? AND msg=? AND idx=?',(scope,msg,idx)).fetchone())
     def is_excluded(self,scope,msg,idx):
@@ -48,13 +77,19 @@ class Store:
         self.db.execute('UPDATE sources SET error=? WHERE id=?',(reason,id));self.db.commit()
     def attach(self,id,digest,path):
         with self.db:
+            previous=self.db.execute('SELECT scope,hash FROM sources WHERE id=?',(id,)).fetchone()
             self.db.execute('INSERT OR IGNORE INTO images(hash,path) VALUES(?,?)',(digest,str(path)))
             self.db.execute("UPDATE sources SET hash=?,error='' WHERE id=?",(digest,id))
+            if previous and previous['hash']!=digest:self._touch_import(digest,previous['scope'])
     def image(self,digest):
         row=self.db.execute('SELECT * FROM images WHERE hash=?',(digest,)).fetchone()
         return dict(row) if row else None
     def save(self,digest,status,result=None,raw=None,reason='',model='',retry=0):
-        self.db.execute('UPDATE images SET status=?,result=?,raw=?,reason=?,model=?,attempts=attempts+1,retry=? WHERE hash=?',(status,json.dumps(result,ensure_ascii=False) if result else None,json.dumps(raw,ensure_ascii=False) if raw is not None else None,reason,model,retry,digest));self.db.commit()
+        previous=self.image(digest)
+        changed=previous is not None and (previous['status']!='accepted' or json.loads(previous['result'] or 'null')!=result)
+        with self.db:
+            self.db.execute('UPDATE images SET status=?,result=?,raw=?,reason=?,model=?,attempts=attempts+1,retry=? WHERE hash=?',(status,json.dumps(result,ensure_ascii=False) if result else None,json.dumps(raw,ensure_ascii=False) if raw is not None else None,reason,model,retry,digest))
+            if status=='accepted' and result and changed:self._touch_import(digest,from_image=True)
     def scan_error(self,scope,reason):
         self.db.execute('UPDATE groups SET error=? WHERE scope=?',(reason,scope));self.db.commit()
     def rows(self,scope):
@@ -97,7 +132,9 @@ class Store:
     def get_source(self,scope,id):
         return next((r for r in self.rows(scope) if r['id']==id),None)
     def override(self,scope,row,status,result=None,reason='人工处理'):
-        self.db.execute('INSERT OR REPLACE INTO overrides VALUES(?,?,?,?,?)',(scope,row['hash'],status,json.dumps(result,ensure_ascii=False) if result else None,reason));self.db.commit()
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO overrides VALUES(?,?,?,?,?)',(scope,row['hash'],status,json.dumps(result,ensure_ascii=False) if result else None,reason))
+            if status=='accepted' and result:self._touch_import(row['hash'],scope)
     def summary(self,scope):
         rows=self.rows(scope);counts={};hashes=set()
         for r in rows:

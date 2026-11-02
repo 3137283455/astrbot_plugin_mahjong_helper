@@ -5,6 +5,7 @@ import shlex
 import time
 import uuid
 from contextlib import suppress
+from datetime import datetime,timezone,timedelta
 from pathlib import Path
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
@@ -37,10 +38,11 @@ HELP=[
  '按顺位从高到低填写所有人；只在核对原图后确认，不确定就保留待确认。',
  '别名：/群数据 合并 "旧昵称" "新昵称"；撤销别名：/群数据 取消合并 "旧昵称"',
  '每约2分钟检查精华变更，识别异步进行；取消精华后不再计入。',
+ '管理员 /群数据 时间：查询最近成功检查、最近结果入库时间和待处理数量。',
  '群聊也可@慧慧说“看看本群三麻被飞榜”；管理操作仅接受明确命令。',
 ]
 WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并'}
-ADMIN_READS={'待确认','核对'}
+ADMIN_READS={'待确认','核对','时间'}
 
 def parse_query(arguments):
     try:tokens=shlex.split(str(arguments))
@@ -60,7 +62,7 @@ def parse_query(arguments):
         else:options['rest'].append(token)
     rest=options['rest']
     if rest:options['action']=rest.pop(0)
-    alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞率榜':'被飞率'}
+    alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞率榜':'被飞率','统计时间':'时间','更新时间':'时间','同步时间':'时间'}
     options['action']=alias.get(options['action'],options['action'])
     return options
 
@@ -145,6 +147,23 @@ class GroupDataPlugin(Star):
             group=self.store.group(scope)
             if not group:
                 await self.card(event,'群数据 · 尚未开启',['请本群管理员发送 /群数据 开启。','开启后读取本群精华图片，只把完整雀魂终局结算录入。','使用 /群数据 帮助 查看规则。']);return
+            if action=='时间':
+                info=self.store.freshness(scope);s=self.store.summary(scope)
+                tz=timezone(timedelta(hours=8))
+                def stamp(value,missing):
+                    return datetime.fromtimestamp(float(value),tz).strftime('%Y-%m-%d %H:%M:%S') if value else missing
+                lines=[
+                    '群数据 · 更新时间（北京时间）',
+                    '查询时间：'+stamp(info['generated_at'],''),
+                    '最近成功检查精华：'+stamp(info['last_scan'],'尚未成功检查'),
+                    '最近结果入库：'+stamp(info['last_import'],'未记录（升级后暂无新入库）'),
+                    f'自动检查：{"开启" if group["enabled"] else "暂停"}；检查间隔至少 {max(60,int(self.config.get("poll_seconds",120)))} 秒',
+                    f'已录入：{s["games"]} 场；待识别：{s.get("new",0)} 张；待辅助识别：{s.get("llm_pending",0)} 张',
+                    f'待确认：{s.get("review",0)} 张；本地异常：{s.get("local_error",0)} 张；读取失败：{s.get("download_error",0)} 张',
+                    '最近检查异常：'+group['error'] if group['error'] else '最近检查：正常',
+                    '成功检查只代表精华列表已同步；识别或人工确认完成后才会入库。',
+                ]
+                await event.send(event.plain_result('\n'.join(lines)));return
             if action=='更新':
                 if not group['enabled']:raise ValueError('本群已暂停，请先 /群数据 开启')
                 self.spawn(self.source.sync(scope,event.bot,gid))
