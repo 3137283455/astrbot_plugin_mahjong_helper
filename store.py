@@ -39,7 +39,10 @@ class Store:
         self.db.execute('INSERT INTO audit(scope,actor,action,payload,stamp) VALUES(?,?,?,?,?)',(scope,str(actor),action,json.dumps(payload,ensure_ascii=False),time.time()));self.db.commit()
     def freshness(self,scope,period=None):
         selected=periods.select(self,scope,period)
-        if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['freshness']
+        if selected and selected['state']=='archived':
+            info=json.loads(selected['snapshot'])['freshness']
+            info['latest_fly']={int(k):v for k,v in info['latest_fly'].items()}
+            return info
         group=self.group(scope) or {}
         matches=self.matches(scope)
         def latest(rows):

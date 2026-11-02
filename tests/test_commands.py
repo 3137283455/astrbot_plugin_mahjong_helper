@@ -60,6 +60,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             await p.handle(e,'忽略 1 历史');self.assertIn('只读',e.sent[-1])
             await p.handle(e,'关闭 历史');self.assertTrue(p.store.group(scope)['enabled'])
             await p.handle(e,'时间');self.assertIn('本周期尚无新结果入库',e.sent[-1])
+            await p.handle(e,'时间 历史');self.assertIn('三麻最新被飞精华',e.sent[-1]);self.assertNotIn('暂时失败',e.sent[-1])
             await p.handle(e,'周期');self.assertIsInstance(e.sent[-1],list)
             await p.handle(e,'最近 5 历史');self.assertIsInstance(e.sent[-1],list)
             await p.handle(e,'同桌 甲 乙 三麻 历史');self.assertIsInstance(e.sent[-1],list)
