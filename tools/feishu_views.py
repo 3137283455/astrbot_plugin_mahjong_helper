@@ -18,7 +18,8 @@ async def configure(args):
     client=Feishu(args.data_dir/'feishu_credentials.json',target['app_token'])
     specs={
         'periods':[('当前周期',[('状态','进行中')]),('历史周期',[('状态','已封存')])],
-        'matches':[('当前周期三麻',[('周期ID',current),('模式','3'),('确认状态','已确认')]),
+        'matches':[('当前周期全部',[('周期ID',current),('确认状态','已确认')]),
+                   ('当前周期三麻',[('周期ID',current),('模式','3'),('确认状态','已确认')]),
                    ('当前周期四麻',[('周期ID',current),('模式','4'),('确认状态','已确认')]),
                    ('待核对',[('周期ID',current),('确认状态','待核对')]),
                    ('已停用',[('周期ID',current),('确认状态','停用')]),
@@ -47,6 +48,9 @@ async def configure(args):
             assert all(all(str(normalize(r['fields']).get(f))==v for f,v in conditions) for r in rows),(key,name)
             configured[key+':'+name]={'view_id':vid,'records':len(rows)}
     target['views']=configured
+    from urllib.parse import urlsplit,urlunsplit,urlencode
+    original=urlsplit(target['url']);target.setdefault('original_url',target['url'])
+    target['url']=urlunsplit((original.scheme,original.netloc,original.path,urlencode({'table':target['tables']['matches'],'view':configured['matches:当前周期全部']['view_id']}),''))
     path=args.data_dir/'feishu_target.json';path.write_text(json.dumps(target,ensure_ascii=False,indent=2)+'\n',encoding='utf-8');path.chmod(0o600)
     print(json.dumps(configured,ensure_ascii=False))
 
