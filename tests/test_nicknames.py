@@ -60,6 +60,7 @@ class NicknameFlowTests(unittest.IsolatedAsyncioTestCase):
             with patch('astrbot_plugin_group_data.main.cards.profile') as profile:
                 await p.handle(Event(),'个人 今天吃啥 四麻');profile.assert_not_called()
                 self.assertIn('今天吃啥好呢=',p.card.call_args.args[-1][2])
+                self.assertIn('第1个',p.card.call_args.args[-1][-2])
                 await p.handle(Event(),'选 1');self.assertEqual(profile.call_args.args[4],'今天吃啥好呢=')
                 profile.reset_mock();p.card.reset_mock()
                 await p.handle(Event(),'个人 今天吃啥好呢= 四麻');profile.assert_called_once();p.card.assert_not_called()

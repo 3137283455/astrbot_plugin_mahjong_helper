@@ -203,11 +203,12 @@ class GroupDataPlugin(Star):
             conditions=[period_name,'三麻' if opt['mode']==3 else '四麻' if opt['mode']==4 else '三麻 / 四麻']
             if opt['days']:conditions.append(f'近{opt["days"]}天')
             if opt['minimum']>1:conditions.append(f'至少{opt["minimum"]}场')
+            example=min(2,len(options))
             await self.card(event,'群数据 · 选择昵称',[
                 ' · '.join(conditions)+f' · {action}',f'查找“{value}”，找到 {len(options)} 个候选：',
                 *[f'{i}. {name}' for i,name in enumerate(options[:20],1)],
                 *(['仅列前20项；请补充昵称关键词缩小范围。'] if len(options)>20 else []),
-                '本人3分钟内回复序号或“第2个”，也可 /群数据 选 2。',
+                f'本人3分钟内回复序号或“第{example}个”，也可 /群数据 选 {example}。',
                 '仅当前群、当前发起人有效；/群数据 取消 可结束。']);return False
         opt['rest']=values
         query=self.query_text(opt,period_name)
