@@ -25,7 +25,7 @@ from .ai_entry import (
 )
 
 from .bilibili_bridge import BILIBILI_INSTRUCTIONS, BILIBILI_HELP, bilibili_instance, run_bilibili_action
-from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data
+from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data,quick_group_query
 from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
 from .formatters import (
@@ -157,13 +157,6 @@ class MahjongHelperPlugin(Star):
         if not eligible(event) or getattr(event, "_has_send_oper", False):
             event.stop_event()
             return
-        provider_id = str(self.config.get("ai_provider_id", "")).strip()
-        provider = self.context.get_provider_by_id(provider_id) if provider_id else None
-        if provider is None or not ai_provider_allowed(provider):
-            await event.send(event.plain_result(AI_UNAVAILABLE))
-            event.stop_event()
-            return
-        event.set_extra("selected_provider", provider_id)
         event.set_extra("enable_streaming", False)
         event.set_extra("enable_reasoning", False)
         message_id = str(getattr(event.message_obj, "message_id", "") or "")
@@ -177,6 +170,28 @@ class MahjongHelperPlugin(Star):
                 return
             self._ai_seen[key] = now
         event.set_extra("mahjong_ai_started", True)
+        parts=event.get_messages()
+        if event.get_group_id() and all(isinstance(p,(Comp.Plain,Comp.At,Comp.Reply)) for p in parts):
+            text=''.join(p.text for p in parts if isinstance(p,Comp.Plain))
+            query=quick_group_query(text)
+            meta=getattr(self.context,'get_registered_star',lambda _:None)('astrbot_plugin_group_data') if query else None
+            instance=meta.star_cls if meta is not None and meta.activated else None
+            if query and callable(getattr(instance,'handle',None)):
+                started=time.perf_counter()
+                event.set_extra('mahjong_group_fast_query',query)
+                event.should_call_llm(True);event.stop_event()
+                await instance.handle(event,query,allow_write=False)
+                writer=getattr(instance,'remember_context',None)
+                if callable(writer) and getattr(event,'_has_send_oper',False):writer(event,event.get_extra('group_data_resolved_query',query))
+                logger.info('群数据直达完成 group=%s user=%s elapsed_ms=%.1f query=%s',event.get_group_id(),event.get_sender_id(),(time.perf_counter()-started)*1000,query)
+                return
+        provider_id = str(self.config.get("ai_provider_id", "")).strip()
+        provider = self.context.get_provider_by_id(provider_id) if provider_id else None
+        if provider is None or not ai_provider_allowed(provider):
+            await event.send(event.plain_result(AI_UNAVAILABLE))
+            event.stop_event()
+            return
+        event.set_extra("selected_provider", provider_id)
 
     @filter.on_llm_request(priority=-1000)
     async def ai_limit_request(self, event: AstrMessageEvent, req):

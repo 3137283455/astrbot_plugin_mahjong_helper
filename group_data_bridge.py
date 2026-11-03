@@ -1,5 +1,32 @@
 """Read-only AI bridge to the separate essence statistics plugin."""
 import re
+import json
+
+def quick_group_query(text):
+    """Unambiguous read-only requests only; all other language still uses LLM tools."""
+    if not isinstance(text,str) or len(text)>300:return None
+    text=text.strip().rstrip('。！？!? ').strip()
+    verb=re.match(r'^(?:请|麻烦)?(?:帮我|给我)?(?:查询一下|查询|查一下|查下|查查|查|看一下|看看|看下|看)\s*',text)
+    if not verb:return None
+    body=text[verb.end():].strip()
+    if body in ('群数据评分规则','综合评分规则','评分规则'):return '评分规则'
+    filter_pattern=r'(?:S\d+(?:赛季)?|三麻|四麻|近?\d+天|(?:至少)?\d+场)'
+    board=re.fullmatch(r'(?P<before>(?:'+filter_pattern+r'\s*)*)(?:本群|群友|群内)?(?P<metric>综合表现榜|综合评分榜|综合排行榜|综合排名|综合榜|被飞次数榜|被飞率榜|被飞榜)(?P<after>(?:\s*'+filter_pattern+r')*)',body,re.I)
+    if board:
+        metric=board['metric'];action='综合榜' if metric.startswith('综合') else '被飞率' if '率' in metric else '被飞'
+        filters=re.findall(filter_pattern,board['before']+' '+board['after'],re.I)
+        return ' '.join([action,*[f.removeprefix('近') for f in filters]])
+    # Player names are kept verbatim. Only whitespace-delimited trailing filters
+    # are separated, so a nickname containing 三麻/四麻 is never silently rewritten.
+    match=re.fullmatch(r'(?P<name>.+?)(?:的)?(?P<kind>群数据|群内数据|群战绩|综合评分|综合分)(?P<tail>(?:\s+'+filter_pattern+r')*)',body,re.I)
+    if not match:return None
+    name=match['name'].strip().removesuffix('的').strip()
+    if (not name or len(name)>100 or re.search(r'[，。！？?!\n]|为什么|怎么|如何|锐评|评价|对比|同桌|规则|介绍|解释',name)):
+        return None
+    if name[0] in '“"' and name[-1] in '”"':name=name[1:-1]
+    action='评分' if match['kind'] in ('综合评分','综合分') else '个人'
+    filters=re.findall(filter_pattern,match['tail'],re.I)
+    return ' '.join([action,json.dumps(name,ensure_ascii=False),*[f.removeprefix('近') for f in filters]])
 
 GROUP_DATA_INSTRUCTIONS='''【群数据】
 用户查询本群精华中的雀魂结算、谁被飞最多、群内顺位次数/比例、群内最高最低持点时使用 group_data，不用娱乐API，也不用牌谱屋 mahjong_query。

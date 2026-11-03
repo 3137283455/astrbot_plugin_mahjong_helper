@@ -5,6 +5,45 @@ from test_ai_entry import Event,plugin,tools
 from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS
 from astrbot.core.provider.entities import ProviderRequest
 class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
+ async def test_fast_query_parser_handles_explicit_requests_and_preserves_names(self):
+  import shlex
+  from astrbot_plugin_mahjong_helper.group_data_bridge import quick_group_query
+  cases={'查一下高贵名门的群数据':['个人','高贵名门'],
+         '看看S0三麻综合表现榜':['综合榜','S0','三麻'],
+         '查清风难胡+）（的群数据 四麻 S0':['个人','清风难胡+）（','四麻','S0'],
+         '看看被飞率榜 四麻':['被飞率','四麻'],
+         '查高贵名门的综合评分 近30天 S0':['评分','高贵名门','30天','S0']}
+  for text,wanted in cases.items():self.assertEqual(shlex.split(quick_group_query(text)),wanted)
+  for text in ['你好','为什么高贵名门的群数据','查一下怎么计算群数据','查高贵名门的群数据并删除它','/群数据 个人 高贵名门','看看这个人的表现如何']:
+   self.assertIsNone(quick_group_query(text),text)
+ async def test_fast_group_query_bypasses_provider_and_deduplicates_before_send(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);calls=[];remembered=[]
+   async def handle(event,query,allow_write):calls.append((query,allow_write));await event.send(event.plain_result('群数据卡片'))
+   instance=SimpleNamespace(handle=handle,remember_context=lambda event,query:remembered.append(query))
+   p.context.get_registered_star=lambda name:SimpleNamespace(activated=True,star_cls=instance) if name=='astrbot_plugin_group_data' else None
+   p.context.get_provider_by_id=lambda _:self.fail('Explicit query must not touch model provider')
+   first=Event(text='查一下高贵名门的群数据');await p.ai_before_model(first)
+   self.assertTrue(first.stopped);self.assertEqual(len(first.sent),1);self.assertTrue(first.call_llm)
+   repeat=Event(text=first.message_str);await p.ai_before_model(repeat);self.assertTrue(repeat.stopped);self.assertEqual(repeat.sent,[])
+   self.assertEqual(calls,[('个人 "高贵名门"',False)]);self.assertEqual(remembered,['个人 "高贵名门"'])
+ async def test_fast_group_lane_keeps_scope_and_image_requests_on_original_path(self):
+  import astrbot.api.message_components as Comp
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);calls=[]
+   async def handle(*args,**kwargs):calls.append(args)
+   p.context.get_registered_star=lambda name:SimpleNamespace(activated=True,star_cls=SimpleNamespace(handle=handle))
+   for i,event in enumerate([Event(text='查高贵名门的群数据',mention=None),Event(text='查高贵名门的群数据',mention='other')]):
+    event.message_obj.message_id=str(i);await p.ai_before_model(event);self.assertTrue(event.stopped)
+   private=Event(text='查高贵名门的群数据',group=None,mention=None,message_id='private');await p.ai_before_model(private);self.assertFalse(private.stopped)
+   image=Event(text='查高贵名门的群数据',message_id='image');image.parts.append(Comp.Image.fromFileSystem('/tmp/query.png'));await p.ai_before_model(image);self.assertFalse(image.stopped)
+   normal=Event(text='你好',message_id='chat');await p.ai_before_model(normal);self.assertFalse(normal.stopped)
+   self.assertEqual(calls,[])
+ async def test_fast_group_lane_inactive_plugin_falls_back_to_llm(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);p.context.get_registered_star=lambda name:SimpleNamespace(activated=False,star_cls=object())
+   event=Event(text='查一下高贵名门的群数据');await p.ai_before_model(event)
+   self.assertFalse(event.stopped);self.assertEqual(event.sent,[]);self.assertTrue(event.get_extra('mahjong_ai_started'))
  async def test_native_selection_is_injected_once_for_next_ai_followup(self):
   import time
   from collections import OrderedDict
