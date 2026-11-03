@@ -5,6 +5,23 @@ from test_ai_entry import Event,plugin,tools
 from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS
 from astrbot.core.provider.entities import ProviderRequest
 class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
+ async def test_native_selection_is_injected_once_for_next_ai_followup(self):
+  import time
+  from collections import OrderedDict
+  from astrbot.core.agent.tool import FunctionTool
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);stamp=time.monotonic()
+   meta=SimpleNamespace(activated=True,star_cls=SimpleNamespace(selection_context=lambda event:{'query':"个人 '清风难胡+）（' 四麻 S0",'stamp':stamp}))
+   p.context.get_registered_star=lambda name:meta if name=='astrbot_plugin_group_data' else None
+   e=Event(text='那最低那张呢');e.set_extra('mahjong_ai_started',True)
+   req=ProviderRequest(prompt=e.message_str,func_tool=tools('group_data'));await p.ai_limit_request(e,req)
+   self.assertEqual(len(req.contexts),1);self.assertIn('清风难胡+）（',req.contexts[0]['content'])
+   e._has_send_oper=True;e.set_extra('group_data_resolved_query',"最低 '清风难胡+）（' 四麻 S0")
+   await p.ai_tool_finished(e,FunctionTool(name='group_data',description='',parameters={}),{'query':'选 1'},None)
+   next_event=Event(text='再看最高');next_event.set_extra('mahjong_ai_started',True)
+   next_req=ProviderRequest(prompt=next_event.message_str,func_tool=tools('group_data'));await p.ai_limit_request(next_event,next_req)
+   self.assertEqual(len(next_req.contexts),3);self.assertIn('最低',next_req.contexts[-1]['content'])
+   self.assertNotIn('选 1',next_req.contexts[-1]['content'])
  async def test_sent_group_query_is_retained_for_followups_without_replaying_tool_calls(self):
   from astrbot.core.agent.tool import FunctionTool
   with tempfile.TemporaryDirectory() as d:

@@ -231,6 +231,17 @@ class MahjongHelperPlugin(Star):
         conversation_id = str(getattr(req.conversation, "cid", "") or "")
         chat_key = (event.unified_msg_origin, str(event.get_sender_id()), conversation_id)
         history = self._ai_chats.get(chat_key, (now, []))[1]
+        group_meta = getattr(self.context, 'get_registered_star', lambda _: None)('astrbot_plugin_group_data')
+        group_instance = group_meta.star_cls if group_meta is not None and group_meta.activated else None
+        reader = getattr(group_instance, 'selection_context', None)
+        selection = reader(event) if callable(reader) else None
+        if (isinstance(selection, dict) and selection.get('stamp', 0)
+                > self._ai_chats.get(chat_key, (0, []))[0]):
+            history = [*history, {"role": "assistant", "content":
+                "用户刚刚通过群数据昵称候选确认了真实玩家，后续追问沿用以下查询条件："
+                + json.dumps({"query": selection['query']}, ensure_ascii=False)}][-24:]
+            self._ai_chats[chat_key] = (now, history)
+            self._ai_chats.move_to_end(chat_key)
         req.contexts = [dict(message) for message in history]
         event.set_extra("mahjong_ai_chat_key", chat_key)
         event.set_extra("mahjong_ai_chat_prompt", event.message_str)
@@ -258,6 +269,7 @@ class MahjongHelperPlugin(Star):
                 and not event.get_extra("mahjong_ai_group_context_saved")):
             key = event.get_extra("mahjong_ai_chat_key")
             query = tool_args.get("query", "") if isinstance(tool_args, dict) else None
+            query = event.get_extra('group_data_resolved_query', query)
             if key and isinstance(query, str) and len(query) <= 500:
                 # Preserve only plain conversational context, never executable tool
                 # calls or invented statistics. Group/sender/conversation isolation
