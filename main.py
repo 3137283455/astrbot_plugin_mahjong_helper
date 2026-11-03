@@ -191,6 +191,10 @@ class GroupDataPlugin(Star):
     def selection_context(self,event):
         self.selection_cache()
         return self._nickname_context.get(self.selection_key(event))
+    def remember_context(self,event,query):
+        cache=self.selection_cache();key=self.selection_key(event)
+        if not cache.get(key) and isinstance(query,str) and len(query)<=500:
+            self._nickname_context.put(key,{'query':query})
     @staticmethod
     def query_text(opt,period_name):
         tokens=[opt['action'],*opt['rest']]
