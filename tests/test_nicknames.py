@@ -1,4 +1,4 @@
-import tempfile,time,unittest
+import asyncio,tempfile,time,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock,patch
@@ -46,6 +46,49 @@ class MatchingTests(unittest.TestCase):
         clock[0]=180;self.assertIsNone(cache.get('c'))
 
 class NicknameFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_inflight_retry_and_completed_retry_do_not_repeat_query_or_enter_llm(self):
+        with tempfile.TemporaryDirectory() as folder:
+            p=self.seed(folder);await p.handle(Event(),'极值 今天吃啥 四麻')
+            started=asyncio.Event();release=asyncio.Event();calls=[]
+            async def delayed(*args):calls.append(args);started.set();await release.wait()
+            p.player_extremes=delayed
+            first=Event('第一个',message_id='quoted-first');task=asyncio.create_task(p.nickname_followup(first))
+            await asyncio.wait_for(started.wait(),2)
+            retry=Event('1',message_id='numeric-retry');await p.nickname_followup(retry)
+            self.assertTrue(retry.stopped);self.assertIn('正在生成',retry.sent[0]);self.assertEqual(len(calls),1)
+            self.assertIn('今天吃啥好呢=',retry.get_extra('group_data_resolved_query'))
+            release.set();await task
+            again=Event('1',message_id='third');await p.nickname_followup(again)
+            self.assertTrue(again.stopped);self.assertFalse(again.sent);self.assertEqual(len(calls),1)
+            tool_retry=Event();await p.handle(tool_retry,'选 1 S1',allow_write=False)
+            self.assertFalse(any(isinstance(x,str) and '过期' in x for x in tool_retry.sent))
+    async def test_completed_retry_ack_and_new_message_does_not_steal_music_followup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            p=self.seed(folder);await p.handle(Event(),'个人 今天吃啥 四麻')
+            with patch('astrbot_plugin_group_data.main.cards.profile') as render:
+                await p.nickname_followup(Event('1',message_id='first'))
+                again=Event('1',message_id='next');await p.nickname_followup(again)
+                self.assertTrue(again.stopped);self.assertIn('完成查询',again.sent[0]);render.assert_called_once()
+                await p.nickname_followup(Event('播放第二首',message_id='music'))
+                music_number=Event('1',message_id='music-number');await p.nickname_followup(music_number)
+                self.assertFalse(music_number.stopped)
+    async def test_unspecified_mode_omits_empty_profile_and_explicit_mode_is_preserved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            p=self.seed(folder)
+            with patch('astrbot_plugin_group_data.main.cards.profile') as render:
+                await p.handle(Event(),'个人 今天吃啥好呢=');render.assert_called_once();self.assertEqual(render.call_args.args[2],4)
+                render.reset_mock();await p.handle(Event(),'个人 今天吃啥好呢= 三麻')
+                render.assert_called_once();self.assertEqual(render.call_args.args[2],3)
+            await p.handle(Event(),'个人 今天吃啥好呢= 至少5场')
+            self.assertIn('最少场次',p.card.call_args.args[-1][0])
+    async def test_history_hint_discovers_real_name_without_switching_or_creating_selection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            p=self.seed(folder,archive=True)
+            await p.handle(Event(),'个人 今天吃啥')
+            lines=p.card.call_args.args[-1]
+            self.assertIn('S1',lines[0]);self.assertTrue(any('S0' in x and '今天吃啥好呢=' in x for x in lines))
+            self.assertTrue(any('个人' in x and 'S0' in x for x in lines))
+            self.assertIsNone(p.selection_cache().get(p.selection_key(Event())))
     def seed(self,folder,archive=False):
         p=test_commands.CommandTests.setup_plugin(self,folder);scope='12345:987654321'
         names=['今天吃啥好呢=','清风难胡+）（','清风难胡呀',"Q'昵称"]
@@ -98,6 +141,8 @@ class NicknameFlowTests(unittest.IsolatedAsyncioTestCase):
             with patch('astrbot_plugin_group_data.main.cards.profile') as profile:
                 await p.handle(Event(),'个人 Q 四麻');await p.handle(Event(),'选 1')
                 self.assertEqual(profile.call_args.args[4],"Q'昵称")
+                from astrbot_plugin_group_data.main import parse_query
+                self.assertEqual(parse_query(p.selection_context(Event())['query'])['rest'],["Q'昵称"])
             p.card.reset_mock();await p.handle(Event(),'对比 今天吃啥 清风难胡 四麻')
             await p.handle(Event(),'选 1');self.assertEqual(len(p.selection_cache().get(p.selection_key(Event()))['options']),2)
             await p.handle(Event(),'选 1')

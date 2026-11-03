@@ -163,7 +163,7 @@ class GroupDataPlugin(Star):
         return (str(event.get_self_id()),str(event.get_group_id()),str(event.get_sender_id()))
     def selection_cache(self):
         if not hasattr(self,'_nickname_choices'):
-            self._nickname_choices=SelectionCache();self._nickname_context=SelectionCache(ttl=3600);self._nickname_seen=SelectionCache()
+            self._nickname_choices=SelectionCache();self._nickname_context=SelectionCache(ttl=3600);self._nickname_seen=SelectionCache();self._nickname_progress=SelectionCache()
         return self._nickname_choices
     def selection_context(self,event):
         self.selection_cache()
@@ -176,7 +176,7 @@ class GroupDataPlugin(Star):
         if opt['minimum']>1:tokens.append(str(opt['minimum'])+'场')
         if re.fullmatch(r'S\d+赛季',period_name):tokens.append(period_name.removesuffix('赛季'))
         elif opt['period']:tokens.append('周期='+opt['period'])
-        return shlex.join(tokens)
+        return ' '.join(json.dumps(token,ensure_ascii=False) if any(c.isspace() or c in "'\"\\" for c in token) else token for token in tokens)
     async def resolve_query_names(self,event,opt,scope,period_id,period_name):
         action=opt['action'];paired=action in ('对比','同桌')
         if action not in ('个人','极值','对比','同桌') and not (action in ('最高','最低') and opt['rest']):return True
@@ -194,12 +194,25 @@ class GroupDataPlugin(Star):
             exact,options=candidates(value,names,aliases)
             if exact:values[index]=exact;continue
             if not options:
-                await self.card(event,'群数据 · 未找到昵称',[
+                hints=[]
+                for historical in periods.all_periods(self.store,scope):
+                    if historical['id']==period_id or historical['state']!='archived':continue
+                    old_matches=self.store.matches(scope,period=historical['id'])
+                    old_names={p['name'] for mode in (3,4) for p in aggregate(old_matches,mode,self.store.aliases(scope,historical['id']))}
+                    old_exact,old_options=candidates(value,old_names,self.store.aliases(scope,historical['id']))
+                    found=[old_exact] if old_exact else old_options[:3]
+                    if found:
+                        hints.append(historical['name']+' 中找到：'+ '、'.join(found))
+                        for found_name in found:
+                            hint={**opt,'action':'个人','rest':[found_name],'days':0,'minimum':1,'period':historical['id']}
+                            hints.append('查看历史：/群数据 '+self.query_text(hint,historical['name']))
+                await self.card(event,'群数据 · 当前赛季无匹配',[
                     f'{period_name}：没有匹配“{value}”的已确认玩家。',
-                    '可换更短的昵称片段；/群数据 玩家 查看本赛季昵称。',
-                    '旧数据请在查询后加 S0，不会自动混用其他赛季。']);return False
+                    *hints,
+                    '以上历史命令需明确发送；当前查询没有自动切换赛季。' if hints else '可换更短的昵称片段；/群数据 玩家 查看昵称，旧赛季请加 S0。']);return False
             saved=deepcopy(opt);saved['rest']=values;saved['period']=period_id
             self.selection_cache().put(self.selection_key(event),{'options':options[:20],'query':saved,'index':index,'paired':paired})
+            logger.info('群数据昵称候选 group=%s user=%s count=%s season=%s',scope,event.get_sender_id(),len(options),period_name)
             conditions=[period_name,'三麻' if opt['mode']==3 else '四麻' if opt['mode']==4 else '三麻 / 四麻']
             if opt['days']:conditions.append(f'近{opt["days"]}天')
             if opt['minimum']>1:conditions.append(f'至少{opt["minimum"]}场')
@@ -214,9 +227,35 @@ class GroupDataPlugin(Star):
         query=self.query_text(opt,period_name)
         if hasattr(event,'set_extra'):event.set_extra('group_data_resolved_query',query)
         return True
+    async def acknowledge_selection(self,event,value):
+        recent=self._nickname_progress.get(self.selection_key(event))
+        if not recent or value!=recent['value']:return False
+        context=self.selection_context(event)
+        if context:recent['resolved_query']=context['query']
+        if hasattr(event,'set_extra') and recent.get('resolved_query'):
+            event.set_extra('group_data_resolved_query',recent['resolved_query'])
+        if not recent.get('acknowledged'):
+            recent['acknowledged']=True
+            text=(f'已选择“{recent["name"]}”，正在生成查询结果，请稍候。' if recent['phase']=='running'
+                  else f'刚才已按“{recent["name"]}”完成查询，无需再次选择。需要重看请重新发送群数据查询。')
+            await event.send(event.plain_result(text))
+        logger.info('群数据重复选择已拦截 group=%s user=%s phase=%s',event.get_group_id(),event.get_sender_id(),recent['phase'])
+        return True
     async def select_nickname(self,event,value):
         cache=self.selection_cache();key=self.selection_key(event);pending=cache.get(key)
+        if value=='cancel':
+            running=self._nickname_progress.get(key)
+            if running and running['phase']=='running' and not pending:
+                await event.send(event.plain_result('选择已提交，正在生成结果；当前已没有待选昵称。'));return
+            if pending or self._nickname_progress.get(key):
+                cache.pop(key);self._nickname_progress.pop(key)
+                await event.send(event.plain_result('已取消本次昵称选择。'));return
+        progress=self._nickname_progress.get(key)
+        if progress and progress['phase']=='running':
+            if not await self.acknowledge_selection(event,value):await event.send(event.plain_result('上一项选择正在处理中，请稍候。'))
+            return
         if not pending:
+            if await self.acknowledge_selection(event,value):return
             await event.send(event.plain_result('没有有效的昵称候选，可能已过期；请重新发送群数据查询。'));return
         if value=='cancel':
             cache.pop(key);await event.send(event.plain_result('已取消本次昵称选择。'));return
@@ -226,7 +265,16 @@ class GroupDataPlugin(Star):
         cache.pop(key);opt=deepcopy(pending['query']);selected=pending['options'][value-1]
         opt['rest'][pending['index']]=selected
         opt['_selected']=True
-        await self.handle(event,allow_write=False,_options=opt)
+        self._nickname_progress.put(key,{'value':value,'name':selected,'phase':'running','acknowledged':False})
+        progress=self._nickname_progress.get(key)
+        logger.info('群数据选择开始 group=%s user=%s index=%s',event.get_group_id(),event.get_sender_id(),value)
+        try:
+            await self.handle(event,allow_write=False,_options=opt)
+        finally:
+            progress['phase']='done';progress['finished']=time.monotonic()
+            context=self.selection_context(event)
+            if context:progress['resolved_query']=context['query']
+            logger.info('群数据选择结束 group=%s user=%s next_candidates=%s',event.get_group_id(),event.get_sender_id(),bool(cache.get(key)))
     @filter.event_message_type(filter.EventMessageType.ALL,priority=130)
     async def nickname_followup(self,event:AstrMessageEvent):
         if event.get_platform_name()!='aiocqhttp' or not str(event.get_group_id() or '').isdigit():return
@@ -234,13 +282,18 @@ class GroupDataPlugin(Star):
         message_id=str(getattr(getattr(event,'message_obj',None),'message_id','') or '')
         if message_id and self._nickname_seen.get((*key,message_id)):
             event.should_call_llm(True);event.stop_event();return
-        if not cache.get(key):return
+        pending=cache.get(key);progress=self._nickname_progress.get(key)
+        if not pending and not progress:return
         parts=getattr(event,'get_messages',lambda:[])()
         if any(isinstance(p,Comp.At) and str(p.qq)!=str(event.get_self_id()) for p in parts):return
         if any(not isinstance(p,(Comp.Plain,Comp.At,Comp.Reply)) for p in parts):return
         text=''.join(p.text for p in parts if isinstance(p,Comp.Plain)) if parts else getattr(event,'message_str','')
         value=choice(text)
-        if value is None:return
+        if value is None:
+            if not pending and progress and progress['phase']=='done':self._nickname_progress.pop(key)
+            return
+        if not pending and (not progress or value!=progress['value'] or
+                (progress['phase']=='done' and time.monotonic()-progress.get('finished',0)>15)):return
         if message_id:self._nickname_seen.put((*key,message_id),{})
         event.should_call_llm(True);event.stop_event()
         await self.select_nickname(event,value)
@@ -294,6 +347,7 @@ class GroupDataPlugin(Star):
             if _options is None:
                 self.selection_cache().pop(self.selection_key(event))
                 self._nickname_context.pop(self.selection_key(event))
+                self._nickname_progress.pop(self.selection_key(event))
             if action in WRITES|ADMIN_READS:
                 if not allow_write and action in WRITES:
                     await event.send(event.plain_result('管理操作请群管理员明确发送 /群数据 对应命令。'));return
@@ -435,6 +489,17 @@ class GroupDataPlugin(Star):
             matches=self.store.matches(scope,days,period_id);aliases=self.store.aliases(scope,period_id)
             if not await self.resolve_query_names(event,opt,scope,period_id,period_name):return
             rest=opt['rest']
+            if action in ('个人','极值','最高','最低') and rest and opt['mode'] is None:
+                selected_name=player_name(' '.join(rest),aliases)
+                available=[mode for mode in (3,4) if any(p['name']==selected_name and p['games']>=minimum for p in aggregate(matches,mode,aliases))]
+                if len(available)==1:opt['mode']=available[0]
+                if not available:
+                    if opt.get('_selected'):self._nickname_context.put(self.selection_key(event),{'query':self.query_text(opt,period_name)})
+                    await self.card(event,'群数据 · '+period_name+' · 查询范围暂无对局',[
+                        selected_name+'：没有满足所选时间和最少场次条件的已确认对局。',
+                        '可调整天数或明确指定赛季；不会自动混用其他赛季。']);return
+            if hasattr(event,'set_extra') and action in ('个人','极值','最高','最低') and rest:
+                event.set_extra('group_data_resolved_query',self.query_text(opt,period_name))
             if opt.get('_selected'):
                 self._nickname_context.put(self.selection_key(event),{'query':self.query_text(opt,period_name)})
             if action=='极值' or (action in ('最高','最低') and rest):
@@ -484,6 +549,7 @@ class GroupDataPlugin(Star):
                 stats=aggregate(matches,mode,aliases);path=self.card_dir/(uuid.uuid4().hex+'.png')
                 if action=='个人':
                     name=player_name(' '.join(rest),aliases)
+                    stats=[s for s in stats if s['games']>=minimum]
                     await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name)
                 else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name)
                 await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))

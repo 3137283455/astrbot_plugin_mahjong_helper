@@ -99,7 +99,7 @@ def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当�
 def profile(path,group,mode,stats,name,days=0,period_name='当前周期'):
     im,d=base(f'群数据 · {period_name} · {"三麻" if mode==3 else "四麻"} · 个人档案',fit(ImageDraw.Draw(Image.new('RGB',(1,1))),name,29,1200),1060)
     p=next((s for s in stats if s['name']==name),None)
-    if p is None:d.text((65,280),'未找到这个完整游戏昵称；发送 /群数据 玩家 查看昵称。',font=font(34),fill=INK)
+    if p is None:d.text((65,280),'该玩家在所选赛季、模式和时间范围内暂无已确认对局。',font=font(34),fill=INK)
     else:
         values=[('出场',str(p['games'])),('平均顺位',f'{float(p["avg_place"]):.2f}'),('被飞',f'{p["fly"]}次 / {p["fly"]/p["games"]:.1%}'),('平均持点',f'{float(p["avg_points"]):,.0f}'),('最高持点',f'{p["max_points"]:,}  #{p["max_points_source"]}'),('最低持点',f'{p["min_points"]:,}  #{p["min_points_source"]}')]
         for i,(label,value) in enumerate(values):
