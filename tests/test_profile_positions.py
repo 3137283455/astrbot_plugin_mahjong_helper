@@ -28,5 +28,5 @@ class ProfilePositionsTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    path=Path(folder)/'card.png';cards.profile(path,'group',4,stats,'甲',period_name='S1赛季')
    from PIL import Image
-   with Image.open(path) as image:self.assertEqual(image.size,(1440,1240));image.verify()
+   with Image.open(path) as image:self.assertEqual(image.size,(1440,1370));image.verify()
 if __name__=='__main__':unittest.main()
