@@ -101,9 +101,9 @@ class NicknameFlowTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder:
             p=self.seed(folder);before=p.store.db.total_changes
             with patch('astrbot_plugin_group_data.main.cards.profile') as profile:
-                await p.handle(Event(),'个人 今天吃啥 四麻');profile.assert_not_called()
-                self.assertIn('今天吃啥好呢=',p.card.call_args.args[-1][2])
-                self.assertIn('第1个',p.card.call_args.args[-1][-2])
+                query=Event();await p.handle(query,'个人 今天吃啥 四麻');profile.assert_not_called()
+                self.assertEqual(len(query.sent),1);self.assertIn('今天吃啥好呢=',query.sent[0])
+                self.assertIn('第1个',query.sent[0]);p.card.assert_not_called()
                 await p.handle(Event(),'选 1');self.assertEqual(profile.call_args.args[4],'今天吃啥好呢=')
                 profile.reset_mock();p.card.reset_mock()
                 await p.handle(Event(),'个人 今天吃啥好呢= 四麻');profile.assert_called_once();p.card.assert_not_called()

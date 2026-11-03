@@ -30,7 +30,7 @@ HELP=[
  '/群数据 一位 三麻             一位次数榜',
  '/群数据 二位率 四麻 30天 5场   近30天，至少5场',
  '/群数据 个人 "游戏昵称" 三麻   玩家档案',
- '昵称可只填一部分，或省略特殊字符；完整匹配直接查，否则显示候选卡片。',
+ '昵称可只填一部分，或省略特殊字符；完整匹配直接查，否则发送文字候选。',
  '候选3分钟有效：本人回复序号 / 第2个，或 /群数据 选 2；/群数据 取消。',
  '/群数据 最高 四麻             最高持点榜 + 第一条记录原图',
  '/群数据 最低 三麻             最低持点榜 + 第一条记录原图',
@@ -234,12 +234,13 @@ class GroupDataPlugin(Star):
             if opt['days']:conditions.append(f'近{opt["days"]}天')
             if opt['minimum']>1:conditions.append(f'至少{opt["minimum"]}场')
             example=min(2,len(options))
-            await self.card(event,'群数据 · 选择昵称',[
+            lines=[
                 ' · '.join(conditions)+f' · {action}',f'查找“{value}”，找到 {len(options)} 个候选：',
                 *[f'{i}. {name}' for i,name in enumerate(options[:20],1)],
                 *(['仅列前20项；请补充昵称关键词缩小范围。'] if len(options)>20 else []),
                 f'本人3分钟内回复序号或“第{example}个”，也可 /群数据 选 {example}。',
-                '仅当前群、当前发起人有效；/群数据 取消 可结束。']);return False
+                '仅当前群、当前发起人有效；/群数据 取消 可结束。']
+            await self.send_result(event,event.plain_result('群数据 · 选择昵称\n'+'\n'.join(lines)));return False
         opt['rest']=values
         query=self.query_text(opt,period_name)
         if hasattr(event,'set_extra'):event.set_extra('group_data_resolved_query',query)
