@@ -62,7 +62,7 @@ class PersonalExtremesTests(unittest.IsolatedAsyncioTestCase):
                 await p.handle(Event(),'最高 清风难胡 三麻')
                 await p.handle(Event(),'最低 不存在 四麻 S0')
             image.assert_not_called();self.assertEqual(p.card.await_count,2)
-            self.assertIn('没有符合条件',p.card.call_args.args[-1][0])
+            self.assertIn('没有匹配',p.card.call_args.args[-1][0])
 
     async def test_alias_with_spaces_time_filter_and_minimum_are_honored(self):
         with tempfile.TemporaryDirectory() as folder:

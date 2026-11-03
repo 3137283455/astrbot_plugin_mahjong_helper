@@ -5,6 +5,7 @@ import shlex
 import re
 import time
 import uuid
+from copy import deepcopy
 from contextlib import suppress
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
@@ -19,6 +20,7 @@ from .store import Store
 from .source import EssenceSource,unwrap
 from .recognizer import Recognizer
 from . import periods
+from .nicknames import SelectionCache,candidates,choice
 
 HELP=[
  '/群数据                         三麻 / 四麻总览',
@@ -27,6 +29,8 @@ HELP=[
  '/群数据 一位 三麻             一位次数榜',
  '/群数据 二位率 四麻 30天 5场   近30天，至少5场',
  '/群数据 个人 "游戏昵称" 三麻   玩家档案',
+ '昵称可只填一部分，或省略特殊字符；完整匹配直接查，否则显示候选卡片。',
+ '候选3分钟有效：本人回复序号 / 第2个，或 /群数据 选 2；/群数据 取消。',
  '/群数据 最高 四麻             最高持点榜 + 第一条记录原图',
  '/群数据 最低 三麻             最低持点榜 + 第一条记录原图',
  '/群数据 最高 "游戏昵称" 三麻 S0   直接发送该玩家最高持点的结算图',
@@ -155,6 +159,90 @@ class GroupDataPlugin(Star):
         path=self.card_dir/(uuid.uuid4().hex+'.png')
         await asyncio.to_thread(cards.text_card,path,title,lines)
         await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))
+    def selection_key(self,event):
+        return (str(event.get_self_id()),str(event.get_group_id()),str(event.get_sender_id()))
+    def selection_cache(self):
+        if not hasattr(self,'_nickname_choices'):
+            self._nickname_choices=SelectionCache();self._nickname_context=SelectionCache(ttl=3600);self._nickname_seen=SelectionCache()
+        return self._nickname_choices
+    def selection_context(self,event):
+        self.selection_cache()
+        return self._nickname_context.get(self.selection_key(event))
+    @staticmethod
+    def query_text(opt,period_name):
+        tokens=[opt['action'],*opt['rest']]
+        if opt['mode']:tokens.append('三麻' if opt['mode']==3 else '四麻')
+        if opt['days']:tokens.append(str(opt['days'])+'天')
+        if opt['minimum']>1:tokens.append(str(opt['minimum'])+'场')
+        if re.fullmatch(r'S\d+赛季',period_name):tokens.append(period_name.removesuffix('赛季'))
+        elif opt['period']:tokens.append('周期='+opt['period'])
+        return shlex.join(tokens)
+    async def resolve_query_names(self,event,opt,scope,period_id,period_name):
+        action=opt['action'];paired=action in ('对比','同桌')
+        if action not in ('个人','极值','对比','同桌') and not (action in ('最高','最低') and opt['rest']):return True
+        if paired:
+            if len(opt['rest'])!=2:raise ValueError('用法：/群数据 '+action+' "甲昵称或片段" "乙昵称或片段"')
+            values=list(opt['rest'])
+        else:
+            if not opt['rest']:raise ValueError('请在 '+action+' 后填写游戏昵称或昵称片段')
+            values=[' '.join(opt['rest'])]
+        # Find identities within this season. Time/mode/minimum still apply to
+        # the eventual result, without making an existing identity disappear.
+        matches=self.store.matches(scope,period=period_id);aliases=self.store.aliases(scope,period_id)
+        names={s['name'] for mode in (3,4) for s in aggregate(matches,mode,aliases)}
+        for index,value in enumerate(values):
+            exact,options=candidates(value,names,aliases)
+            if exact:values[index]=exact;continue
+            if not options:
+                await self.card(event,'群数据 · 未找到昵称',[
+                    f'{period_name}：没有匹配“{value}”的已确认玩家。',
+                    '可换更短的昵称片段；/群数据 玩家 查看本赛季昵称。',
+                    '旧数据请在查询后加 S0，不会自动混用其他赛季。']);return False
+            saved=deepcopy(opt);saved['rest']=values;saved['period']=period_id
+            self.selection_cache().put(self.selection_key(event),{'options':options[:20],'query':saved,'index':index,'paired':paired})
+            conditions=[period_name,'三麻' if opt['mode']==3 else '四麻' if opt['mode']==4 else '三麻 / 四麻']
+            if opt['days']:conditions.append(f'近{opt["days"]}天')
+            if opt['minimum']>1:conditions.append(f'至少{opt["minimum"]}场')
+            await self.card(event,'群数据 · 选择昵称',[
+                ' · '.join(conditions)+f' · {action}',f'查找“{value}”，找到 {len(options)} 个候选：',
+                *[f'{i}. {name}' for i,name in enumerate(options[:20],1)],
+                *(['仅列前20项；请补充昵称关键词缩小范围。'] if len(options)>20 else []),
+                '本人3分钟内回复序号或“第2个”，也可 /群数据 选 2。',
+                '仅当前群、当前发起人有效；/群数据 取消 可结束。']);return False
+        opt['rest']=values
+        query=self.query_text(opt,period_name)
+        if hasattr(event,'set_extra'):event.set_extra('group_data_resolved_query',query)
+        return True
+    async def select_nickname(self,event,value):
+        cache=self.selection_cache();key=self.selection_key(event);pending=cache.get(key)
+        if not pending:
+            await event.send(event.plain_result('没有有效的昵称候选，可能已过期；请重新发送群数据查询。'));return
+        if value=='cancel':
+            cache.pop(key);await event.send(event.plain_result('已取消本次昵称选择。'));return
+        if not isinstance(value,int) or not 1<=value<=len(pending['options']):
+            await event.send(event.plain_result(f'请选择 1～{len(pending["options"])}，例如 /群数据 选 1。'));return
+        # Consume before any await, so duplicate replies cannot replay a query.
+        cache.pop(key);opt=deepcopy(pending['query']);selected=pending['options'][value-1]
+        opt['rest'][pending['index']]=selected
+        opt['_selected']=True
+        await self.handle(event,allow_write=False,_options=opt)
+    @filter.event_message_type(filter.EventMessageType.ALL,priority=130)
+    async def nickname_followup(self,event:AstrMessageEvent):
+        if event.get_platform_name()!='aiocqhttp' or not str(event.get_group_id() or '').isdigit():return
+        cache=self.selection_cache();key=self.selection_key(event)
+        message_id=str(getattr(getattr(event,'message_obj',None),'message_id','') or '')
+        if message_id and self._nickname_seen.get((*key,message_id)):
+            event.should_call_llm(True);event.stop_event();return
+        if not cache.get(key):return
+        parts=getattr(event,'get_messages',lambda:[])()
+        if any(isinstance(p,Comp.At) and str(p.qq)!=str(event.get_self_id()) for p in parts):return
+        if any(not isinstance(p,(Comp.Plain,Comp.At,Comp.Reply)) for p in parts):return
+        text=''.join(p.text for p in parts if isinstance(p,Comp.Plain)) if parts else getattr(event,'message_str','')
+        value=choice(text)
+        if value is None:return
+        if message_id:self._nickname_seen.put((*key,message_id),{})
+        event.should_call_llm(True);event.stop_event()
+        await self.select_nickname(event,value)
     async def original(self,event,scope,id):
         row=self.store.original_source(scope,id)
         if not row or not row['path'] or not Path(row['path']).is_file():
@@ -190,12 +278,21 @@ class GroupDataPlugin(Star):
     async def group_data(self,event:AstrMessageEvent,arguments:GreedyStr):
         await self.handle(event,arguments)
         event.stop_event()
-    async def handle(self,event,arguments='',allow_write=True):
+    async def handle(self,event,arguments='',allow_write=True,*,_options=None):
         if event.get_platform_name()!='aiocqhttp' or not str(event.get_group_id() or '').isdigit():
             await event.send(event.plain_result('请在要统计的 QQ 群中使用 /群数据；私聊不读取群精华。'));return
         scope=str(event.get_self_id())+':'+str(event.get_group_id());gid=str(event.get_group_id())
         try:
-            opt=parse_query(arguments);action=opt['action'];rest=opt['rest'];days=opt['days'];minimum=opt['minimum']
+            opt=deepcopy(_options) if _options is not None else parse_query(arguments)
+            action=opt['action'];rest=opt['rest'];days=opt['days'];minimum=opt['minimum']
+            if action in ('选','选择','取消','取消选择'):
+                if action in ('取消','取消选择'):value='cancel'
+                elif len(rest)==1:value=choice(rest[0])
+                else:raise ValueError('用法：/群数据 选 序号；或 /群数据 取消')
+                await self.select_nickname(event,value);return
+            if _options is None:
+                self.selection_cache().pop(self.selection_key(event))
+                self._nickname_context.pop(self.selection_key(event))
             if action in WRITES|ADMIN_READS:
                 if not allow_write and action in WRITES:
                     await event.send(event.plain_result('管理操作请群管理员明确发送 /群数据 对应命令。'));return
@@ -335,6 +432,10 @@ class GroupDataPlugin(Star):
                 self.store.audit(scope,event.get_sender_id(),action,rest)
                 await event.send(event.plain_result('昵称别名已更新；原始截图记录保留。'));return
             matches=self.store.matches(scope,days,period_id);aliases=self.store.aliases(scope,period_id)
+            if not await self.resolve_query_names(event,opt,scope,period_id,period_name):return
+            rest=opt['rest']
+            if opt.get('_selected'):
+                self._nickname_context.put(self.selection_key(event),{'query':self.query_text(opt,period_name)})
             if action=='极值' or (action in ('最高','最低') and rest):
                 if not rest:raise ValueError('用法：/群数据 极值 "完整游戏昵称" [三麻/四麻] [S0/S1]')
                 name=player_name(' '.join(rest),aliases)
