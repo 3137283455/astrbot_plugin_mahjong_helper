@@ -13,6 +13,7 @@ from pathlib import Path
 from . import periods
 from .core import aggregate,validate,normalize_name
 from .feishu import Feishu,FeishuError,NUMBERS,DATES
+from .scoring import score_matches,online_fields,SCORE_FIELDS,SCORE_NUMBERS,VERSION as SCORE_VERSION
 
 NAMES=['一位昵称','二位昵称','三位昵称','四位昵称（三麻留空）']
 POINTS=['一位持点','二位持点','三位持点','四位持点（三麻留空）']
@@ -97,6 +98,7 @@ class OnlineSync:
             for match in matches:
                 key,fields=self.detail(scope,p,match);out[key]=fields;source_rows[key]=(p,match)
             for mode in (3,4):
+                scored={r['name']:r for r in score_matches(matches,mode,aliases)['rows']}
                 for s in aggregate(matches,mode,aliases):
                     key=pid+':'+str(mode)+':'+digest(s['name'])[:24]
                     fields={'统计ID':key,'群标识':scope,'周期ID':pid,'赛季':p['name'],'模式':mode,'玩家标识':s['name'],'显示昵称':s['name'],
@@ -108,6 +110,7 @@ class OnlineSync:
                     for i in range(1,5):
                         word=['一','二','三','四'][i-1]
                         fields[word+'位次数']=s['rank'+str(i)];fields[word+'位率']=s['rank'+str(i)]/s['games']
+                    fields.update(online_fields(scored.get(s['name'])))
                     fields['统计版本']=digest(fields)[:16];players[key]=fields
         # A removed essence/ignored result remains visible as a soft-disabled row.
         for key,link in self.links().items():
@@ -245,11 +248,15 @@ class OnlineSync:
             for key,row in index.items():
                 if key not in wanted and normalize(row['fields']).get('场次',0)!=0:
                     old=normalize(row['fields']);zero={k:0 for k in old if k.endswith(('次数','位率')) or k in ('场次','被飞率','平均顺位','平均终局持点','最高终局持点','最低终局持点')}
-                    await self.client.update(table,row['record_id'],{**zero,'统计版本':'无有效对局','更新时间':int(time.time()*1000)})
+                    cleared={k:None for k in SCORE_FIELDS}
+                    await self.client.update(table,row['record_id'],{**zero,**cleared,'评分有效场次':0,'综合评分状态':'无有效评分','综合评分版本':SCORE_VERSION,'统计版本':'无有效对局','更新时间':int(time.time()*1000)})
 
     async def once(self):
         async with self.lock:
             if not periods.select(self.store,self.scope):raise ValueError('未切换周期，不执行在线导入')
+            if not getattr(self,'_score_schema_ready',False):
+                await self.client.ensure_fields(self.tables['players'],SCORE_FIELDS)
+                self._score_schema_ready=True
             table=self.tables['matches'];remote=await self.client.records(table);errors=[]
             remote=[r for r in remote if normalize(r.get('fields') or {}).get('群标识') in (None,self.scope)]
             for row in remote:

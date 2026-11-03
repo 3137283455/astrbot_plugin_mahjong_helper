@@ -15,6 +15,7 @@ class FakeFeishu:
     async def records(self,table):
         if self.fail:raise FeishuError('simulated listing failure')
         return copy.deepcopy(list(self.rows[table].values()))
+    async def ensure_fields(self,table,names):pass
     async def create(self,table,fields):
         self.counter+=1;rid='rec'+str(self.counter)
         row={'record_id':rid,'fields':copy.deepcopy(fields),'last_modified_by':{'id':'bot'}}
@@ -30,6 +31,18 @@ class FakeFeishu:
 
 
 class OnlineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_score_fields_are_derived_for_both_seasons_and_cleared_after_removal(self):
+        key,rid,source=await self.current()
+        all_fields=[normalize(r['fields']) for r in self.fake.rows['players'].values()]
+        self.assertEqual({r['赛季'] for r in all_fields},{'S0赛季','S1赛季'})
+        self.assertTrue(all(r['评分有效场次']==1 and r['综合评分状态']=='暂定' for r in all_fields))
+        self.assertTrue(all('综合评分排名' not in r for r in all_fields))
+        self.assertTrue(all(0<=r['综合评分']<=100 for r in all_fields))
+        self.fake.edit(rid,{'确认状态':'停用'});await self.online.once()
+        current=periods.select(self.store,self.scope)['id']
+        cleared=[normalize(r['fields']) for r in self.fake.rows['players'].values() if r['fields']['周期ID']==current]
+        self.assertTrue(all(r['评分有效场次']==0 and '综合评分' not in r and '综合评分排名' not in r for r in cleared))
+        self.assertTrue(all(r['综合评分状态']=='无有效评分' for r in cleared))
     def test_real_feishu_numeric_strings_are_normalized_before_validation(self):
         self.assertEqual(normalize({'模式':'4','一位持点':'-1000','被飞率':'0.25','精华时间':'1793590000000','对局ID':'214'}),
                          {'模式':4,'一位持点':-1000,'被飞率':0.25,'精华时间':1793590000000,'对局ID':'214'})

@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from PIL import Image,ImageDraw,ImageFont
 from .core import aggregate, ranking, profile_positions
+from .scoring import display as score_display,rank_label,personal_lines
 
 W=1440
 BG='#101720';PANEL='#1B2633';INK='#F2F5F8';MUTED='#A0B0C2';TEAL='#54D6C6';RED='#FF858B';GOLD='#FFCA78'
@@ -96,7 +97,7 @@ def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当�
         y+=91
     footer(d,height-112,group,days,period_name);im.save(path);return path
 
-def profile_text(group,mode,stats,name,days=0,period_name='当前周期',minimum=1):
+def profile_text(group,mode,stats,name,days=0,period_name='当前周期',minimum=1,score_data=None):
     stats=[s for s in stats if s['games']>=minimum]
     p=next((s for s in stats if s['name']==name),None)
     title=f'群数据 · {period_name} · {mode}麻 · {name}'
@@ -109,11 +110,12 @@ def profile_text(group,mode,stats,name,days=0,period_name='当前周期',minimum
         f'最高持点：{p["max_points"]:,}（{rank("最高")}）· 原图 #{p["max_points_source"]}',
         f'最低持点：{p["min_points"]:,}（{rank("最低")}）· 原图 #{p["min_points_source"]}']
     for i in range(1,mode+1):lines.append(f'{i}位：{p["rank"+str(i)]}次（{rank("一二三四"[i-1]+"位")}） / {p["rank"+str(i)]/p["games"]:.1%}（{rank("一二三四"[i-1]+"位率")}）')
+    if score_data is not None:lines.extend(personal_lines(score_data,name)[:3])
     lines.append(f'同筛选玩家 {len(stats)} 位，至少{minimum}场'+(f'，近{days}天' if days else '')+'；平均顺位、最低持点从低到高，其余从高到低。')
     return '\n'.join(lines)
 
 
-def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum=1):
+def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum=1,score_data=None):
     stats=[s for s in stats if s['games']>=minimum]
     im=Image.new('RGB',(W,1370),BG);d=ImageDraw.Draw(im)
     d.rectangle((0,0,W,282),fill=PANEL)
@@ -123,7 +125,15 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum
         while size>20 and d.textlength(text,font=font(size,bold))>width:size-=1
         text=fit(d,text,size,width,bold)
         d.text((x,y),text,font=font(size,bold),fill=color,anchor=anchor)
-    line(72,106,name,65,1090,True,INK)
+        return d.textlength(text,font=font(size,bold))
+    name_width=line(72,106,name,65,580 if score_data is not None else 1090,True,INK)
+    score_row=next((r for r in score_data['rows'] if r['name']==name),None) if score_data is not None else None
+    if score_data is not None:
+        x=max(360,int(72+name_width+28))
+        d.rounded_rectangle((x,116,x+220,182),radius=14,fill='#233442')
+        d.rounded_rectangle((x+236,116,x+476,182),radius=14,fill='#233442')
+        line(x+110,149,'综合 '+score_display(score_row['score']) if score_row else '暂无评分',29,200,True,TEAL,'mm')
+        line(x+356,149,rank_label(score_row,score_data) if score_row else '0有效场',25,220,True,GOLD,'mm')
     scope=period_name+'   /   '+('三麻' if mode==3 else '四麻')+'   /   '+(f'近{days}天' if days else '全部已确认对局')
     line(75,204,scope,29,1080,color=MUTED)
     line(1368,139,len(stats),58,240,True,GOLD,'ra')
@@ -169,9 +179,58 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum
         line(1344,1101,f'/群数据 原图 {p["max_points_source"]}       /群数据 原图 {p["min_points_source"]}',25,1040,color=TEAL,anchor='rm')
     line(72,1192,f'排名：同赛季、同模式、同筛选条件；共 {len(stats)} 位玩家，至少 {minimum} 场。',23,1296,color=MUTED)
     line(72,1230,'平均顺位、最低持点由低到高，其余由高到低；同值并列跳位。',23,1296,color=MUTED)
+    if score_data is not None:
+        note=(f'综合评分有效{score_row["games"]}场，正式排名共{score_data["formal_count"]}人' if score_row else '所选范围暂无可评分标准终局')
+        line(72,1267,'综合分：成绩90%＋场次10%；满10场入榜。'+note+'。',22,1296,color=MUTED)
     line(72,1300,'仅统计本群精华中的已确认结算，三麻 / 四麻独立统计。',23,1040,color=MUTED)
     line(1368,1300,f'群 {group}',23,270,color=MUTED,anchor='ra')
     im.save(path);return path
+
+
+def score_board_text(data,period_name,days=0):
+    official=[r for r in data['rows'] if r['qualified']];provisional=[r for r in data['rows'] if not r['qualified']]
+    lines=[f'群数据 · {period_name} · {data["mode"]}麻 · 综合表现榜'+(f' · 近{days}天收录' if days else ''),
+           f'正式{len(official)}人，暂定{len(provisional)}人；满10场入榜，筛选至少{data["minimum"]}场。',
+           *[f'{r["position"]}. {r["name"]} · {score_display(r["score"])}分 · {r["games"]}场' for r in official[:10]]]
+    if not official:lines.append('暂无满10场的正式玩家。')
+    if provisional:
+        lines.append('暂定分（不占正式名次）：')
+        lines.extend(f'{r["name"]} · {score_display(r["score"])}分 · {r["games"]}/10场' for r in provisional[:5])
+    lines.extend(['综合分=成绩分×90%＋10×场次÷（场次＋20）；成绩分=顺位65%＋持点35%。',
+                  '仅反映本群精华样本，三麻四麻、S0与S1独立统计。'])
+    return '\n'.join(lines)
+
+def score_board(path,group,data,days=0,period_name='当前周期'):
+    official=[r for r in data['rows'] if r['qualified']];provisional=[r for r in data['rows'] if not r['qualified']]
+    shown=official[:10];pending=provisional[:5 if official else 10]
+    height=650+len(shown)*82+(len(pending)*82+95 if pending else 0)
+    if not shown:height+=82
+    im,d=base(f'群数据 · {period_name} · {data["mode"]}麻 · 综合表现榜',
+              f'成绩90%＋场次10%   /   满10场正式入榜   /   正式{len(official)}人 · 暂定{len(provisional)}人',height)
+    columns=[(90,'名次'),(190,'游戏昵称'),(805,'场次'),(975,'成绩分'),(1135,'场次项'),(1335,'综合分')]
+    def header(y):
+        for x,label in columns:d.text((x,y),label,font=font(25),fill=MUTED,anchor='ra' if x>=805 else None)
+    def row(r,y,qualified):
+        d.rounded_rectangle((45,y,1395,y+72),radius=14,fill=PANEL)
+        d.text((78,y+19),str(r['position']) if qualified else '—',font=font(28,True),fill=TEAL if qualified else MUTED)
+        d.text((190,y+19),fit(d,r['name'],28,500,True),font=font(28,True),fill=INK)
+        for x,value,color,bold in [(805,str(r['games']),MUTED,False),(975,score_display(r['performance']),MUTED,False),
+                                    (1135,score_display(r['attendance']),MUTED,False),(1335,score_display(r['score']),GOLD,True)]:
+            d.text((x,y+19),value,font=font(28,bold),fill=color,anchor='ra')
+    header(240);y=292
+    if not shown:
+        d.text((65,y),'暂无满10场的正式玩家；下方仅展示暂定分。' if pending else '所选范围暂无可评分的标准终局。',font=font(29),fill=MUTED)
+        y+=82
+    for r in shown:row(r,y,True);y+=82
+    if pending:
+        d.text((65,y+20),'暂定区 · 不足10场，不占正式名次',font=font(27,True),fill=TEAL);y+=76
+        for r in pending:row(r,y,False);y+=82
+    notes=[f'正式共{len(official)}人，展示前10；暂定共{len(provisional)}人，展示前{len(pending)}。同分并列，不以场次破同分。',
+           '综合分=成绩分×90%＋10×场次÷（场次＋20）；成绩分=顺位65%＋持点35%。',
+           f'评分纳入标准终局{data["games"]}场；本次筛选至少{data["minimum"]}场。'+(f'近{days}天按精华收录时间筛选。' if days else ''),
+           f'本模式另有{len(data["excluded"])}场不符合评分条件；/群数据 评分 昵称 查看分解。']
+    for i,note in enumerate(notes):d.text((58,height-306+i*42),fit(d,note,23,1320),font=font(23),fill=MUTED)
+    footer(d,height-117,group,days,period_name);im.save(path);return path
 
 def text_card(path,title,lines):
     # Wrap long rows; never shrink an entire card into unreadable chat text.

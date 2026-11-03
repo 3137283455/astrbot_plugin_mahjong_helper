@@ -77,6 +77,14 @@ class Feishu:
     async def update(self,table,record,fields):
         return await self.request('PUT',self.table_path(table)+'/records/'+record,{'fields':fields})
 
+    async def ensure_fields(self,table,names):
+        current={r['field_name']:r for r in await self.listing(self.table_path(table)+'/fields')}
+        for name in names:
+            kind=2 if name in NUMBERS else 1
+            if name not in current:
+                await self.request('POST',self.table_path(table)+'/fields',{'field_name':name,'type':kind})
+            elif current[name]['type']!=kind:raise FeishuError('字段类型不匹配：'+name)
+
     async def upload(self,path):
         path=Path(path)
         if not path.is_file() or not 0<path.stat().st_size<=20*1024*1024:raise FeishuError('原图缺失或超过20MB')
@@ -112,6 +120,8 @@ NUMBERS={'模式','精华来源编号','入库时间','一位持点','二位持�
          '场次','一位次数','二位次数','三位次数','四位次数','一位率','二位率','三位率','四位率',
          '被飞次数','被飞率','平均顺位','平均终局持点','最高终局持点','最低终局持点','重试次数'}
 DATES={'开始时间','封存时间','精华时间','对局时间（可空）','入库时间','更新时间','最近成功时间'}
+from .scoring import SCORE_NUMBERS
+NUMBERS.update(SCORE_NUMBERS)
 
 
 async def bootstrap(client,blueprint,initial_table=None):

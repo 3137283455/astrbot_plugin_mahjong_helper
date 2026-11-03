@@ -22,6 +22,7 @@ from .source import EssenceSource,unwrap
 from .recognizer import Recognizer
 from . import periods
 from .nicknames import SelectionCache,candidates,choice
+from .scoring import score_matches,personal_lines,rules_text
 
 HELP=[
  '/群数据                         三麻 / 四麻总览',
@@ -30,6 +31,9 @@ HELP=[
  '/群数据 一位 三麻             一位次数榜',
  '/群数据 二位率 四麻 30天 5场   近30天，至少5场',
  '/群数据 个人 "游戏昵称" 三麻   玩家档案',
+ '/群数据 综合榜 四麻 S0         综合表现榜；默认S1，满10场正式入榜',
+ '/群数据 评分 "游戏昵称" 三麻 S1  综合评分分解；个人卡片也显示总分和排名',
+ '/群数据 评分规则               查看成绩90%＋场次10%的计算规则',
  '昵称可只填一部分，或省略特殊字符；完整匹配直接查，否则发送文字候选。',
  '候选3分钟有效：本人回复序号 / 第2个，或 /群数据 选 2；/群数据 取消。',
  '/群数据 最高 四麻             最高持点榜 + 第一条记录原图',
@@ -87,6 +91,8 @@ def parse_query(arguments):
     rest=options['rest']
     if rest:options['action']=rest.pop(0)
     alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞次数榜':'被飞','被飞率榜':'被飞率','被飞率排行':'被飞率','被飞率排行榜':'被飞率','被飞率排名':'被飞率','统计时间':'时间','更新时间':'时间','同步时间':'时间'}
+    alias.update({'综合排名':'综合榜','综合排行':'综合榜','综合排行榜':'综合榜','综合评分榜':'综合榜','实力榜':'综合榜',
+                  '综合分析':'评分','综合评分':'评分','个人评分':'评分','综合分':'评分','综合规则':'评分规则'})
     options['action']=alias.get(options['action'],options['action'])
     if options['action']=='赛季':options['action']='周期'
     if options['action'] in ('最高最低','最高最低对局','极值对局'):options['action']='极值'
@@ -196,7 +202,7 @@ class GroupDataPlugin(Star):
         return ' '.join(json.dumps(token,ensure_ascii=False) if any(c.isspace() or c in "'\"\\" for c in token) else token for token in tokens)
     async def resolve_query_names(self,event,opt,scope,period_id,period_name):
         action=opt['action'];paired=action in ('对比','同桌')
-        if action not in ('个人','极值','对比','同桌') and not (action in ('最高','最低') and opt['rest']):return True
+        if action not in ('个人','评分','极值','对比','同桌') and not (action in ('最高','最低') and opt['rest']):return True
         if paired:
             if len(opt['rest'])!=2:raise ValueError('用法：/群数据 '+action+' "甲昵称或片段" "乙昵称或片段"')
             values=list(opt['rest'])
@@ -390,6 +396,8 @@ class GroupDataPlugin(Star):
             period_name=selected['name'] if selected else '当前数据'
             if selected and selected['state']=='archived' and action in WRITES:
                 raise ValueError('封存周期只读；修改当前数据请去掉“历史”参数')
+            if action=='评分规则':
+                await self.send_result(event,event.plain_result(rules_text()));return
             if action=='周期':
                 items=periods.all_periods(self.store,scope)
                 await self.card(event,'群数据 · 赛季列表',[
@@ -509,7 +517,7 @@ class GroupDataPlugin(Star):
             matches=self.store.matches(scope,days,period_id);aliases=self.store.aliases(scope,period_id)
             if not await self.resolve_query_names(event,opt,scope,period_id,period_name):return
             rest=opt['rest']
-            if action in ('个人','极值','最高','最低') and rest and opt['mode'] is None:
+            if action in ('个人','评分','极值','最高','最低') and rest and opt['mode'] is None:
                 selected_name=player_name(' '.join(rest),aliases)
                 available=[mode for mode in (3,4) if any(p['name']==selected_name and p['games']>=minimum for p in aggregate(matches,mode,aliases))]
                 if len(available)==1:opt['mode']=available[0]
@@ -518,7 +526,7 @@ class GroupDataPlugin(Star):
                     await self.card(event,'群数据 · '+period_name+' · 查询范围暂无对局',[
                         selected_name+'：没有满足所选时间和最少场次条件的已确认对局。',
                         '可调整天数或明确指定赛季；不会自动混用其他赛季。']);return
-            if hasattr(event,'set_extra') and action in ('个人','极值','最高','最低') and rest:
+            if hasattr(event,'set_extra') and action in ('个人','评分','极值','最高','最低') and rest:
                 event.set_extra('group_data_resolved_query',self.query_text(opt,period_name))
             if opt.get('_selected'):
                 self._nickname_context.put(self.selection_key(event),{'query':self.query_text(opt,period_name)})
@@ -559,6 +567,21 @@ class GroupDataPlugin(Star):
                 await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope,period_id),days,opt['mode'],period_name=period_name)
                 await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),f'{period_name} · 群数据总览\n当前筛选已确认 {len(matches)} 场。\n可发送 /群数据 最近 5 查看结算，或 /群数据 个人 昵称 查询玩家。');return
             modes=[opt['mode']] if opt['mode'] else [3,4]
+            if action in ('综合榜','评分'):
+                if action=='评分' and not rest:raise ValueError('用法：/群数据 评分 昵称 [三麻/四麻] [S0/S1]；查看榜单用 /群数据 综合榜')
+                for mode in modes:
+                    data=score_matches(matches,mode,aliases,minimum)
+                    if action=='评分':
+                        name=player_name(' '.join(rest),aliases)
+                        lines=[f'{period_name} · {mode}麻'+(f' · 近{days}天收录' if days else ''),*personal_lines(data,name),
+                               f'同筛选正式玩家 {data["formal_count"]} 位；评分与个人档案使用相同公式。',
+                               '仅反映本群精华结算样本，赛制规则尚未进一步区分。']
+                        await self.card(event,'群数据 · 综合评分分析',lines)
+                    else:
+                        path=self.card_dir/(uuid.uuid4().hex+'.png')
+                        await asyncio.to_thread(cards.score_board,path,gid,data,days,period_name)
+                        await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),cards.score_board_text(data,period_name,days))
+                return
             if action=='玩家':
                 names=sorted({s['name'] for m in modes for s in aggregate(matches,m,aliases)})
                 await self.card(event,'群数据 · 玩家昵称',[f'共 {len(names)} 位；仅列出已录入对局中的昵称。',*names[:60],*(['超过60位，请用个人查询完整昵称。'] if len(names)>60 else [])]);return
@@ -570,9 +593,10 @@ class GroupDataPlugin(Star):
                 if action=='个人':
                     name=player_name(' '.join(rest),aliases)
                     stats=[s for s in stats if s['games']>=minimum]
-                    await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name,minimum=minimum)
+                    score_data=score_matches(matches,mode,aliases,minimum)
+                    await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name,minimum=minimum,score_data=score_data)
                 else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name)
-                fallback=(cards.profile_text(gid,mode,stats,name,days,period_name,minimum) if action=='个人'
+                fallback=(cards.profile_text(gid,mode,stats,name,days,period_name,minimum,score_data=score_data) if action=='个人'
                           else f'{period_name} · {mode}麻 · {action}榜\n'+'\n'.join(f'{r["position"]}. {r["name"]} · {float(r["value"]):.2%}' if r['kind']=='rate' else f'{r["position"]}. {r["name"]} · {float(r["value"]):g}' for r in ranking(stats,action,minimum)[:10]))
                 await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),fallback)
                 if action in ('最高','最低'):
