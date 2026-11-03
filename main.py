@@ -9,6 +9,7 @@ from copy import deepcopy
 from contextlib import suppress
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
+from aiocqhttp.exceptions import ActionFailed
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent,filter
@@ -158,7 +159,23 @@ class GroupDataPlugin(Star):
     async def card(self,event,title,lines):
         path=self.card_dir/(uuid.uuid4().hex+'.png')
         await asyncio.to_thread(cards.text_card,path,title,lines)
-        await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))
+        await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),title+'\n'+'\n'.join(str(line) for line in lines))
+    async def send_result(self,event,result,fallback=None):
+        try:
+            await event.send(result)
+            return True
+        except (ActionFailed,TimeoutError) as exc:
+            if hasattr(event,'set_extra'):event.set_extra('group_data_delivery_error',True)
+            logger.warning('群数据QQ发送异常 group=%s user=%s error=%s detail=%s',event.get_group_id(),event.get_sender_id(),type(exc).__name__,str(exc)[:350])
+            # A timed-out send may already have reached QQ. Never retry the
+            # image blindly; keep the selection and offer one text response.
+            if fallback:
+                try:
+                    await event.send(event.plain_result('QQ图片发送回执异常，先提供文字结果：\n'+fallback[:3500]))
+                    return True
+                except (ActionFailed,TimeoutError) as text_exc:
+                    logger.warning('群数据文字结果发送也失败 group=%s error=%s；未重发图片，候选保留',event.get_group_id(),type(text_exc).__name__)
+            return False
     def selection_key(self,event):
         return (str(event.get_self_id()),str(event.get_group_id()),str(event.get_sender_id()))
     def selection_cache(self):
@@ -237,8 +254,9 @@ class GroupDataPlugin(Star):
         if not recent.get('acknowledged'):
             recent['acknowledged']=True
             text=(f'已选择“{recent["name"]}”，正在生成查询结果，请稍候。' if recent['phase']=='running'
+                  else f'已查询“{recent["name"]}”，但QQ发送回执异常；需要重看请重新发送群数据查询。' if recent.get('delivery_error')
                   else f'刚才已按“{recent["name"]}”完成查询，无需再次选择。需要重看请重新发送群数据查询。')
-            await event.send(event.plain_result(text))
+            await self.send_result(event,event.plain_result(text))
         logger.info('群数据重复选择已拦截 group=%s user=%s phase=%s',event.get_group_id(),event.get_sender_id(),recent['phase'])
         return True
     async def select_nickname(self,event,value):
@@ -246,21 +264,21 @@ class GroupDataPlugin(Star):
         if value=='cancel':
             running=self._nickname_progress.get(key)
             if running and running['phase']=='running' and not pending:
-                await event.send(event.plain_result('选择已提交，正在生成结果；当前已没有待选昵称。'));return
+                await self.send_result(event,event.plain_result('选择已提交，正在生成结果；当前已没有待选昵称。'));return
             if pending or self._nickname_progress.get(key):
                 cache.pop(key);self._nickname_progress.pop(key)
-                await event.send(event.plain_result('已取消本次昵称选择。'));return
+                await self.send_result(event,event.plain_result('已取消本次昵称选择。'));return
         progress=self._nickname_progress.get(key)
         if progress and progress['phase']=='running':
-            if not await self.acknowledge_selection(event,value):await event.send(event.plain_result('上一项选择正在处理中，请稍候。'))
+            if not await self.acknowledge_selection(event,value):await self.send_result(event,event.plain_result('上一项选择正在处理中，请稍候。'))
             return
         if not pending:
             if await self.acknowledge_selection(event,value):return
-            await event.send(event.plain_result('没有有效的昵称候选，可能已过期；请重新发送群数据查询。'));return
+            await self.send_result(event,event.plain_result('没有有效的昵称候选，可能已过期；请重新发送群数据查询。'));return
         if value=='cancel':
-            cache.pop(key);await event.send(event.plain_result('已取消本次昵称选择。'));return
+            cache.pop(key);await self.send_result(event,event.plain_result('已取消本次昵称选择。'));return
         if not isinstance(value,int) or not 1<=value<=len(pending['options']):
-            await event.send(event.plain_result(f'请选择 1～{len(pending["options"])}，例如 /群数据 选 1。'));return
+            await self.send_result(event,event.plain_result(f'请选择 1～{len(pending["options"])}，例如 /群数据 选 1。'));return
         # Consume before any await, so duplicate replies cannot replay a query.
         cache.pop(key);opt=deepcopy(pending['query']);selected=pending['options'][value-1]
         opt['rest'][pending['index']]=selected
@@ -272,6 +290,7 @@ class GroupDataPlugin(Star):
             await self.handle(event,allow_write=False,_options=opt)
         finally:
             progress['phase']='done';progress['finished']=time.monotonic()
+            progress['delivery_error']=getattr(event,'get_extra',lambda *args:False)('group_data_delivery_error',False)
             context=self.selection_context(event)
             if context:progress['resolved_query']=context['query']
             logger.info('群数据选择结束 group=%s user=%s next_candidates=%s',event.get_group_id(),event.get_sender_id(),bool(cache.get(key)))
@@ -300,8 +319,8 @@ class GroupDataPlugin(Star):
     async def original(self,event,scope,id):
         row=self.store.original_source(scope,id)
         if not row or not row['path'] or not Path(row['path']).is_file():
-            await event.send(event.plain_result('本群没有这个有效图片记录，或原图暂不可用。'));return
-        await event.send(event.chain_result([Comp.Plain(f'精华原图 #{id} · 消息 {row["msg"]}\n'),Comp.Image.fromFileSystem(row['path'])]))
+            await self.send_result(event,event.plain_result('本群没有这个有效图片记录，或原图暂不可用。'));return
+        await self.send_result(event,event.chain_result([Comp.Plain(f'精华原图 #{id} · 消息 {row["msg"]}\n'),Comp.Image.fromFileSystem(row['path'])]),f'结算原图 #{id} 的发送回执异常；需要重看可发送 /群数据 原图 {id}。')
     async def player_extremes(self,event,matches,aliases,name,modes,action,period_name,days,minimum):
         metrics=('最高','最低') if action=='极值' else (action,)
         for mode in modes:
@@ -320,21 +339,21 @@ class GroupDataPlugin(Star):
                 match=next((m for m in matches if m['id']==source_id and m['result']['mode']==mode),None)
                 seat=next((p for p in match['result']['players'] if player_name(p['name'],aliases)==name),None) if match else None
                 if not seat:
-                    await event.send(event.plain_result(f'{name} · {period_name} · {mode_name}：对应结算记录暂不可用。'));continue
+                    await self.send_result(event,event.plain_result(f'{name} · {period_name} · {mode_name}：对应结算记录暂不可用。'));continue
                 title=' / '.join(labels)+'持点'
                 caption=f'{name} · {period_name} · {mode_name}\n{title}：{seat["points"]:,} 点 · 本局{seat["place"]}位\n结算原图 #{source_id}'
                 if days:caption+=f' · 近{days}天'
                 path=match.get('path')
                 if path and Path(path).is_file():
-                    await event.send(event.chain_result([Comp.Plain(caption+'\n'),Comp.Image.fromFileSystem(path)]))
-                else:await event.send(event.plain_result(caption+'\n原图缓存暂不可用，请联系管理员。'))
+                    await self.send_result(event,event.chain_result([Comp.Plain(caption+'\n'),Comp.Image.fromFileSystem(path)]),caption+f'\n需要重看可发送 /群数据 原图 {source_id}。')
+                else:await self.send_result(event,event.plain_result(caption+'\n原图缓存暂不可用，请联系管理员。'))
     @filter.command('群数据')
     async def group_data(self,event:AstrMessageEvent,arguments:GreedyStr):
         await self.handle(event,arguments)
         event.stop_event()
     async def handle(self,event,arguments='',allow_write=True,*,_options=None):
         if event.get_platform_name()!='aiocqhttp' or not str(event.get_group_id() or '').isdigit():
-            await event.send(event.plain_result('请在要统计的 QQ 群中使用 /群数据；私聊不读取群精华。'));return
+            await self.send_result(event,event.plain_result('请在要统计的 QQ 群中使用 /群数据；私聊不读取群精华。'));return
         scope=str(event.get_self_id())+':'+str(event.get_group_id());gid=str(event.get_group_id())
         try:
             opt=deepcopy(_options) if _options is not None else parse_query(arguments)
@@ -350,9 +369,9 @@ class GroupDataPlugin(Star):
                 self._nickname_progress.pop(self.selection_key(event))
             if action in WRITES|ADMIN_READS:
                 if not allow_write and action in WRITES:
-                    await event.send(event.plain_result('管理操作请群管理员明确发送 /群数据 对应命令。'));return
+                    await self.send_result(event,event.plain_result('管理操作请群管理员明确发送 /群数据 对应命令。'));return
                 if not await self.admin(event):
-                    await event.send(event.plain_result('这项操作仅限本群群主、管理员或机器人管理员。'));return
+                    await self.send_result(event,event.plain_result('这项操作仅限本群群主、管理员或机器人管理员。'));return
             if action=='帮助':await self.card(event,'群数据 · 使用帮助',HELP);return
             if opt['period'] and action in WRITES:
                 target_period=periods.select(self.store,scope,opt['period'])
@@ -361,7 +380,7 @@ class GroupDataPlugin(Star):
                 self.store.enable(scope,event.get_self_id(),gid,action=='开启')
                 self.store.audit(scope,event.get_sender_id(),action,{})
                 if action=='开启':self.spawn(self.source.sync(scope,event.bot,gid))
-                await event.send(event.plain_result('已开启本群精华统计，正在异步检查结算截图。' if action=='开启' else '已暂停本群自动更新，历史统计保留。'));return
+                await self.send_result(event,event.plain_result('已开启本群精华统计，正在异步检查结算截图。' if action=='开启' else '已暂停本群自动更新，历史统计保留。'));return
             group=self.store.group(scope)
             if not group:
                 await self.card(event,'群数据 · 尚未开启',['请本群管理员发送 /群数据 开启。','开启后读取本群精华图片，只把完整雀魂终局结算录入。','使用 /群数据 帮助 查看规则。']);return
@@ -381,16 +400,16 @@ class GroupDataPlugin(Star):
                 online=getattr(self,'online',None)
                 if not online or online.scope!=scope:raise ValueError('本群尚未配置在线表格同步')
                 if action=='表格':
-                    await event.send(event.plain_result('群数据在线表格：'+online.target['url']+'\n查看与编辑权限由飞书控制；修改对局明细后自动重算统计。'));return
+                    await self.send_result(event,event.plain_result('群数据在线表格：'+online.target['url']+'\n查看与编辑权限由飞书控制；修改对局明细后自动重算统计。'));return
                 if action=='同步更新':
                     if online.lock.locked():raise ValueError('正在同步，请稍后通过 /群数据 同步 查看结果')
                     async def synchronize():
                         try:
                             info=await online.once()
-                            await event.send(event.plain_result(f'在线同步完成；当前周期 {info["games"]} 场，待处理项 {len(info["errors"])}。'))
+                            await self.send_result(event,event.plain_result(f'在线同步完成；当前周期 {info["games"]} 场，待处理项 {len(info["errors"])}。'))
                         except Exception as exc:
                             logger.warning('群数据在线同步失败：%s',type(exc).__name__)
-                            await event.send(event.plain_result('在线同步暂时失败，本地统计保留；稍后自动重试。'))
+                            await self.send_result(event,event.plain_result('在线同步暂时失败，本地统计保留；稍后自动重试。'))
                     self.spawn(synchronize());return
                 info=online.get('last_sync',{});error=online.get('last_sync_error',{})
                 lines=['群数据 · 在线同步',f'自动同步间隔：{online.interval} 秒',
@@ -398,7 +417,7 @@ class GroupDataPlugin(Star):
                        '最近完成：'+(datetime.fromtimestamp(info['stamp'],timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S') if info.get('stamp') else '尚未完成'),
                        *info.get('errors',[])]
                 if error.get('stamp',0)>info.get('stamp',0):lines.append('最近异常：'+error.get('message',error.get('type','未知')))
-                await event.send(event.plain_result('\n'.join(lines)));return
+                await self.send_result(event,event.plain_result('\n'.join(lines)));return
             if action=='时间':
                 info=self.store.freshness(scope,period_id);s=self.store.summary(scope,period_id)
                 tz=timezone(timedelta(hours=8))
@@ -422,11 +441,11 @@ class GroupDataPlugin(Star):
                     '数据截至与最新被飞按已确认记录的加入精华时间计算，不推断实际对局时间。',
                     '成功检查只代表精华列表已同步；识别或人工确认完成后才会入库。',
                 ]
-                await event.send(event.plain_result('\n'.join(lines)));return
+                await self.send_result(event,event.plain_result('\n'.join(lines)));return
             if action=='更新':
                 if not group['enabled']:raise ValueError('本群已暂停，请先 /群数据 开启')
                 self.spawn(self.source.sync(scope,event.bot,gid))
-                await event.send(event.plain_result('已安排检查精华变更；图片识别在后台进行，发送 /群数据 状态 查看进度。'));return
+                await self.send_result(event,event.plain_result('已安排检查精华变更；图片识别在后台进行，发送 /群数据 状态 查看进度。'));return
             if action=='状态':
                 s=self.store.summary(scope);stamp=time.strftime('%m-%d %H:%M',time.localtime(group['last_scan'])) if group['last_scan'] else '尚未成功扫描'
                 try:
@@ -451,7 +470,7 @@ class GroupDataPlugin(Star):
                 if action=='忽略' and not row['hash']:
                     self.store.exclude_source(scope,row,'管理员忽略无法读取的精华图片')
                     self.store.audit(scope,event.get_sender_id(),action,{'id':row['id'],'source_excluded':True})
-                    await event.send(event.plain_result(f'记录 #{row["id"]} 已排除，后续扫描不再读取该图。'));return
+                    await self.send_result(event,event.plain_result(f'记录 #{row["id"]} 已排除，后续扫描不再读取该图。'));return
                 if not row['hash']:raise ValueError('这张原图尚未成功下载，可先忽略或待图片恢复后重试')
                 if action=='核对':
                     raw=json.loads(row['raw'] or '[]');lines=[f'记录 #{row["id"]}：{row["override_status"] or row["status"]}',row['override_reason'] or row['reason'] or '']
@@ -479,13 +498,13 @@ class GroupDataPlugin(Star):
                     if result is None:raise ValueError('该图片未识别为终局，不能直接确认；请核对原图后完整修正')
                     self.store.override(scope,row,'accepted',result,'管理员已核对原图')
                 self.store.audit(scope,event.get_sender_id(),action,{'id':row['id'],'args':rest[1:]})
-                await event.send(event.plain_result(f'记录 #{row["id"]} 已{action}，统计已更新。'));return
+                await self.send_result(event,event.plain_result(f'记录 #{row["id"]} 已{action}，统计已更新。'));return
             if action in ('合并','取消合并'):
                 if action=='合并' and len(rest)==2:self.store.merge(scope,*rest)
                 elif action=='取消合并' and len(rest)==1:self.store.unmerge(scope,rest[0])
                 else:raise ValueError('用法：/群数据 合并 "旧昵称" "新昵称" 或 /群数据 取消合并 "旧昵称"')
                 self.store.audit(scope,event.get_sender_id(),action,rest)
-                await event.send(event.plain_result('昵称别名已更新；原始截图记录保留。'));return
+                await self.send_result(event,event.plain_result('昵称别名已更新；原始截图记录保留。'));return
             matches=self.store.matches(scope,days,period_id);aliases=self.store.aliases(scope,period_id)
             if not await self.resolve_query_names(event,opt,scope,period_id,period_name):return
             rest=opt['rest']
@@ -537,7 +556,7 @@ class GroupDataPlugin(Star):
             if action=='总览':
                 path=self.card_dir/(uuid.uuid4().hex+'.png')
                 await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope,period_id),days,opt['mode'],period_name=period_name)
-                await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]));return
+                await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),f'{period_name} · 群数据总览\n当前筛选已确认 {len(matches)} 场。\n可发送 /群数据 最近 5 查看结算，或 /群数据 个人 昵称 查询玩家。');return
             modes=[opt['mode']] if opt['mode'] else [3,4]
             if action=='玩家':
                 names=sorted({s['name'] for m in modes for s in aggregate(matches,m,aliases)})
@@ -550,13 +569,15 @@ class GroupDataPlugin(Star):
                 if action=='个人':
                     name=player_name(' '.join(rest),aliases)
                     stats=[s for s in stats if s['games']>=minimum]
-                    await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name)
+                    await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name,minimum=minimum)
                 else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name)
-                await event.send(event.chain_result([Comp.Image.fromFileSystem(str(path))]))
+                fallback=(cards.profile_text(gid,mode,stats,name,days,period_name,minimum) if action=='个人'
+                          else f'{period_name} · {mode}麻 · {action}榜\n'+'\n'.join(f'{r["position"]}. {r["name"]} · {float(r["value"]):.2%}' if r['kind']=='rate' else f'{r["position"]}. {r["name"]} · {float(r["value"]):g}' for r in ranking(stats,action,minimum)[:10]))
+                await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),fallback)
                 if action in ('最高','最低'):
                     rows=ranking(stats,action,minimum)
                     if rows:await self.original(event,scope,rows[0][('max_points' if action=='最高' else 'min_points')+'_source'])
-        except (ValueError,IndexError) as exc:await event.send(event.plain_result(str(exc)))
+        except (ValueError,IndexError) as exc:await self.send_result(event,event.plain_result(str(exc)))
         except Exception as exc:
-            logger.warning('群数据请求失败：%s',type(exc).__name__)
-            await event.send(event.plain_result('群数据处理暂时失败，请稍后重试或联系管理员查看日志。'))
+            logger.exception('群数据请求失败')
+            await self.send_result(event,event.plain_result('群数据处理暂时失败，请稍后重试或联系管理员查看日志。'))

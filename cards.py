@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from PIL import Image,ImageDraw,ImageFont
-from .core import aggregate, ranking
+from .core import aggregate, ranking, profile_positions
 
 W=1440
 BG='#101720';PANEL='#1B2633';INK='#F2F5F8';MUTED='#A0B0C2';TEAL='#54D6C6';RED='#FF858B';GOLD='#FFCA78'
@@ -96,22 +96,53 @@ def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当�
         y+=91
     footer(d,height-112,group,days,period_name);im.save(path);return path
 
-def profile(path,group,mode,stats,name,days=0,period_name='当前周期'):
-    im,d=base(f'群数据 · {period_name} · {"三麻" if mode==3 else "四麻"} · 个人档案',fit(ImageDraw.Draw(Image.new('RGB',(1,1))),name,29,1200),1060)
+def profile_text(group,mode,stats,name,days=0,period_name='当前周期',minimum=1):
+    stats=[s for s in stats if s['games']>=minimum]
     p=next((s for s in stats if s['name']==name),None)
+    title=f'群数据 · {period_name} · {mode}麻 · {name}'
+    if p is None:return title+'\n所选条件下暂无该玩家已确认对局。'
+    positions=profile_positions(stats,name,mode,minimum)
+    def rank(metric):return positions[metric]['label']
+    lines=[title,f'出场：{p["games"]}场（{rank("场次")}）',f'平均顺位：{float(p["avg_place"]):.2f}（{rank("平均顺位")}）',
+        f'被飞：{p["fly"]}次（{rank("被飞")}） / {p["fly"]/p["games"]:.1%}（{rank("被飞率")}）',
+        f'平均持点：{float(p["avg_points"]):,.0f}（{rank("平均持点")}）',
+        f'最高持点：{p["max_points"]:,}（{rank("最高")}）· 原图 #{p["max_points_source"]}',
+        f'最低持点：{p["min_points"]:,}（{rank("最低")}）· 原图 #{p["min_points_source"]}']
+    for i in range(1,mode+1):lines.append(f'{i}位：{p["rank"+str(i)]}次（{rank("一二三四"[i-1]+"位")}） / {p["rank"+str(i)]/p["games"]:.1%}（{rank("一二三四"[i-1]+"位率")}）')
+    lines.append(f'同筛选玩家 {len(stats)} 位，至少{minimum}场'+(f'，近{days}天' if days else '')+'；平均顺位、最低持点从低到高，其余从高到低。')
+    return '\n'.join(lines)
+
+
+def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum=1):
+    stats=[s for s in stats if s['games']>=minimum]
+    im,d=base(f'群数据 · {period_name} · {"三麻" if mode==3 else "四麻"} · 个人档案',fit(ImageDraw.Draw(Image.new('RGB',(1,1))),name,29,1200),1240)
+    p=next((s for s in stats if s['name']==name),None)
+    def line(x,y,text,size,width,bold=False,color=TEAL):
+        while size>16 and d.textlength(text,font=font(size,bold))>width:size-=1
+        d.text((x,y),text,font=font(size,bold),fill=color)
     if p is None:d.text((65,280),'该玩家在所选赛季、模式和时间范围内暂无已确认对局。',font=font(34),fill=INK)
     else:
-        values=[('出场',str(p['games'])),('平均顺位',f'{float(p["avg_place"]):.2f}'),('被飞',f'{p["fly"]}次 / {p["fly"]/p["games"]:.1%}'),('平均持点',f'{float(p["avg_points"]):,.0f}'),('最高持点',f'{p["max_points"]:,}  #{p["max_points_source"]}'),('最低持点',f'{p["min_points"]:,}  #{p["min_points_source"]}')]
-        for i,(label,value) in enumerate(values):
-            x=48+(i%2)*694;y=240+(i//2)*157
-            d.rounded_rectangle((x,y,x+650,y+135),radius=20,fill=PANEL)
-            d.text((x+25,y+17),label,font=font(26),fill=MUTED);d.text((x+25,y+62),value,font=font(38,True),fill=TEAL)
+        positions=profile_positions(stats,name,mode,minimum)
+        def rank(metric):return positions[metric]['label']
+        values=[('出场',str(p['games'])+' 场','场次'),('平均顺位',f'{float(p["avg_place"]):.2f}','平均顺位'),('被飞次数 / 被飞率','',None),('平均持点',f'{float(p["avg_points"]):,.0f}','平均持点'),('最高持点',f'{p["max_points"]:,}  #{p["max_points_source"]}','最高'),('最低持点',f'{p["min_points"]:,}  #{p["min_points_source"]}','最低')]
+        for i,(label,value,metric) in enumerate(values):
+            x=48+(i%2)*694;y=240+(i//2)*184
+            d.rounded_rectangle((x,y,x+650,y+164),radius=20,fill=PANEL)
+            d.text((x+25,y+15),label,font=font(26),fill=MUTED)
+            if metric:
+                line(x+25,y+66,value,36,330,True)
+                line(x+370,y+76,rank(metric),25,255,color=GOLD)
+            else:
+                line(x+25,y+55,f'{p["fly"]} 次 · {rank("被飞")}',29,600,True)
+                line(x+25,y+104,f'{p["fly"]/p["games"]:.1%} · {rank("被飞率")}',29,600,True)
         for i in range(1,mode+1):
             x=58+(i-1)*344
-            d.text((x,746),f'{i}位   {p["rank"+str(i)]} 次',font=font(31),fill=INK)
-            d.text((x,796),f'{p["rank"+str(i)]/p["games"]:.1%}',font=font(42,True),fill=GOLD)
-        d.text((58,882),f'最高原图：/群数据 原图 {p["max_points_source"]}    最低原图：/群数据 原图 {p["min_points_source"]}',font=font(27),fill=MUTED)
-    footer(d,944,group,days,period_name);im.save(path);return path
+            line(x,818,f'{i}位 {p["rank"+str(i)]}次 · {rank("一二三四"[i-1]+"位")}',25,325,color=INK)
+            line(x,868,f'{p["rank"+str(i)]/p["games"]:.1%} · {rank("一二三四"[i-1]+"位率")}',27,325,True,color=GOLD)
+        d.text((58,943),f'最高原图：/群数据 原图 {p["max_points_source"]}    最低原图：/群数据 原图 {p["min_points_source"]}',font=font(26),fill=MUTED)
+        d.text((58,996),f'排名口径：同赛季 / 同模式 / 同时间范围，至少{minimum}场，共{len(stats)}位玩家；名次 / 人数。',font=font(24),fill=MUTED)
+        d.text((58,1037),'平均顺位、最低持点从低到高，其余从高到低；并列跳位，按原始值排名。',font=font(24),fill=MUTED)
+    footer(d,1122,group,days,period_name);im.save(path);return path
 
 def text_card(path,title,lines):
     # Wrap long rows; never shrink an entire card into unreadable chat text.

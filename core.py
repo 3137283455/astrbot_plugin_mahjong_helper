@@ -127,6 +127,21 @@ def ranking(stats,metric,minimum=1):
     return rows
 
 
+def profile_positions(stats,name,mode,minimum=1):
+    """Use the same exact values, tie positions and sample as each leaderboard."""
+    metrics=['场次','平均顺位','被飞','被飞率','平均持点','最高','最低']
+    metrics += ['一二三四'[i-1]+'位'+suffix for i in range(1,mode+1) for suffix in ('','率')]
+    out={}
+    for metric in metrics:
+        rows=ranking(stats,metric,minimum)
+        row=next((r for r in rows if r['name']==name),None)
+        if row is not None:
+            tied=sum(r['value']==row['value'] for r in rows)>1
+            out[metric]={'position':row['position'],'total':len(rows),'tied':tied,
+                         'label':('并列' if tied else '')+f'第{row["position"]}/{len(rows)}'}
+    return out
+
+
 def consensus(readings):
     """Accept each field only when at least two independent valid reads agree."""
     from collections import Counter
