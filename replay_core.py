@@ -155,8 +155,9 @@ class ReplayStore:
             if db.execute("SELECT 1 FROM jobs WHERE scope=? AND actor=? AND status IN ('queued','running')",(scope,actor)).fetchone():raise ReplayError('你在本会话已有一个复盘任务，请先查看状态或取消。')
             if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=6:raise ReplayError('复盘队列已满，请稍后再试。')
             cached=db.execute('SELECT * FROM cache WHERE cache_key=?',(key,)).fetchone();cached=cached if cached and Path(cached['report_path']).is_file() else None
+            cached_summary=summarize(json.loads(Path(cached['report_path']).read_text(encoding='utf-8')),source.get('seat'),'' if source['kind']=='report' else MODEL) if cached else None
             now=time.time();job_id=secrets.token_hex(6);status='done' if cached else 'queued';report_path=cached['report_path'] if cached else ''
-            db.execute('INSERT INTO jobs(id,scope,actor,cache_key,status,url,seat,model,remote_task,report_path,created,updated,notified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(job_id,scope,actor,key,status,source['url'],source.get('seat'),MODEL,source.get('remote_task',''),report_path,now,now,1 if cached else 0))
+            db.execute('INSERT INTO jobs(id,scope,actor,cache_key,status,url,seat,model,remote_task,report_path,created,updated,notified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(job_id,scope,actor,key,status,source['url'],cached_summary['seat'] if cached_summary else source.get('seat'),cached_summary['model'] if cached_summary else MODEL,(cached['remote_task'] if cached else '') or source.get('remote_task',''),report_path,now,now,1 if cached else 0))
             return dict(db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()),True
     def get(self,scope,actor,job_id=''):
         with self.db() as db:

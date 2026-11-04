@@ -49,5 +49,11 @@ class ReplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             s=ReplayStore(folder);s.save_pending('group:a','a',{'seat':None,'kind':'replay'})
             self.assertIsNone(s.get_pending('group:b','a'));self.assertIsNone(s.get_pending('group:a','b'));self.assertEqual(s.get_pending('group:a','a')['kind'],'replay')
+    def test_import_cache_keeps_actual_model_and_seat(self):
+        with tempfile.TemporaryDirectory() as folder:
+            s=ReplayStore(folder);source=parse_url('https://mjai.ekyu.moe/report/12345678-abcd.json')
+            j,_=s.create('group:a','a',source);r=fixture(2);r['review']['model_tag']='4.1c';s.complete(j,r)
+            cached,_=s.create('group:b','b',source)
+            self.assertEqual((cached['status'],cached['seat'],cached['model']),('done',2,'4.1c'))
 
 if __name__=='__main__':unittest.main()
