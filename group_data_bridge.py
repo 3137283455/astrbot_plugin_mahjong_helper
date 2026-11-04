@@ -6,15 +6,19 @@ def quick_group_query(text):
     """Unambiguous read-only requests only; all other language still uses LLM tools."""
     if not isinstance(text,str) or len(text)>300:return None
     text=text.strip().rstrip('。！？!? ').strip()
+    paging=re.fullmatch(r'(?:请|麻烦)?(?:帮我|给我)?(?:看看|看下|看一下|看|翻到|翻)?\s*(下一页|上一页|第?[0-9一二三四五六七八九十百两]+页)(?:\s*(三麻|四麻))?',text)
+    if paging:return ' '.join(p for p in paging.groups() if p)
     verb=re.match(r'^(?:请|麻烦)?(?:帮我|给我)?(?:查询一下|查询|查一下|查下|查查|查|看一下|看看|看下|看)\s*',text)
     if not verb:return None
     body=text[verb.end():].strip()
     if body in ('群数据评分规则','综合评分规则','评分规则'):return '评分规则'
     filter_pattern=r'(?:S\d+(?:赛季)?|三麻|四麻|近?\d+天|(?:至少)?\d+场)'
-    board=re.fullmatch(r'(?P<before>(?:'+filter_pattern+r'\s*)*)(?:本群|群友|群内)?(?P<metric>综合表现榜|综合评分榜|综合排行榜|综合排名|综合榜|被飞次数榜|被飞率榜|被飞榜)(?P<after>(?:\s*'+filter_pattern+r')*)',body,re.I)
+    board_filter=filter_pattern+r'|第?[0-9一二三四五六七八九十百两]+页'
+    board=re.fullmatch(r'(?P<before>(?:(?:'+board_filter+r')\s*)*)(?:本群|群友|群内)?(?:群数据)?(?P<metric>综合分榜单|综合表现榜|综合评分榜|综合排行榜|综合排名|综合榜|暂定榜|被飞次数榜|被飞率榜|被飞榜|(?:一位|二位|三位|四位|末位)(?:率)?榜|场次榜|平均顺位榜|平均持点榜|最高持点榜|最低持点榜)(?P<after>(?:\s*(?:'+board_filter+r'))*)',body,re.I)
     if board:
-        metric=board['metric'];action='综合榜' if metric.startswith('综合') else '被飞率' if '率' in metric else '被飞'
-        filters=re.findall(filter_pattern,board['before']+' '+board['after'],re.I)
+        metric=board['metric'];action='综合榜' if metric.startswith('综合') else {'被飞次数榜':'被飞','最高持点榜':'最高','最低持点榜':'最低'}.get(metric,metric.removesuffix('榜'))
+        if metric=='暂定榜':action='暂定榜'
+        filters=re.findall(board_filter,board['before']+' '+board['after'],re.I)
         return ' '.join([action,*[f.removeprefix('近') for f in filters]])
     # Player names are kept verbatim. Only whitespace-delimited trailing filters
     # are separated, so a nickname containing 三麻/四麻 is never silently rewritten.
@@ -31,6 +35,7 @@ def quick_group_query(text):
 GROUP_DATA_INSTRUCTIONS='''【群数据】
 用户查询本群精华中的雀魂结算、谁被飞最多、群内顺位次数/比例、群内最高最低持点时使用 group_data，不用娱乐API，也不用牌谱屋 mahjong_query。
 用户问群友综合评分、综合实力榜、谁的综合表现最好，用group_data查询“综合榜”，例如“综合榜 三麻 S0”“综合榜 四麻 S1”。查某人的综合评分或分解用“评分 昵称”，例如“评分 清风难胡 三麻 S0”。查询规则用“评分规则”。不要改用场次榜、一位率榜或牌谱屋；也不要自己用文字估算分数。成绩90%＋场次10%，满10场正式入榜，少于10场为暂定，不占正式名次。普通个人档案也包含综合分和综合排名。S0、S1及三四麻各自独立，未说明赛季仍默认S1。
+所有榜单每页10人；追加“第2页”可以查看后续，例如“综合榜 四麻 S0 第2页”“被飞 四麻 第2页”。不足10场的综合分单独用“暂定榜 四麻 S0”。没有正式玩家时综合榜展示暂定分，不虚构正式排名。用户追问“下一页”“上一页”“第3页”时query直接填“下一页”“上一页”“第3页”，可追加明确的三麻/四麻，由插件沿用该用户当前群10分钟内最近榜单的赛季、模式、天数、最少场次；不要猜测或复用其他用户的榜单。没有上下文或同时展示两种模式时按插件提示让用户补充。
 “被飞榜”“被飞排行”“谁被飞最多”默认按被飞次数排序，query使用“被飞”或“被飞榜”，不能擅自换成被飞率。只有用户明确要求被飞率、比例、概率或占比时才使用“被飞率”。
 query填原生 /群数据 后面的参数，如“四麻 被飞榜”“四麻 被飞率”“三麻 一位率 30天”“个人 完整游戏昵称 四麻”。新查询未指定模式时留空，三麻和四麻分别统计；连续追问则保留上轮已明确的模式。
 新查询默认只查S1赛季；旧数据已定名S0赛季。用户要求S0、旧数据、历史或封存榜单时，在query后加“S0”，例如“四麻 被飞榜 S0”。要求S1时可加“S1”。连续追问沿用之前明确的赛季。不能混合两个赛季；赛季和模式参数顺序可调换。

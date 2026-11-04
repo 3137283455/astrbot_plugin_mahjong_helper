@@ -9,6 +9,12 @@ class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
   import shlex
   from astrbot_plugin_mahjong_helper.group_data_bridge import quick_group_query
   cases={'查一下高贵名门的群数据':['个人','高贵名门'],
+         '查一下群数据综合分榜单':['综合榜'],
+         '看看S0三麻综合榜 第2页':['综合榜','S0','三麻','第2页'],
+         '看看下一页':['下一页'],
+         '上一页 四麻':['上一页','四麻'],
+         '第二页':['第二页'],
+         '看看暂定榜 四麻 第2页':['暂定榜','四麻','第2页'],
          '看看S0三麻综合表现榜':['综合榜','S0','三麻'],
          '查清风难胡+）（的群数据 四麻 S0':['个人','清风难胡+）（','四麻','S0'],
          '看看被飞率榜 四麻':['被飞率','四麻'],
