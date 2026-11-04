@@ -28,6 +28,7 @@ from .bilibili_bridge import BILIBILI_INSTRUCTIONS, BILIBILI_HELP, bilibili_inst
 from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data,quick_group_query
 from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
+from .replay_bridge import ReplayService, REPLAY_INSTRUCTIONS
 from .formatters import (
     format_record,
     format_records,
@@ -74,6 +75,7 @@ class MahjongHelperPlugin(Star):
         self._ai_chats = OrderedDict()
         self.plugin_dir = Path(__file__).resolve().parent
         self.state_dir: Path | None = None
+        self.replays = None
         self.timezone = ZoneInfo(self.config.get("timezone", "Asia/Shanghai"))
 
     async def initialize(self):
@@ -85,7 +87,7 @@ class MahjongHelperPlugin(Star):
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
         manager = self.context.get_llm_tool_manager()
-        for name in ("mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action", "bilibili_subscription", "group_data"):
+        for name in ("mahjong_quiz", "mahjong_query", "mahjong_review", "mahjong_replay", "bot_menu", "music_search", "music_action", "bilibili_subscription", "group_data"):
             tool = manager.get_func(name)
             if tool is not None:
                 tool.active = bool(self.config.get("ai_enabled", False))
@@ -93,6 +95,8 @@ class MahjongHelperPlugin(Star):
             asyncio.create_task(self._question_scheduler()),
             asyncio.create_task(self._subscription_scheduler()),
         ]
+        self.replays = ReplayService(self.context, self.state_dir, self.config)
+        self._tasks.append(asyncio.create_task(self.replays.run()))
         logger.info("日麻助手已加载，共 %d 道何切题", len(self.questions.questions))
         if self.config.get("ai_enabled", False):
             try:
@@ -115,6 +119,10 @@ class MahjongHelperPlugin(Star):
                         tool_names.append("bilibili_subscription")
                     if tool_names is not None and "group_data" not in tool_names:
                         tool_names.append("group_data")
+                    if "单牌谱复盘工具 mahjong_replay" not in persona.system_prompt:
+                        update["system_prompt"] = update.get("system_prompt", persona.system_prompt) + "\n\n" + REPLAY_INSTRUCTIONS
+                    if tool_names is not None and "mahjong_replay" not in tool_names:
+                        tool_names.append("mahjong_replay")
                     if tool_names is not None and tool_names != persona.tools:
                         update["tools"] = list(dict.fromkeys(tool_names))
                     if update:
@@ -616,6 +624,8 @@ class MahjongHelperPlugin(Star):
             "只统计本群精华终局截图；比例不是全部实战数据。",
             "",
             "【战绩与对局】",
+            "/复盘 链接 开局南家｜单牌谱AI一致率、决策分歧、分局统计",
+            "/复盘 帮助｜状态、结果、记录、分局等用法；仅四麻东南战",
             "/雀 [玩家] [三/四] [栏目] [房间] [时间] [文]",
             "玩家昵称可含空格；后面的参数可换序，不填玩家查主绑定。",
             "例：/雀 一剑风起醉英豪 三 铳 30天",
@@ -820,6 +830,29 @@ class MahjongHelperPlugin(Star):
         except Exception:
             logger.exception("何切 AI 入口执行失败")
             await event.send(event.plain_result("何切功能执行失败，请使用 /何切 重试。"))
+
+    @filter.command("复盘")
+    async def replay_command(self, event: AstrMessageEvent, query: GreedyStr):
+        """单牌谱 Mortal 复盘：/复盘 链接 开局南家；/复盘 帮助。"""
+        event.stop_event()
+        if self.replays is None:
+            yield event.plain_result("复盘功能尚未加载，请稍后重试。")
+            return
+        await self.replays.handle(event, str(query))
+
+    @filter.llm_tool(name="mahjong_replay")
+    async def replay_ai(self, event: AstrMessageEvent, query: str = "帮助"):
+        """单条雀魂牌谱的 Mortal AI一致率、分歧决策及分局复盘，异步返回结果卡片。
+
+        Args:
+            query(string): 完整牌谱链接与开局东家/南家/西家/北家，或状态、结果、记录、分歧、分局 南2、取消、重试。缺席位不要猜测；可导入mjai.ekyu.moe报告链接。仅四麻东南战。
+        """
+        if not self._claim_ai_action(event):
+            return
+        if self.replays is None:
+            await event.send(event.plain_result("复盘功能尚未加载。"))
+            return
+        await self.replays.handle(event, query)
 
     @filter.llm_tool(name="mahjong_review")
     async def review_ai(self, event: AstrMessageEvent, player: str = "", mode: int = 0,
@@ -1205,6 +1238,15 @@ class MahjongHelperPlugin(Star):
         section = tokens[0] if tokens else ""
         arguments = tokens[1:]
         arg1 = " ".join(arguments)
+        replay_actions = {"复盘": "", "牌谱分析": "", "复盘状态": "状态", "复盘结果": "结果",
+                          "复盘记录": "记录", "复盘取消": "取消", "分歧": "分歧", "分局": "分局"}
+        if section in replay_actions:
+            event.stop_event()
+            if self.replays is None:
+                yield event.plain_result("复盘功能尚未加载，请稍后重试。")
+                return
+            await self.replays.handle(event, (replay_actions[section] + " " + arg1).strip())
+            return
         if section in {"搜", "搜索", "绑", "绑定", "号", "我的", "切", "切换", "解", "解绑"}:
             if section in {"号", "我的"}:
                 async for result in self.majsoul_bindings(event):
@@ -1247,6 +1289,7 @@ class MahjongHelperPlugin(Star):
                 "/雀 桌 常同桌　/雀 局 对局（可加页码）\n"
                 "/雀 页 直接打开牌谱屋玩家页\n"
                 "/雀 搜 名字　/雀 绑 UID　/雀 号 查绑定\n"
+                "/复盘 链接 开局南家　单牌谱AI一致率（/复盘 帮助）\n"
                 "/雀 切 UID　/雀 解 UID/全部\n"
                 "绑定仅保存牌谱屋公开 UID，不验证雀魂账号归属。\n"
                 "房间：金/玉/王；时间：7天/30天/90天/365天。\n"

@@ -36,6 +36,11 @@
     "default": "",
     "obvious_hint": true
   },
+  "replay_runtime": {
+    "description": "单牌谱复盘独立环境目录（包含.venv及browsers），默认服务器/bot/mahjong-replay-worker；不需要雀魂账号或模型API密钥",
+    "type": "string",
+    "default": "/bot/mahjong-replay-worker"
+  },
   "records_limit": {
     "description": "最近对局命令返回的条数（1-20）",
     "type": "int",

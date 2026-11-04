@@ -13,13 +13,15 @@ from astrbot.core.star.filter.command_group import CommandGroupFilter
 
 AI_TOOLS = frozenset({
     "mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
-    "query_available_apis", "call_api_by_name", "bilibili_subscription", "group_data",
+    "query_available_apis", "call_api_by_name", "bilibili_subscription", "group_data", "mahjong_replay",
 })
 AI_PERSONA_NAME = "慧慧"
 AI_UNAVAILABLE = "慧慧暂时连不上模型，请稍后再聊；功能仍可直接使用 /何切、/雀 或 /搜索歌曲 等原有命令。"
 AI_PERSONA = json.loads(
     (Path(__file__).parent / "personas" / "huihui.json").read_text(encoding="utf-8")
 )["system_prompt"]
+from .replay_bridge import REPLAY_INSTRUCTIONS
+AI_PERSONA += "\n\n" + REPLAY_INSTRUCTIONS
 
 
 def has_native_command(event) -> bool:

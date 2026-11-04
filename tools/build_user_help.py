@@ -8,7 +8,7 @@ from PIL import Image,ImageDraw,ImageFont
 ROOT=Path(__file__).resolve().parents[1]
 W=2000;M=58;GAP=32;CW=(W-M*2-GAP)//2
 PAPER='#F5EFE3';INK='#202126';ORANGE='#EC5936';MUTED='#66635F';LINE='#D8CFC0';WHITE='#FFFCF6';GOLD='#F4C65B'
-EDITION='2026.11.03'
+EDITION='2026.11.04'
 MODULES=[
  {'id':'01','title':'群数据','tag':'S1赛季 · 群精华样本','subtitle':'场次、顺位、持点与被飞，完整看对局。','height':850,'lines':[
   ('cmd','/群数据　　/群数据 最近 5'),
@@ -194,7 +194,7 @@ def render(path,catalog_path=None):
  d.rectangle((M,y,W-M,y+183),fill=INK)
  p.text(M+27,y+18,'还有这些小功能',34,True,WHITE,width=700)
  p.text(M+27,y+77,'表情包：/meme status 看状态；/meme list 看已收集的表情。',29,color=WHITE,width=1800)
- p.text(M+27,y+125,'原神语录：启用的群里，普通消息发送「原神」即可触发。',29,color='#E6D9C8',width=1800)
+ p.text(M+27,y+125,'单牌谱复盘：/复盘 链接 开局西家；四麻东南，一致率与分歧。详情 /复盘 帮助',29,color='#E6D9C8',width=1800)
  y+=220
  p.text(M,y,'继续看详细菜单：/群数据 帮助 · /雀 帮 · /何切 帮 · /B站',29,True,width=1850)
  p.text(M,y+51,'功能管理、登录、数据修正与@全体提醒设置，请联系管理员。',28,color=MUTED,width=1850)
@@ -216,7 +216,7 @@ def write_manual(path,catalog_path=None):
   lines += ['']
  lines+=['## 60s资讯站','','群聊先@慧慧，私聊直接发送。`/资讯` 查看完整图片菜单；`/资讯 热榜`、`/资讯 工具` 可分类查看。例：`/抖音热搜`、`/天气 上海`、`/翻译 hello world`。也可以自然语言请求。仅启用服务器实测通过的项目，故障接口不替换原功能。','','## 娱乐百宝箱','','群聊使用：`@慧慧 /娱乐`、`@慧慧 /娱乐 图片`；私聊可省略@。项目名后可带参数，如 `@慧慧 搜图 猫`。']
  for key,label in [('text','文字'),('image','图片'),('video','视频'),('audio','语音')]:lines+=['','### '+label,'','、'.join(c[key])+'。']
- lines+=['','项目来自第三方，部分项目需参数或可能临时不可用；以 `/娱乐` 当前列表为准。','', '## 其他功能','','表情包：`/meme status` 查看状态，`/meme list` 查看已收集表情。启用的群里，普通消息发送“原神”可触发原神语录。','','帮助：`/help` 或 `/帮助`。']
+ lines+=['','项目来自第三方，部分项目需参数或可能临时不可用；以 `/娱乐` 当前列表为准。','', '## 其他功能','','表情包：`/meme status` 查看状态，`/meme list` 查看已收集表情。','','单牌谱复盘：`/复盘 链接 开局西家`，支持四麻东南战的一致率、分歧与分局卡片；`/复盘 帮助` 查看用法。在线自动提交可能需要人工验证，支持导入报告链接。','','帮助：`/help` 或 `/帮助`。']
  Path(path).write_text('\n'.join(lines)+'\n',encoding='utf8')
 
 if __name__=='__main__':

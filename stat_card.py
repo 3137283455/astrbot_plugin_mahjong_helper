@@ -11,7 +11,7 @@ from .koromo_views import FIELDS, LABELS, _value
 
 
 CARD_SECTIONS = {"基本", "顺位", "立直", "更多", "和铳", "血统"}
-MENU_CARD_REVISION = 9
+MENU_CARD_REVISION = 10
 WIDTH = 1400
 INK = "#18313D"
 MUTED = "#667B83"
@@ -226,7 +226,7 @@ def _menu_tile(draw, x: int, y: int, command: str, detail: str,
 
 def render_quick_menu_card(path: Path) -> Path:
     """Render the compact /雀 menu with commands grouped by intent."""
-    image = Image.new("RGB", (WIDTH, 1785), PAPER)
+    image = Image.new("RGB", (WIDTH, 1845), PAPER)
     draw = ImageDraw.Draw(image)
     _menu_header(draw, "雀魂快捷菜单", "玩家在前，后面的查询选项可换序")
     draw.text((92, 284), "不填玩家时，查询你绑定的主账号", font=_font(28), fill=MUTED)
@@ -264,8 +264,9 @@ def render_quick_menu_card(path: Path) -> Path:
               font=_font(29, True), fill=INK)
     draw.text((119, 1591), "例：/雀 一剑风起醉英豪 三 铳 30天；后缀可换序",
               font=_font(27), fill=INK)
-    draw.text((92, 1685), "群内广播：/友 房间号或链接（@全体）", font=_font(26), fill=INK)
-    draw.text((92, 1725), "绑定不验证归属，仅收录金之间及以上公开数据；详情：/雀 帮", font=_font(26), fill=MUTED)
+    draw.text((92, 1685), "单牌谱：/复盘 链接 开局南家；一致率、分歧与分局", font=_font(28, True), fill=TEAL)
+    draw.text((92, 1735), "群内广播：/友 房间号或链接（@全体）", font=_font(26), fill=INK)
+    draw.text((92, 1780), "绑定不验证归属，仅收录金之间及以上公开数据；详情：/雀 帮", font=_font(26), fill=MUTED)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG", optimize=True)
     return path
@@ -299,7 +300,7 @@ def render_help_card(path: Path, admin: bool = False) -> Path:
 
     _menu_section(draw, "对局与网页", 1122)
     _menu_tile(draw, 92, 1187, "/雀 局", "对局列表；受限给网页链接")
-    _menu_tile(draw, 717, 1187, "/雀 页", "直接打开牌谱屋玩家页")
+    _menu_tile(draw, 717, 1187, "/复盘 链接 开局南家", "四麻东南 · 单牌谱 AI 一致率")
     draw.text((92, 1330), "绑定仅保存公开 UID，不验证归属；/雀 解 全部 可清空",
               font=_font(25), fill=MUTED)
 
