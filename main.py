@@ -23,6 +23,7 @@ from .recognizer import Recognizer
 from . import periods
 from .nicknames import SelectionCache,candidates,choice
 from .scoring import score_matches,personal_lines,rules_text
+from .pagination import page_number,page_rows,navigation
 
 HELP=[
  '/群数据                         三麻 / 四麻总览',
@@ -32,6 +33,9 @@ HELP=[
  '/群数据 二位率 四麻 30天 5场   近30天，至少5场',
  '/群数据 个人 "游戏昵称" 三麻   玩家档案',
  '/群数据 综合榜 四麻 S0         综合表现榜；默认S1，满10场正式入榜',
+ '/群数据 综合榜 四麻 S0 第2页   每页10人；各榜单页码与筛选顺序可换',
+ '/群数据 暂定榜 四麻             不足10场的综合暂定分，单独分页',
+ '/群数据 下一页 / 上一页 / 第3页  沿用本人最近榜单；群聊也可@慧慧翻页',
  '/群数据 评分 "游戏昵称" 三麻 S1  综合评分分解；个人卡片也显示总分和排名',
  '/群数据 评分规则               查看成绩90%＋场次10%的计算规则',
  '昵称可只填一部分，或省略特殊字符；完整匹配直接查，否则发送文字候选。',
@@ -70,9 +74,13 @@ ADMIN_READS={'待确认','核对','时间','同步'}
 def parse_query(arguments):
     try:tokens=shlex.split(str(arguments))
     except ValueError:raise ValueError('引号未闭合，含空格的昵称请用一对英文双引号包住')
-    options={'mode':None,'days':0,'minimum':1,'action':'总览','rest':[],'period':None}
+    options={'mode':None,'days':0,'minimum':1,'action':'总览','rest':[],'period':None,'page':1,'page_set':False}
     for token in tokens:
-        if token in ('历史','上一期','当前') or token.startswith(('周期=','赛季=')) or re.fullmatch(r'(?i)S\d+(?:赛季)?',token):
+        number=page_number(token)
+        if number is not None:
+            if options['page_set'] and options['page']!=number:raise ValueError('一次只能选择一个页码')
+            options['page']=number;options['page_set']=True
+        elif token in ('历史','上一期','当前') or token.startswith(('周期=','赛季=')) or re.fullmatch(r'(?i)S\d+(?:赛季)?',token):
             choice=token.removeprefix('周期=').removeprefix('赛季=')
             if re.fullmatch(r'(?i)S\d+(?:赛季)?',choice):choice=choice.upper().removesuffix('赛季')
             if options['period'] and options['period']!=choice:raise ValueError('一次只能选择一个统计周期')
@@ -90,8 +98,9 @@ def parse_query(arguments):
         else:options['rest'].append(token)
     rest=options['rest']
     if rest:options['action']=rest.pop(0)
+    elif options['page_set']:options['action']='翻页'
     alias={'菜单':'帮助','排行榜':'被飞','榜单':'被飞','最高点数':'最高','最低点数':'最低','最高分':'最高','最低分':'最低','一位最多':'一位','二位最多':'二位','被飞最多':'被飞','开启统计':'开启','更新数据':'更新','玩家列表':'玩家','被飞榜':'被飞','被飞排行榜':'被飞','被飞排行':'被飞','被飞次数':'被飞','被飞次数榜':'被飞','被飞率榜':'被飞率','被飞率排行':'被飞率','被飞率排行榜':'被飞率','被飞率排名':'被飞率','统计时间':'时间','更新时间':'时间','同步时间':'时间'}
-    alias.update({'综合排名':'综合榜','综合排行':'综合榜','综合排行榜':'综合榜','综合评分榜':'综合榜','实力榜':'综合榜',
+    alias.update({'综合排名':'综合榜','综合排行':'综合榜','综合排行榜':'综合榜','综合评分榜':'综合榜','综合分榜单':'综合榜','实力榜':'综合榜','暂定分榜':'暂定榜','综合暂定榜':'暂定榜',
                   '综合分析':'评分','综合评分':'评分','个人评分':'评分','综合分':'评分','综合规则':'评分规则'})
     options['action']=alias.get(options['action'],options['action'])
     if options['action']=='赛季':options['action']='周期'
@@ -195,12 +204,45 @@ class GroupDataPlugin(Star):
         cache=self.selection_cache();key=self.selection_key(event)
         if not cache.get(key) and isinstance(query,str) and len(query)<=500:
             self._nickname_context.put(key,{'query':query})
+    def board_cache(self):
+        if not hasattr(self,'_board_context'):self._board_context=SelectionCache(ttl=600)
+        return self._board_context
+    def paging_options(self,event,opt):
+        previous=self.board_cache().get(self.selection_key(event))
+        if not previous:raise ValueError('没有最近的榜单，或已超过10分钟；请先发送 /群数据 综合榜 四麻。')
+        selected_mode=opt['mode'] or previous['options']['mode']
+        modes=previous['modes']
+        if not selected_mode:
+            active=[m for m,info in modes.items() if info['total']]
+            if len(active)==1:selected_mode=active[0]
+            else:raise ValueError('最近同时查询了三麻和四麻，请指定模式，例如 /群数据 下一页 四麻。')
+        if selected_mode not in modes:raise ValueError('最近没有这个模式的榜单，请先查询对应榜单。')
+        for field in ('period','days','minimum'):
+            supplied=opt[field]
+            default={'period':None,'days':0,'minimum':1}[field]
+            if supplied!=default and supplied!=previous['options'][field]:raise ValueError('翻页沿用原筛选；修改条件请重新发送完整榜单命令。')
+        result=deepcopy(previous['options']);result['mode']=selected_mode
+        result['action']=modes[selected_mode].get('action',result['action'])
+        current=modes[selected_mode]['page']
+        result['page']=current+1 if opt['action']=='下一页' else current-1 if opt['action']=='上一页' else opt['page']
+        if result['page']<1:raise ValueError('已经是第1页。')
+        if result['page']>modes[selected_mode]['pages']:raise ValueError(f'已经到最后一页，共{modes[selected_mode]["pages"]}页。')
+        result['page_set']=True
+        return result
+    def remember_board(self,event,opt,period_name,views):
+        saved=deepcopy(opt);saved['rest']=[]
+        if re.fullmatch(r'S\d+赛季',period_name):saved['period']=period_name.removesuffix('赛季')
+        self.board_cache().put(self.selection_key(event),{'options':saved,'modes':views})
+        query=self.query_text(saved,period_name)
+        self.remember_context(event,query)
+        if hasattr(event,'set_extra'):event.set_extra('group_data_resolved_query',query)
     @staticmethod
     def query_text(opt,period_name):
         tokens=[opt['action'],*opt['rest']]
         if opt['mode']:tokens.append('三麻' if opt['mode']==3 else '四麻')
         if opt['days']:tokens.append(str(opt['days'])+'天')
         if opt['minimum']>1:tokens.append(str(opt['minimum'])+'场')
+        if opt.get('page_set'):tokens.append(f'第{opt["page"]}页')
         if re.fullmatch(r'S\d+赛季',period_name):tokens.append(period_name.removesuffix('赛季'))
         elif opt['period']:tokens.append('周期='+opt['period'])
         return ' '.join(json.dumps(token,ensure_ascii=False) if any(c.isspace() or c in "'\"\\" for c in token) else token for token in tokens)
@@ -368,7 +410,10 @@ class GroupDataPlugin(Star):
         scope=str(event.get_self_id())+':'+str(event.get_group_id());gid=str(event.get_group_id())
         try:
             opt=deepcopy(_options) if _options is not None else parse_query(arguments)
+            if opt['action'] in ('下一页','上一页','翻页'):opt=self.paging_options(event,opt)
             action=opt['action'];rest=opt['rest'];days=opt['days'];minimum=opt['minimum']
+            if opt.get('page_set') and action not in set(METRICS)|{'综合榜','暂定榜'}:
+                raise ValueError('页码只用于榜单；个人数据、原图等查询不需要页码。')
             if action in ('选','选择','取消','取消选择'):
                 if action in ('取消','取消选择'):value='cancel'
                 elif len(rest)==1:value=choice(rest[0])
@@ -571,10 +616,16 @@ class GroupDataPlugin(Star):
                 await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope,period_id),days,opt['mode'],period_name=period_name)
                 await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),f'{period_name} · 群数据总览\n当前筛选已确认 {len(matches)} 场。\n可发送 /群数据 最近 5 查看结算，或 /群数据 个人 昵称 查询玩家。');return
             modes=[opt['mode']] if opt['mode'] else [3,4]
-            if action in ('综合榜','评分'):
+            if action in ('综合榜','暂定榜','评分'):
                 if action=='评分' and not rest:raise ValueError('用法：/群数据 评分 昵称 [三麻/四麻] [S0/S1]；查看榜单用 /群数据 综合榜')
+                if action!='评分' and rest:raise ValueError('榜单格式：/群数据 综合榜 [三麻/四麻] [S0/S1] [第2页]')
+                views={};prepared=[]
                 for mode in modes:
                     data=score_matches(matches,mode,aliases,minimum)
+                    provisional=action=='暂定榜' or (action=='综合榜' and not data['formal_count'])
+                    info=page_rows([r for r in data['rows'] if r['qualified']!=provisional],opt.get('page',1))
+                    prepared.append((mode,data,provisional,info))
+                for mode,data,provisional,info in prepared:
                     if action=='评分':
                         name=player_name(' '.join(rest),aliases)
                         lines=[f'{period_name} · {mode}麻'+(f' · 近{days}天收录' if days else ''),*personal_lines(data,name),
@@ -583,14 +634,25 @@ class GroupDataPlugin(Star):
                         await self.card(event,'群数据 · 综合评分分析',lines)
                     else:
                         path=self.card_dir/(uuid.uuid4().hex+'.png')
-                        await asyncio.to_thread(cards.score_board,path,gid,data,days,period_name)
-                        await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),cards.score_board_text(data,period_name,days))
+                        render_opt={**opt,'action':'暂定榜' if provisional else '综合榜','mode':mode,'page_set':False}
+                        nav=navigation(info,self.query_text(render_opt,period_name))
+                        await asyncio.to_thread(cards.score_board,path,gid,data,days,period_name,page=opt.get('page',1),provisional=provisional,nav=nav)
+                        await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),cards.score_board_text(data,period_name,days,page=opt.get('page',1),provisional=provisional,nav=nav))
+                        views[mode]={**{k:info[k] for k in ('page','pages','total')},'action':render_opt['action']}
+                if views:self.remember_board(event,opt,period_name,views)
                 return
             if action=='玩家':
                 names=sorted({s['name'] for m in modes for s in aggregate(matches,m,aliases)})
                 await self.card(event,'群数据 · 玩家昵称',[f'共 {len(names)} 位；仅列出已录入对局中的昵称。',*names[:60],*(['超过60位，请用个人查询完整昵称。'] if len(names)>60 else [])]);return
             if action not in METRICS and action!='个人':raise ValueError('未识别这个选项，发送 /群数据 帮助 查看完整用法')
             if action=='个人' and not rest:raise ValueError('用法：/群数据 个人 "完整游戏昵称" [三麻/四麻]')
+            if action!='个人' and rest:raise ValueError('榜单参数请使用 三麻/四麻、S0/S1、30天、5场、第2页 等格式。')
+            views={}
+            if action!='个人':
+                # Validate every mode before sending any card, avoiding partial replies.
+                for mode in modes:
+                    if mode==3 and action in ('四位','四位率'):continue
+                    page_rows(ranking(aggregate(matches,mode,aliases),action,minimum),opt.get('page',1))
             for mode in modes:
                 if mode==3 and action in ('四位','四位率'):continue
                 stats=aggregate(matches,mode,aliases);path=self.card_dir/(uuid.uuid4().hex+'.png')
@@ -599,13 +661,19 @@ class GroupDataPlugin(Star):
                     stats=[s for s in stats if s['games']>=minimum]
                     score_data=score_matches(matches,mode,aliases,minimum)
                     await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name,minimum=minimum,score_data=score_data)
-                else:await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name)
+                else:
+                    info=page_rows(ranking(stats,action,minimum),opt.get('page',1))
+                    render_opt={**opt,'mode':mode,'page_set':False}
+                    nav=navigation(info,self.query_text(render_opt,period_name))
+                    await asyncio.to_thread(cards.leaderboard,path,gid,mode,action,stats,days,minimum,period_name=period_name,page=opt.get('page',1),nav=nav)
+                    views[mode]={k:info[k] for k in ('page','pages','total')}
                 fallback=(cards.profile_text(gid,mode,stats,name,days,period_name,minimum,score_data=score_data) if action=='个人'
-                          else f'{period_name} · {mode}麻 · {action}榜\n'+'\n'.join(f'{r["position"]}. {r["name"]} · {float(r["value"]):.2%}' if r['kind']=='rate' else f'{r["position"]}. {r["name"]} · {float(r["value"]):g}' for r in ranking(stats,action,minimum)[:10]))
+                          else f'{period_name} · {mode}麻 · {action}榜\n'+'\n'.join([*[f'{r["position"]}. {r["name"]} · {float(r["value"]):.2%}' if r['kind']=='rate' else f'{r["position"]}. {r["name"]} · {float(r["value"]):g}' for r in info['rows']],*nav]))
                 await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),fallback)
                 if action in ('最高','最低'):
                     rows=ranking(stats,action,minimum)
-                    if rows:await self.original(event,scope,rows[0][('max_points' if action=='最高' else 'min_points')+'_source'])
+                    if rows and opt.get('page',1)==1:await self.original(event,scope,rows[0][('max_points' if action=='最高' else 'min_points')+'_source'])
+            if views:self.remember_board(event,opt,period_name,views)
         except (ValueError,IndexError) as exc:await self.send_result(event,event.plain_result(str(exc)))
         except Exception as exc:
             logger.exception('群数据请求失败')

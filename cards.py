@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image,ImageDraw,ImageFont
 from .core import aggregate, ranking, profile_positions
 from .scoring import display as score_display,rank_label,personal_lines
+from .pagination import page_rows,navigation
 
 W=1440
 BG='#101720';PANEL='#1B2633';INK='#F2F5F8';MUTED='#A0B0C2';TEAL='#54D6C6';RED='#FF858B';GOLD='#FFCA78'
@@ -78,8 +79,9 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
     d.text((58,1432),'/群数据 最近 5    /群数据 表格    历史查询加 S0    /群数据 帮助',font=font(27),fill=INK)
     footer(d,1490,group,days,period_name);im.save(path);return path
 
-def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当前周期'):
-    rows=ranking(stats,metric,minimum)[:10];height=max(690,390+len(rows)*91+145)
+def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当前周期',page=1,nav=None):
+    info=page_rows(ranking(stats,metric,minimum),page);rows=info['rows'];height=max(790,390+len(rows)*91+245)
+    nav=nav or navigation(info,f'{metric} {"三麻" if mode==3 else "四麻"}')
     im,d=base(f'群数据 · {period_name} · {"三麻" if mode==3 else "四麻"} · {metric}榜',f'每人至少 {minimum} 场  /  比率同时展示次数与场次  /  相同指标并列',height)
     d.text((65,240),'排名      游戏昵称',font=font(28),fill=MUTED)
     d.text((855,240),'场次',font=font(28),fill=MUTED);d.text((1080,240),metric,font=font(28),fill=MUTED)
@@ -95,6 +97,7 @@ def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当�
         else:v=f'{int(r["value"]):,}'
         d.text((1020,y+18),fit(d,v,28,350,True),font=font(28,True),fill=RED if metric.startswith('被飞') or metric=='最低' else GOLD)
         y+=91
+    for i,line in enumerate(nav):d.text((58,height-228+i*45),fit(d,line,25,1320),font=font(25),fill=TEAL if i==0 else INK)
     footer(d,height-112,group,days,period_name);im.save(path);return path
 
 def profile_text(group,mode,stats,name,days=0,period_name='当前周期',minimum=1,score_data=None):
@@ -187,26 +190,29 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum
     im.save(path);return path
 
 
-def score_board_text(data,period_name,days=0):
-    official=[r for r in data['rows'] if r['qualified']];provisional=[r for r in data['rows'] if not r['qualified']]
-    lines=[f'群数据 · {period_name} · {data["mode"]}麻 · 综合表现榜'+(f' · 近{days}天收录' if days else ''),
-           f'正式{len(official)}人，暂定{len(provisional)}人；满10场入榜，筛选至少{data["minimum"]}场。',
-           *[f'{r["position"]}. {r["name"]} · {score_display(r["score"])}分 · {r["games"]}场' for r in official[:10]]]
+def score_board_text(data,period_name,days=0,page=1,provisional=None,nav=None):
+    official=[r for r in data['rows'] if r['qualified']];pending=[r for r in data['rows'] if not r['qualified']]
+    provisional=(not official) if provisional is None else provisional
+    info=page_rows(pending if provisional else official,page)
+    lines=[f'群数据 · {period_name} · {data["mode"]}麻 · '+('综合暂定榜' if provisional else '综合表现榜')+(f' · 近{days}天收录' if days else ''),
+           f'正式{len(official)}人，暂定{len(pending)}人；满10场入榜，筛选至少{data["minimum"]}场。',
+           *[f'{"暂定" if provisional else str(r["position"])+"."} {r["name"]} · {score_display(r["score"])}分 · {r["games"]}场' for r in info['rows']]]
     if not official:lines.append('暂无满10场的正式玩家。')
-    if provisional:
-        lines.append('暂定分（不占正式名次）：')
-        lines.extend(f'{r["name"]} · {score_display(r["score"])}分 · {r["games"]}/10场' for r in provisional[:5])
+    if provisional:lines.append('暂定分不占正式名次。')
+    lines.extend(nav or navigation(info,'暂定榜' if provisional else '综合榜'))
     lines.extend(['综合分=成绩分×90%＋10×场次÷（场次＋20）；成绩分=顺位65%＋持点35%。',
                   '仅反映本群精华样本，三麻四麻、S0与S1独立统计。'])
     return '\n'.join(lines)
 
-def score_board(path,group,data,days=0,period_name='当前周期'):
-    official=[r for r in data['rows'] if r['qualified']];provisional=[r for r in data['rows'] if not r['qualified']]
-    shown=official[:10];pending=provisional[:5 if official else 10]
-    height=650+len(shown)*82+(len(pending)*82+95 if pending else 0)
+def score_board(path,group,data,days=0,period_name='当前周期',page=1,provisional=None,nav=None):
+    official=[r for r in data['rows'] if r['qualified']];pending=[r for r in data['rows'] if not r['qualified']]
+    provisional=(not official) if provisional is None else provisional
+    info=page_rows(pending if provisional else official,page);shown=info['rows']
+    nav=nav or navigation(info,('暂定榜' if provisional else '综合榜')+f' {data["mode"]}麻')
+    height=800+len(shown)*82
     if not shown:height+=82
-    im,d=base(f'群数据 · {period_name} · {data["mode"]}麻 · 综合表现榜',
-              f'成绩90%＋场次10%   /   满10场正式入榜   /   正式{len(official)}人 · 暂定{len(provisional)}人',height)
+    im,d=base(f'群数据 · {period_name} · {data["mode"]}麻 · '+('综合暂定榜' if provisional else '综合表现榜'),
+              f'成绩90%＋场次10%   /   满10场正式入榜   /   正式{len(official)}人 · 暂定{len(pending)}人',height)
     columns=[(90,'名次'),(190,'游戏昵称'),(805,'场次'),(975,'成绩分'),(1135,'场次项'),(1335,'综合分')]
     def header(y):
         for x,label in columns:d.text((x,y),label,font=font(25),fill=MUTED,anchor='ra' if x>=805 else None)
@@ -219,17 +225,14 @@ def score_board(path,group,data,days=0,period_name='当前周期'):
             d.text((x,y+19),value,font=font(28,bold),fill=color,anchor='ra')
     header(240);y=292
     if not shown:
-        d.text((65,y),'暂无满10场的正式玩家；下方仅展示暂定分。' if pending else '所选范围暂无可评分的标准终局。',font=font(29),fill=MUTED)
+        d.text((65,y),'所选范围暂无'+('暂定玩家。' if provisional else '正式玩家。'),font=font(29),fill=MUTED)
         y+=82
-    for r in shown:row(r,y,True);y+=82
-    if pending:
-        d.text((65,y+20),'暂定区 · 不足10场，不占正式名次',font=font(27,True),fill=TEAL);y+=76
-        for r in pending:row(r,y,False);y+=82
-    notes=[f'正式共{len(official)}人，展示前10；暂定共{len(provisional)}人，展示前{len(pending)}。同分并列，不以场次破同分。',
+    for r in shown:row(r,y,not provisional);y+=82
+    notes=[*nav, '暂定分不占正式名次。' if provisional else f'同分并列；暂定{len(pending)}人另查 /群数据 暂定榜 {data["mode"]}麻 '+period_name.removesuffix('赛季'),
            '综合分=成绩分×90%＋10×场次÷（场次＋20）；成绩分=顺位65%＋持点35%。',
            f'评分纳入标准终局{data["games"]}场；本次筛选至少{data["minimum"]}场。'+(f'近{days}天按精华收录时间筛选。' if days else ''),
            f'本模式另有{len(data["excluded"])}场不符合评分条件；/群数据 评分 昵称 查看分解。']
-    for i,note in enumerate(notes):d.text((58,height-306+i*42),fit(d,note,23,1320),font=font(23),fill=MUTED)
+    for i,note in enumerate(notes):d.text((58,height-400+i*42),fit(d,note,23,1320),font=font(23),fill=TEAL if i==0 else MUTED)
     footer(d,height-117,group,days,period_name);im.save(path);return path
 
 def text_card(path,title,lines):
