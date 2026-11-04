@@ -135,6 +135,9 @@ class ReplayStore:
         CREATE INDEX IF NOT EXISTS job_owner ON jobs(scope,actor,created);
         CREATE TABLE IF NOT EXISTS cache(cache_key TEXT PRIMARY KEY,report_path TEXT,remote_task TEXT,created REAL);
         CREATE TABLE IF NOT EXISTS pending(scope TEXT,actor TEXT,payload TEXT,expires REAL,PRIMARY KEY(scope,actor));''')
+        with self.db() as db:
+            if 'delivery' not in {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}:
+                db.execute("ALTER TABLE jobs ADD COLUMN delivery TEXT NOT NULL DEFAULT ''")
     @contextmanager
     def db(self):
         db=sqlite3.connect(self.path,timeout=10);db.row_factory=sqlite3.Row
@@ -146,18 +149,23 @@ class ReplayStore:
     def get_pending(self,scope,actor):
         with self.db() as db:r=db.execute('SELECT * FROM pending WHERE scope=? AND actor=? AND expires>?',(scope,actor,time.time())).fetchone()
         return json.loads(r['payload']) if r else None
-    def create(self,scope,actor,source):
+    def create(self,scope,actor,source,delivery=''):
+        if delivery not in ('','group','private'):raise ValueError('Invalid replay delivery')
         if source['kind']=='replay' and source.get('seat') not in range(4):raise ReplayError('请指定开局东家、南家、西家或北家。')
         key=hashlib.sha256(json.dumps([source['replay_id'],source.get('seat'),MODEL,'all',0.1,'v1']).encode()).hexdigest()
         with self.db() as db:
             same=db.execute("SELECT * FROM jobs WHERE scope=? AND actor=? AND cache_key=? AND status IN ('queued','running','done','manual') ORDER BY created DESC LIMIT 1",(scope,actor,key)).fetchone()
-            if same:return dict(same),False
+            if same:
+                same=dict(same)
+                if delivery and not same['delivery']:
+                    db.execute('UPDATE jobs SET delivery=? WHERE id=?',(delivery,same['id']));same['delivery']=delivery
+                return same,False
             if db.execute("SELECT 1 FROM jobs WHERE scope=? AND actor=? AND status IN ('queued','running')",(scope,actor)).fetchone():raise ReplayError('你在本会话已有一个复盘任务，请先查看状态或取消。')
             if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=6:raise ReplayError('复盘队列已满，请稍后再试。')
             cached=db.execute('SELECT * FROM cache WHERE cache_key=?',(key,)).fetchone();cached=cached if cached and Path(cached['report_path']).is_file() else None
             cached_summary=summarize(json.loads(Path(cached['report_path']).read_text(encoding='utf-8')),source.get('seat'),'' if source['kind']=='report' else MODEL) if cached else None
             now=time.time();job_id=secrets.token_hex(6);status='done' if cached else 'queued';report_path=cached['report_path'] if cached else ''
-            db.execute('INSERT INTO jobs(id,scope,actor,cache_key,status,url,seat,model,remote_task,report_path,created,updated,notified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(job_id,scope,actor,key,status,source['url'],cached_summary['seat'] if cached_summary else source.get('seat'),cached_summary['model'] if cached_summary else MODEL,(cached['remote_task'] if cached else '') or source.get('remote_task',''),report_path,now,now,1 if cached else 0))
+            db.execute('INSERT INTO jobs(id,scope,actor,cache_key,status,url,seat,model,remote_task,report_path,created,updated,notified,delivery) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(job_id,scope,actor,key,status,source['url'],cached_summary['seat'] if cached_summary else source.get('seat'),cached_summary['model'] if cached_summary else MODEL,(cached['remote_task'] if cached else '') or source.get('remote_task',''),report_path,now,now,1 if cached else 0,delivery))
             return dict(db.execute('SELECT * FROM jobs WHERE id=?',(job_id,)).fetchone()),True
     def get(self,scope,actor,job_id=''):
         with self.db() as db:
@@ -171,11 +179,29 @@ class ReplayStore:
         with self.db() as db:db.execute('UPDATE jobs SET '+','.join(k+'=?' for k in fields)+',updated=? WHERE id=?',(*fields.values(),time.time(),job_id))
     def next(self):
         with self.db() as db:
-            r=db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
+            r=db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created,rowid LIMIT 1").fetchone()
             if r:db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?",(time.time(),r['id']))
         return dict(r) if r else None
     def recover(self):
         with self.db() as db:db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+    def queue_info(self,job_id):
+        with self.db() as db:
+            jobs=[dict(r) for r in db.execute("SELECT id,status FROM jobs WHERE status IN ('queued','running') ORDER BY created,rowid")]
+        waiting=[j['id'] for j in jobs if j['status']=='queued'];running=sum(j['status']=='running' for j in jobs)
+        return {'ahead':running+waiting.index(job_id),'waiting':len(waiting)} if job_id in waiting else None
+    def retry(self,scope,actor,job_id):
+        with self.db() as db:
+            job=db.execute('SELECT status FROM jobs WHERE id=? AND scope=? AND actor=?',(job_id,scope,actor)).fetchone()
+            if not job:raise ReplayError('没有找到你在当前会话的复盘任务。')
+            if job['status'] not in ('failed','manual','cancelled'):raise ReplayError('只有未完成、人工验证或取消的任务可以重试。')
+            if db.execute("SELECT 1 FROM jobs WHERE scope=? AND actor=? AND status IN ('queued','running')",(scope,actor)).fetchone():raise ReplayError('你已有一个正在执行的复盘任务。')
+            if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=6:raise ReplayError('复盘队列已满，请稍后再试。')
+            db.execute("UPDATE jobs SET status='queued',error='',notified=0,created=?,updated=? WHERE id=?",(time.time(),time.time(),job_id))
+    def unnotified(self):
+        with self.db() as db:return [dict(r) for r in db.execute("SELECT * FROM jobs WHERE status IN ('done','failed','manual') AND notified=0")]
+    def finish_error(self,job_id,status,error):
+        if status not in ('failed','manual'):raise ValueError('Invalid replay failure status')
+        with self.db() as db:db.execute("UPDATE jobs SET status=?,error=?,updated=? WHERE id=? AND status!='cancelled'",(status,error,time.time(),job_id))
     def complete(self,job,report):
         summary=summarize(report,job['seat'],job['model'] if not job['url'].startswith('https://mjai.ekyu.moe/') else '')
         path=self.folder/'reports'/(job['id']+'.json');path.parent.mkdir(exist_ok=True);temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(report,ensure_ascii=False),encoding='utf-8');temporary.replace(path)
