@@ -4,6 +4,8 @@ import hmac,json,secrets,threading,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from .replay_core import ReplayError,MODEL,TASK_RE,summarize
+from .replay_recent import recent_sources
+from .replay_batch import ReplayBatches
 
 LEASE_SECONDS=90
 
@@ -11,7 +13,7 @@ class LeaseLost(ReplayError):pass
 
 class PCQueue:
     def __init__(self,store,worker_id):
-        self.store=store;self.worker_id=worker_id
+        self.store=store;self.worker_id=worker_id;self.batches=ReplayBatches(store)
         with store.db() as db:
             columns={r['name'] for r in db.execute('PRAGMA table_info(jobs)')}
             for name,definition in {'lease_token':"TEXT NOT NULL DEFAULT ''",'lease_until':'REAL NOT NULL DEFAULT 0','worker_id':"TEXT NOT NULL DEFAULT ''",'phase':"TEXT NOT NULL DEFAULT ''",'attention_notified':'INTEGER NOT NULL DEFAULT 0'}.items():
@@ -29,7 +31,9 @@ class PCQueue:
 
     @staticmethod
     def public(job):
-        return {k:job[k] for k in ('id','url','seat','model','remote_task','lease_token','phase','status')}
+        result={k:job[k] for k in ('id','url','seat','model','remote_task','lease_token','phase','status','kind')}
+        if job['kind']=='recent':result['request']=json.loads(job['request_json'])
+        return result
 
     def _owned(self,db,payload):
         r=db.execute('SELECT * FROM jobs WHERE id=?',(str(payload.get('id','')),)).fetchone()
@@ -62,7 +66,7 @@ class PCQueue:
                 remote=str(payload.get('remote_task') or job['remote_task'])
                 if remote and not TASK_RE.fullmatch(remote):raise ReplayError('无效的报告编号。')
                 phase=str(payload.get('phase') or job['phase'])
-                if phase not in ('starting','browser','verification','submitted','fetching','uploading'):phase='browser'
+                if phase not in ('starting','browser','verification','submitted','fetching','uploading','resolving','records'):phase='browser'
                 db.execute('UPDATE jobs SET lease_until=?,phase=?,remote_task=?,updated=? WHERE id=?',(now+LEASE_SECONDS,phase,remote,now,job['id']))
                 return {'keep':True,'status':'running','job':self.public(dict(db.execute('SELECT * FROM jobs WHERE id=?',(job['id'],)).fetchone()))}
             if action=='fail':
@@ -76,6 +80,11 @@ class PCQueue:
             job=self._owned(db,payload)
             if job['status']=='done':return {'status':'done'}
             if job['status']!='running':raise LeaseLost('任务已结束或租约需要恢复。')
+        if job['kind']=='recent':
+            request=json.loads(job['request_json']);result=payload.get('records_result');sources=recent_sources(request,result)
+            nickname=str(result.get('nickname') or result['uid'])[:100]
+            batch=self.batches.create(job['scope'],job['actor'],sources,job['delivery'],'最近对局 · '+nickname,'time',lookup=job,lookup_result={'uid':str(result['uid']),'nickname':nickname,'requested':request['count']})
+            return {'status':'done','batch_id':batch['id']}
         report=payload.get('report');summary=summarize(report,job['seat'],MODEL)
         path=self.store.folder/'reports'/f"pc-{job['id']}-{job['lease_token'][:12]}.json";path.parent.mkdir(exist_ok=True)
         temp=path.with_suffix('.tmp');temp.write_text(json.dumps(report,ensure_ascii=False),encoding='utf-8');temp.replace(path)

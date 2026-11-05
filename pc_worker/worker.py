@@ -4,6 +4,7 @@ import argparse,asyncio,ctypes,json,logging,logging.handlers,os,re,signal,socket
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import parse_qs,urlsplit
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 
 BASE='https://mjai.ekyu.moe';MODEL='4.1b';TASK=re.compile(r'^[A-Za-z0-9_-]{8,100}$')
 CREATE_NO_WINDOW=0x08000000 if os.name=='nt' else 0
@@ -203,17 +204,22 @@ class Worker:
     async def run_job(self):
         try:
             await self.ensure_valid()
+            recent=self.current.get('kind')=='recent'
             result_file=self.private/('report-'+self.current['id']+'.json')
             if not result_file.exists():
-                report=await self.analyze()
-                if str(report.get('review',{}).get('model_tag'))!=MODEL:raise ValueError('返回的报告不是Mortal4.1b，未采用该结果')
+                if recent:
+                    from amae import fetch_recent
+                    report=await fetch_recent(self)
+                else:
+                    report=await self.analyze()
+                    if str(report.get('review',{}).get('model_tag'))!=MODEL:raise ValueError('返回的报告不是Mortal4.1b，未采用该结果')
                 write_json(result_file,report)
             await self.progress('uploading')
             while True:
                 await self.ensure_valid()
                 try:
                     report=json.loads(result_file.read_text(encoding='utf-8'))
-                    reply=await self.rpc('result',{**self.payload(),'report':report})
+                    reply=await self.rpc('result',{**self.payload(),('records_result' if recent else 'report'):report})
                     if reply.get('status')=='done':break
                     raise RuntimeError('服务器未确认报告接收')
                 except Offline:self.valid=False;self.connected=False

@@ -120,7 +120,7 @@ class MahjongHelperPlugin(Star):
                         tool_names.append("bilibili_subscription")
                     if tool_names is not None and "group_data" not in tool_names:
                         tool_names.append("group_data")
-                    if "电脑批量复盘V2" not in persona.system_prompt:
+                    if "电脑自动取谱V3" not in persona.system_prompt:
                         update["system_prompt"] = update.get("system_prompt", persona.system_prompt) + "\n\n" + REPLAY_INSTRUCTIONS
                     if tool_names is not None and "mahjong_replay" not in tool_names:
                         tool_names.append("mahjong_replay")
@@ -843,6 +843,10 @@ class MahjongHelperPlugin(Star):
 
     async def _recent_replay_sources(self,event,query):
         """Use permitted records data only; never infer an unknown player's seat."""
+        if self.config.get('replay_backend','server')=='pc':
+            from .replay_recent import recent_request
+            binding=self.db.get_main_uid(self._actor_id(event)) if not query.strip() or all(t in ('金','玉','王','王座') or (t.isdigit() and 1<=int(t)<=10) for t in query.split()) else ''
+            return recent_request(query,binding)
         from .replay_core import parse_url,ReplayError
         tokens=query.split();count=5;room='';name=[]
         for token in tokens:

@@ -170,8 +170,9 @@ class ReplayStore:
         CREATE TABLE IF NOT EXISTS cache(cache_key TEXT PRIMARY KEY,report_path TEXT,remote_task TEXT,created REAL);
         CREATE TABLE IF NOT EXISTS pending(scope TEXT,actor TEXT,payload TEXT,expires REAL,PRIMARY KEY(scope,actor));''')
         with self.db() as db:
-            if 'delivery' not in {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}:
-                db.execute("ALTER TABLE jobs ADD COLUMN delivery TEXT NOT NULL DEFAULT ''")
+            columns={r['name'] for r in db.execute('PRAGMA table_info(jobs)')}
+            for name,definition in {'delivery':"TEXT NOT NULL DEFAULT ''",'kind':"TEXT NOT NULL DEFAULT 'replay'",'request_json':"TEXT NOT NULL DEFAULT ''",'result_json':"TEXT NOT NULL DEFAULT ''"}.items():
+                if name not in columns:db.execute(f'ALTER TABLE jobs ADD COLUMN {name} {definition}')
     @contextmanager
     def db(self):
         db=sqlite3.connect(self.path,timeout=10);db.row_factory=sqlite3.Row
