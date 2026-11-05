@@ -76,6 +76,16 @@ class ReplayBatches:
             job=db.execute("SELECT created FROM jobs WHERE scope=? AND actor=? AND batch_id='' ORDER BY created DESC LIMIT 1",(scope,actor)).fetchone()
         return bool(batch and (not job or batch['created']>=job['created']))
 
+    def active(self,scope,actor):
+        with self.store.db() as db:
+            row=db.execute('''SELECT b.id FROM replay_batches b
+                WHERE b.scope=? AND b.actor=? AND EXISTS (
+                    SELECT 1 FROM replay_batch_items i JOIN jobs j ON j.id=i.job_id
+                    WHERE i.batch_id=b.id AND j.status IN ('queued','running'))
+                ORDER BY b.created DESC LIMIT 1''',(scope,actor)).fetchone()
+        if not row:raise ReplayError('你当前没有等待或分析中的复盘批次。')
+        return self.get(scope,actor,row['id'])
+
     def ready(self):
         with self.store.db() as db:rows=[dict(r) for r in db.execute('SELECT * FROM replay_batches WHERE notified=0')]
         results=[]
@@ -89,6 +99,7 @@ class ReplayBatches:
 
     def cancel(self,scope,actor,batch_id=''):
         batch=self.get(scope,actor,batch_id)
+        if not batch['pending']:raise ReplayError('这个批次已经结束，无需取消。')
         with self.store.db() as db:
             db.execute("UPDATE jobs SET status='cancelled',notified=1,updated=? WHERE batch_id=? AND status IN ('queued','running')",(time.time(),batch['id']))
             db.execute('UPDATE replay_batches SET notified=1 WHERE id=?',(batch['id'],))

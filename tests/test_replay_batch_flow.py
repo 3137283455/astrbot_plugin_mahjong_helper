@@ -27,9 +27,11 @@ class BatchFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('批次 B',e.sent[0].get_plain_text());task=asyncio.create_task(s.run())
             try:
                 await until(lambda:len(c.sent)==2)
-                chain=c.sent[0][1];self.assertEqual(str(chain.chain[0].qq),e.actor);self.assertTrue(any(isinstance(p,Comp.Image) for p in chain.chain))
+                chain=c.sent[0][1];self.assertFalse(any(isinstance(p,Comp.At) for p in chain.chain));self.assertTrue(any(isinstance(p,Comp.Image) for p in chain.chain))
+                self.assertTrue(all(scope=='napcat:FriendMessage:'+e.actor for scope,_ in c.sent))
                 self.assertIn('完整链接可查看每一手',c.sent[1][1].get_plain_text());await asyncio.sleep(.1);self.assertEqual(len(c.sent),2)
-                await s.handle(e,'汇总');self.assertTrue(any(isinstance(p,Comp.Image) for p in e.sent[-2].chain))
+                await s.handle(e,'汇总');self.assertTrue(any(isinstance(p,Comp.Image) for p in c.sent[-2][1].chain))
+                self.assertEqual(c.sent[-2][0],'napcat:FriendMessage:'+e.actor)
                 await s.handle(e,'状态');self.assertIn('成功2',e.sent[-1].get_plain_text())
             finally:
                 task.cancel()
@@ -51,5 +53,18 @@ class BatchFlowTests(unittest.IsolatedAsyncioTestCase):
             sources=await p._recent_replay_sources(Request(),'12105509 2 玉')
             self.assertEqual([s['seat'] for s in sources],[2,1]);self.assertTrue(sources[0]['url'].endswith('abcdefghijklmnop1_a12105509'))
             self.assertEqual(calls,[('12105509',4,2,'12')])
+
+    async def test_cancel_only_active_batch_owned_by_requester(self):
+        with tempfile.TemporaryDirectory() as folder:
+            s=ReplayService(Context(),folder);owner=Request('2994007180');other=Request('3137283455')
+            await s.handle(owner,'批量\nhttps://game.maj-soul.com/1/?paipu=abcdefghijklmnop 西家')
+            batch=s.batches.get(owner.unified_msg_origin,owner.actor)
+            await s.handle(other,'取消')
+            self.assertIn('没有找到你',other.sent[-1].get_plain_text())
+            self.assertEqual(s.batches.get(owner.unified_msg_origin,owner.actor,batch['id'])['pending'],1)
+            await s.handle(owner,'取消')
+            self.assertEqual(s.batches.get(owner.unified_msg_origin,owner.actor,batch['id'])['pending'],0)
+            await s.handle(owner,'取消 '+batch['id'])
+            self.assertIn('已经结束',owner.sent[-1].get_plain_text())
 
 if __name__=='__main__':unittest.main()

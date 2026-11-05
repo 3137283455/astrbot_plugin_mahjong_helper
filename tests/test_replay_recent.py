@@ -2,6 +2,7 @@ import asyncio,importlib.util,json,tempfile,time,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import astrbot.api.message_components as Comp
 from astrbot_plugin_mahjong_helper.replay_core import ReplayStore,ReplayError,parse_url
 from astrbot_plugin_mahjong_helper.replay_pc import PCQueue,LeaseLost
 from astrbot_plugin_mahjong_helper.replay_recent import recent_request,create_recent,recent_sources
@@ -87,10 +88,11 @@ class RecentFlowTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(2):
                 job=q.call('claim',{})['job'];q.call('result',{**job,'report':fixture(2)})
             await s.notify_batches();await s.notify_batches();self.assertEqual(len(c.sent),3)
-            self.assertEqual(str(c.sent[1][1].chain[0].qq),e.actor);chain=c.sent[-1][1]
+            self.assertEqual(c.sent[1][0],'napcat:FriendMessage:'+e.actor);chain=c.sent[-1][1]
+            self.assertFalse(any(isinstance(part,Comp.At) for part in chain.chain))
             self.assertIn('第3位',chain.get_plain_text());self.assertIn('开局西家',chain.get_plain_text())
-            await s.handle(e,'原谱');self.assertIn('paipu=',e.sent[-1].get_plain_text())
-            await s.handle(e,'结果 '+lookup['id']);self.assertIn(reply['batch_id'],e.sent[-1].get_plain_text())
+            await s.handle(e,'原谱');self.assertIn('paipu=',c.sent[-1][1].get_plain_text())
+            await s.handle(e,'结果 '+lookup['id']);self.assertTrue(any(reply['batch_id'] in chain.get_plain_text() for _,chain in c.sent))
 
 class BrowserPage:
     def __init__(self):self.handlers=[];self.urls=[];self.evaluations=[]
