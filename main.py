@@ -873,10 +873,10 @@ class MahjongHelperPlugin(Star):
 
     @filter.llm_tool(name="mahjong_replay")
     async def replay_ai(self, event: AstrMessageEvent, query: str = "帮助"):
-        """雀魂单条/多条牌谱的Mortal4.1b一致率、逐巡链接、分局和批量趋势，异步返回卡片。
+        """雀魂单条/多条牌谱的Mortal4.1b一致率、逐巡链接、分局和批量趋势；批量结果合并转发并附总览网页。
 
         Args:
-            query(string): 单条填链接与开局席位；多条填批量并换行，每行链接+开局席位，最多10份；也可最近 玩家 5、汇总、状态、结果、记录、分歧、分局 南2、取消、重试。缺席位不要猜。仅四麻东南战Mortal4.1b。
+            query(string): 单条填链接与开局席位；多条填批量并换行，每行链接+开局席位，最多10份；也可最近 玩家 5、汇总、状态、结果、记录、分歧、分局 南2、取消、重试。重发只重新发送保存结果，不重新分析；链接查看批次总览网址；原谱加单场编号查原始链接。缺席位不要猜。仅四麻东南战Mortal4.1b。
         """
         if not self._claim_ai_action(event):
             return

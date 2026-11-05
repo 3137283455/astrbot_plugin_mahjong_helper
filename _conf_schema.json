@@ -47,6 +47,16 @@
     "type": "string",
     "default": "/bot/mahjong-replay-worker"
   },
+  "replay_public_url": {
+    "description": "复盘总览网页的公开根地址，例如http://服务器IP:6192；留空关闭。分享链接为随机地址，不公开索引。",
+    "type": "string",
+    "default": ""
+  },
+  "replay_web_port": {
+    "description": "复盘总览只读网页端口；需与公开地址一致并在安全组开放TCP。",
+    "type": "int",
+    "default": 6192
+  },
   "records_limit": {
     "description": "最近对局命令返回的条数（1-20）",
     "type": "int",

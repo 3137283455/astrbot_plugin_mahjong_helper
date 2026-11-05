@@ -83,7 +83,7 @@ class ReplayBatches:
             result=self.get(row['scope'],row['actor'],row['id'])
             if result['pending']:continue
             with self.store.db() as db:
-                changed=db.execute('UPDATE replay_batches SET notified=1 WHERE id=? AND notified=0',(row['id'],)).rowcount
+                changed=db.execute('UPDATE replay_batches SET notified=-1 WHERE id=? AND notified=0',(row['id'],)).rowcount
             if changed:results.append(result)
         return results
 

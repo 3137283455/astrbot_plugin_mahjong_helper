@@ -55,17 +55,17 @@ class ReplayQueueTests(unittest.IsolatedAsyncioTestCase):
             try:
                 await service.started.wait();self.assertEqual(service.store.queue_info(ids[1])['ahead'],1)
                 self.assertEqual(context.sent,[]);service.release.set()
-                await until(lambda:len(context.sent)==3)
+                await until(lambda:len(context.sent)==6)
                 self.assertEqual(service.order,ids);self.assertEqual(service.peak,1)
-                self.assertEqual([scope for scope,_ in context.sent],[event.unified_msg_origin for event in events])
-                for (_,chain),event in zip(context.sent,events):
+                self.assertEqual([scope for scope,_ in context.sent],[event.unified_msg_origin for event in events for _ in range(2)])
+                for (_,chain),event in zip(context.sent[::2],events):
                     mentions=[str(p.qq) for p in chain.chain if isinstance(p,Comp.At)]
                     self.assertEqual(mentions,[event.actor] if event.group else [])
                     self.assertTrue(any(isinstance(p,Comp.Image) for p in chain.chain))
-                await asyncio.sleep(.1);self.assertEqual(len(context.sent),3)
+                await asyncio.sleep(.1);self.assertEqual(len(context.sent),6)
                 # Immediate cached results use the same group/private addressing rule.
                 await service.handle(group,'https://game.maj-soul.com/1/?paipu=abcdefghijklmnop0 南家')
-                self.assertEqual(str(group.sent[-1].chain[0].qq),group.actor)
+                self.assertEqual(str(group.sent[-2].chain[0].qq),group.actor)
             finally:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
@@ -95,7 +95,7 @@ class ReplayQueueTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('雀魂快捷查询',menu[0].get_plain_text());self.assertIn('晴天',song.sent[0].get_plain_text())
                     self.assertLess(time.monotonic()-begin,.5)
                     self.assertIsNotNone(service.process);self.assertIsNone(service.process.returncode)
-                    await until(lambda:len(context.sent)==1)
+                    await until(lambda:len(context.sent)==2)
                     self.assertEqual(str(context.sent[0][1].chain[0].qq),event.actor)
                 finally:
                     task.cancel()

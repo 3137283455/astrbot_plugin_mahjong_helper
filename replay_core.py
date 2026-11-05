@@ -16,6 +16,15 @@ HAND_RE=re.compile(r'^([东南西北ESWN])\s*([一二三四1-4])(?:[局]?(?:[.�
 
 class ReplayError(ValueError):pass
 
+def normalize_control_text(text):
+    text=str(text).strip();tokens=text.split()
+    if not tokens:return text
+    aliases={'查看进度':'状态','查进度':'状态','看进度':'状态'}
+    tokens[0]=aliases.get(tokens[0],tokens[0])
+    if tokens[0] in ('状态','进度','批量状态'):
+        return ' '.join([tokens[0]]+[t for t in tokens[1:] if t not in aliases])
+    return text
+
 def parse_url(value):
     text=str(value).strip().rstrip('，。；;)]}）')
     p=urlsplit(text)
@@ -40,10 +49,10 @@ def parse_url(value):
     return {'kind':'replay','url':canonical,'replay_id':('tenhou:' if key=='log' else 'majsoul:')+ids[0],'seat':seat}
 
 def parse_request(text):
-    text=str(text).strip();match=URL_RE.search(text);source=parse_url(match[0]) if match else None
+    text=normalize_control_text(text);match=URL_RE.search(text);source=parse_url(match[0]) if match else None
     rest=(text[:match.start()]+' '+text[match.end():]).strip() if match else text
     seat=None;hand=None;job='';action='submit';unknown=[]
-    actions={'状态':'status','进度':'status','取消':'cancel','记录':'history','历史':'history','帮助':'help','帮':'help','菜单':'help','分歧':'differences','分局':'hand','详情':'result','结果':'result','讲评':'comment','点评':'comment','导入':'import','重试':'retry'}
+    actions={'状态':'status','进度':'status','取消':'cancel','记录':'history','历史':'history','帮助':'help','帮':'help','菜单':'help','分歧':'differences','分局':'hand','详情':'result','结果':'result','汇总':'result','讲评':'comment','点评':'comment','导入':'import','重试':'retry','重发':'resend','链接':'links','原谱':'source'}
     for token in rest.split():
         if token in ('复盘','分析','牌谱'):continue
         if token in actions:action=actions[token];continue

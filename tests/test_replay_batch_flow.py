@@ -26,10 +26,10 @@ class BatchFlowTests(unittest.IsolatedAsyncioTestCase):
             await s.handle(e,'批量\nhttps://game.maj-soul.com/1/?paipu=abcdefghijklmnop 西家\nhttps://game.maj-soul.com/1/?paipu=abcdefghijklmnop1 南家')
             self.assertIn('批次 B',e.sent[0].get_plain_text());task=asyncio.create_task(s.run())
             try:
-                await until(lambda:len(c.sent)==1)
+                await until(lambda:len(c.sent)==2)
                 chain=c.sent[0][1];self.assertEqual(str(chain.chain[0].qq),e.actor);self.assertTrue(any(isinstance(p,Comp.Image) for p in chain.chain))
-                self.assertIn('完整链接可查看每一手',chain.get_plain_text());await asyncio.sleep(.1);self.assertEqual(len(c.sent),1)
-                await s.handle(e,'汇总');self.assertTrue(any(isinstance(p,Comp.Image) for p in e.sent[-1].chain))
+                self.assertIn('完整链接可查看每一手',c.sent[1][1].get_plain_text());await asyncio.sleep(.1);self.assertEqual(len(c.sent),2)
+                await s.handle(e,'汇总');self.assertTrue(any(isinstance(p,Comp.Image) for p in e.sent[-2].chain))
                 await s.handle(e,'状态');self.assertIn('成功2',e.sent[-1].get_plain_text())
             finally:
                 task.cancel()

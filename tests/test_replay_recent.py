@@ -86,9 +86,10 @@ class RecentFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(c.sent),1);self.assertIn('已取得 玩家 最近2场',c.sent[0][1].get_plain_text())
             for _ in range(2):
                 job=q.call('claim',{})['job'];q.call('result',{**job,'report':fixture(2)})
-            await s.notify_batches();await s.notify_batches();self.assertEqual(len(c.sent),2)
-            chain=c.sent[-1][1];self.assertEqual(str(chain.chain[0].qq),e.actor)
-            self.assertIn('第3位',chain.get_plain_text());self.assertIn('开局西家',chain.get_plain_text());self.assertIn('paipu=',chain.get_plain_text())
+            await s.notify_batches();await s.notify_batches();self.assertEqual(len(c.sent),3)
+            self.assertEqual(str(c.sent[1][1].chain[0].qq),e.actor);chain=c.sent[-1][1]
+            self.assertIn('第3位',chain.get_plain_text());self.assertIn('开局西家',chain.get_plain_text())
+            await s.handle(e,'原谱');self.assertIn('paipu=',e.sent[-1].get_plain_text())
             await s.handle(e,'结果 '+lookup['id']);self.assertIn(reply['batch_id'],e.sent[-1].get_plain_text())
 
 class BrowserPage:
