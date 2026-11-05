@@ -5,7 +5,7 @@ from .formatters import level_text, percent
 from .koromo_views import FIELDS, LABELS, _value
 from .stat_card import _font, _fit
 
-CARD_REVISION = 1
+CARD_REVISION = 2
 BG = '#101720'
 PANEL = '#1B2633'
 INK = '#F2F5F8'
@@ -24,9 +24,8 @@ def metric_rows(mode, section, stats, ext):
         total = sum(rates)
         for i in range(4):
             count = rates[i] if i < len(rates) else None
-            value = ('不适用' if i >= mode else
-                     f'{percent(count / total)}  /  {int(count):,} 场' if count is not None and total else '—')
-            rows.append((f'{i+1}位率 / 次数', value, GOLD if i == 0 else RED if i == mode-1 else TEAL))
+            value = ('不适用' if i >= mode else percent(count / total) if count is not None and total else '—')
+            rows.append((f'{i+1}位率', value, GOLD if i == 0 else RED if i == mode-1 else TEAL))
         rows.append(('被飞率', percent(stats.get('negative_rate')), RED))
     if section == '和铳':
         for heading, keys in [('和了', ['立直和了', '副露和了', '默听和了']),

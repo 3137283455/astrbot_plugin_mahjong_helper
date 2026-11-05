@@ -5,6 +5,11 @@ from astrbot_plugin_mahjong_helper.player_card import BG,metric_rows,render_play
 from astrbot_plugin_mahjong_helper.stat_card import CARD_SECTIONS
 
 class PlayerCardTests(unittest.TestCase):
+    def test_fractional_rank_rates_are_not_reported_as_zero_games(self):
+        rows=metric_rows(4,'基本',{'count':100,'rank_rates':[.27,.23,.24,.26]}, {})
+        self.assertEqual(rows[2][:2],('1位率','27.0%'))
+        self.assertEqual(rows[5][:2],('4位率','26.0%'))
+
     def test_same_metrics_align_across_three_and_four(self):
         stats={'count':10,'rank_rates':[4,3,3],'avg_rank':1.9}
         a=metric_rows(3,'基本',stats,{})
