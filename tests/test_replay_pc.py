@@ -54,4 +54,46 @@ class PCQueueTests(unittest.TestCase):
             with opener.open(req) as response:self.assertTrue(json.load(response)['online'])
         finally:gateway.close()
 
+    def test_pipeline_slots_resume_and_independent_results(self):
+        self.queue=PCQueue(self.store,'desktop',{'pipeline':True,'pipeline_max_fetching':2,'pipeline_fetching_lease':300})
+        a=self.create();b=self.create('10002');c=self.create('10003')
+        first=self.claim()
+        self.assertIsNone(self.claim())  # Browser submission stays serial.
+        self.queue.call('progress',{**first,'phase':'fetching'})
+        second=self.claim();self.assertEqual(second['id'],b['id'])
+        self.assertTrue(self.queue.call('resume',second)['keep'])
+        self.queue.call('progress',{**second,'phase':'uploading'})
+        self.assertIsNone(self.claim())  # Both background slots occupied.
+        with self.store.db() as db:
+            for row in db.execute('SELECT lease_until FROM jobs WHERE status=\'running\''):
+                self.assertGreater(row['lease_until']-time.time(),290)
+        self.queue.call('result',{**second,'report':fixture()})
+        self.assertEqual(self.store.get(b['scope'],b['actor'])['status'],'done')
+        self.assertEqual(self.store.get(a['scope'],a['actor'])['status'],'running')
+        self.assertEqual(self.claim()['id'],c['id'])
+        self.queue.call('result',{**first,'report':fixture()})
+        self.assertEqual(self.store.get(a['scope'],a['actor'])['status'],'done')
+
+    def test_pipeline_cancellation_does_not_cancel_other_job(self):
+        self.queue=PCQueue(self.store,'desktop',{'pipeline':True})
+        a=self.create();b=self.create('10002')
+        first=self.claim();self.queue.call('progress',{**first,'phase':'fetching'})
+        second=self.claim();self.store.update(a['id'],status='cancelled',notified=1)
+        self.assertFalse(self.queue.call('progress',{**first,'phase':'fetching'})['keep'])
+        self.assertTrue(self.queue.call('resume',second)['keep'])
+        with self.assertRaises(LeaseLost):self.queue.call('result',{**first,'report':fixture()})
+        self.queue.call('result',{**second,'report':fixture()})
+        self.assertEqual(self.store.get(b['scope'],b['actor'])['status'],'done')
+
+    def test_pipeline_gateway_loads_config_and_old_config_stays_serial(self):
+        token=secrets.token_urlsafe(32);config=Path(self.temp.name)/'pc_worker.json'
+        config.write_text(json.dumps({'token':token,'worker_id':'desktop','port':0,'pipeline':True,'pipeline_max_fetching':2,'pipeline_fetching_lease':300}))
+        gateway=PCGateway(self.store,config)
+        try:
+            self.assertTrue(gateway.queue.pipeline)
+            self.assertEqual(gateway.queue.max_fetching,2)
+            self.assertEqual(gateway.queue.fetching_lease,300)
+            self.assertFalse(PCQueue(self.store,'desktop').pipeline)
+        finally:gateway.server.server_close()
+
 if __name__=='__main__':unittest.main()

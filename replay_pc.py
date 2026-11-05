@@ -8,11 +8,16 @@ from .replay_recent import recent_sources
 from .replay_batch import ReplayBatches
 
 LEASE_SECONDS=90
+PIPELINE_FETCHING_PHASES=('fetching','uploading')
 
 class LeaseLost(ReplayError):pass
 
 class PCQueue:
-    def __init__(self,store,worker_id):
+    def __init__(self,store,worker_id,config=None):
+        config=config or {}
+        self.pipeline=bool(config.get('pipeline',False))
+        self.max_fetching=max(1,int(config.get('pipeline_max_fetching',4)))
+        self.fetching_lease=max(LEASE_SECONDS,int(config.get('pipeline_fetching_lease',300)))
         self.store=store;self.worker_id=worker_id;self.batches=ReplayBatches(store)
         with store.db() as db:
             columns={r['name'] for r in db.execute('PRAGMA table_info(jobs)')}
@@ -47,8 +52,14 @@ class PCQueue:
             self._seen(db,str(payload.get('phase','online'))[:40])
             if action=='claim':
                 db.execute("UPDATE jobs SET status='queued' WHERE status='running' AND lease_until<?",(now,))
-                active=db.execute("SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone()
-                if active:return {'job':None}
+                if self.pipeline:
+                    active=db.execute("SELECT 1 FROM jobs WHERE status='running' AND phase NOT IN ('fetching','uploading') LIMIT 1").fetchone()
+                    if active:return {'job':None}
+                    slots=db.execute("SELECT COUNT(*) FROM jobs WHERE status='running' AND phase IN ('fetching','uploading')").fetchone()[0]
+                    if slots>=self.max_fetching:return {'job':None}
+                else:
+                    active=db.execute("SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone()
+                    if active:return {'job':None}
                 row=db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created,rowid LIMIT 1").fetchone()
                 if not row:return {'job':None}
                 db.execute("UPDATE jobs SET status='running',lease_token=?,lease_until=?,worker_id=?,phase='starting',attention_notified=0,updated=? WHERE id=?",(secrets.token_urlsafe(24),now+LEASE_SECONDS,self.worker_id,now,row['id']))
@@ -57,7 +68,10 @@ class PCQueue:
             job=self._owned(db,payload)
             if job['status'] in ('done','failed','manual','cancelled'):return {'status':job['status'],'keep':False}
             if action=='resume':
-                other=db.execute("SELECT 1 FROM jobs WHERE status='running' AND id!=? AND lease_until>?",(job['id'],now)).fetchone()
+                if self.pipeline:
+                    other=db.execute("SELECT 1 FROM jobs WHERE status='running' AND id!=? AND lease_until>? AND phase NOT IN ('fetching','uploading')",(job['id'],now)).fetchone()
+                else:
+                    other=db.execute("SELECT 1 FROM jobs WHERE status='running' AND id!=? AND lease_until>?",(job['id'],now)).fetchone()
                 if other:raise LeaseLost('另一任务正在处理，旧租约不再续接。')
                 if job['status'] not in ('queued','running'):raise LeaseLost('任务不可恢复。')
                 db.execute("UPDATE jobs SET status='running' WHERE id=?",(job['id'],))
@@ -67,7 +81,8 @@ class PCQueue:
                 if remote and not TASK_RE.fullmatch(remote):raise ReplayError('无效的报告编号。')
                 phase=str(payload.get('phase') or job['phase'])
                 if phase not in ('starting','browser','verification','submitted','fetching','uploading','resolving','records'):phase='browser'
-                db.execute('UPDATE jobs SET lease_until=?,phase=?,remote_task=?,updated=? WHERE id=?',(now+LEASE_SECONDS,phase,remote,now,job['id']))
+                lease=self.fetching_lease if (self.pipeline and phase in PIPELINE_FETCHING_PHASES) else LEASE_SECONDS
+                db.execute('UPDATE jobs SET lease_until=?,phase=?,remote_task=?,updated=? WHERE id=?',(now+lease,phase,remote,now,job['id']))
                 return {'keep':True,'status':'running','job':self.public(dict(db.execute('SELECT * FROM jobs WHERE id=?',(job['id'],)).fetchone()))}
             if action=='fail':
                 db.execute("UPDATE jobs SET status='failed',error=?,lease_until=0,updated=? WHERE id=?",(str(payload.get('message','电脑工作端分析失败'))[:350],now,job['id']))
@@ -106,7 +121,7 @@ class PCGateway:
     def __init__(self,store,config_path):
         config=json.loads(Path(config_path).read_text(encoding='utf-8'))
         self.token=config['token'];assert len(self.token)>=32
-        self.queue=PCQueue(store,config['worker_id'])
+        self.queue=PCQueue(store,config['worker_id'],config)
         queue=self.queue;token=self.token
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
