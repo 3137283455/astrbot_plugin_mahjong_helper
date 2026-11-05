@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_ai_entry import Event, plugin
 from astrbot_plugin_mahjong_helper.koromo_views import PlayerQuery, parse_player_query
@@ -29,6 +30,40 @@ class KoromoStub:
 
 
 class QueryFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_image_queries_both_modes_with_matching_filters(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=plugin(d)
+            p.koromo=KoromoStub({3:{'nickname':'玩家','count':10},4:{'nickname':'玩家','count':20}})
+            with patch('astrbot_plugin_mahjong_helper.main.render_player_card') as render:
+                results=[r async for r in p._query_player_view(Event(),parse_player_query('12105509','玉','30天'))]
+            self.assertEqual(len(results),1)
+            panels=render.call_args.args[3]
+            self.assertEqual(panels[3]['stats']['count'],10)
+            self.assertEqual(panels[4]['stats']['count'],20)
+            self.assertEqual({c[1]:c[2][0] for c in p.koromo.calls},{3:'24.23',4:'12.11'})
+            self.assertEqual(p.koromo.calls[0][2][1],p.koromo.calls[1][2][1])
+
+    async def test_one_failed_panel_does_not_hide_other_mode(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=plugin(d)
+            class Partial(KoromoStub):
+                async def player_stats(self,uid,mode,*args):
+                    if mode==4:raise MajsoulApiError('暂不可用')
+                    return {'nickname':'玩家','count':10}
+            p.koromo=Partial({})
+            with patch('astrbot_plugin_mahjong_helper.main.render_player_card') as render:
+                results=[r async for r in p._query_player_view(Event(),parse_player_query('12105509'))]
+            self.assertEqual(len(results),1)
+            panels=render.call_args.args[3]
+            self.assertEqual(panels[3]['stats']['count'],10)
+            self.assertTrue(panels[4]['error'])
+
+    async def test_both_empty_image_returns_clear_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=plugin(d);p.koromo=KoromoStub({3:{'count':0},4:{'count':0}})
+            results=[r async for r in p._query_player_view(Event(),parse_player_query('12105509'))]
+            self.assertIn('四麻、三麻都没有',results[0].get_plain_text())
+
     async def test_unspecified_mode_tries_four_then_three_with_same_uid_and_filters(self):
         with tempfile.TemporaryDirectory() as d:
             p = plugin(d)

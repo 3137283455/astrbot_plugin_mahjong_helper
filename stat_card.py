@@ -162,44 +162,11 @@ def render_stats_card(
     path: Path, uid: str, mode: int, section: str, stats: dict,
     extended: dict | None = None, room: str = "", period: str = "",
 ) -> Path:
+    from .player_card import render_player_card
     if section not in CARD_SECTIONS:
         raise ValueError(f"不支持卡片栏目：{section}")
-    ext = extended or {}
-    if section == "顺位":
-        body_height = max(460, len(stats.get("rank_rates") or []) * 125)
-    elif section == "和铳":
-        body_height = 900
-    else:
-        excluded = {
-            "基本": 2, "立直": 3, "更多": 3, "血统": 3,
-        }[section]
-        count = sum(ext.get(key) is not None for key in FIELDS[section]) - excluded
-        count += 1 if section == "基本" else 0
-        body_height = max(300, ((max(count, 0) + 1) // 2) * 110)
-    height = 625 + body_height + 100
-    image = Image.new("RGB", (WIDTH, height), PAPER)
-    draw = ImageDraw.Draw(image)
-    _head(draw, str(stats.get("nickname") or uid), uid, mode, section, room, period)
-    draw.text((365, 276), _fit(draw, level_text(stats.get("level")), _font(27), 560),
-              font=_font(27), fill=MUTED)
-    draw.text((WIDTH - 380, 276), f"{stats.get('count', 0)} 场记录",
-              font=_font(27), fill=MUTED)
-    metrics = _highlights(mode, section, stats, ext)
-    for i, (label, value, color) in enumerate(metrics):
-        _metric(draw, 76 + i * 424, 330, 402, label, value, color)
-    draw.text((92, 542), "详细数据", font=_font(35, True), fill=INK)
-    draw.line((92, 603, 1308, 603), fill="#DCE6E2", width=3)
-    if section == "顺位":
-        _draw_rank(draw, stats, 645)
-    elif section == "和铳":
-        _draw_distribution(draw, ext, 643)
-    else:
-        _draw_fields(draw, section, stats, ext, 637)
-    draw.text((92, height - 72), "数据来源：牌谱屋 · 统计结果以当前筛选为准",
-              font=_font(25), fill=MUTED)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, "PNG", optimize=True)
-    return path
+    return render_player_card(path, uid, section,
+                              {mode: {'stats': stats, 'extended': extended}}, room, period)
 
 
 def _menu_header(draw, title: str, subtitle: str):

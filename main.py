@@ -29,6 +29,7 @@ from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data,quick_gro
 from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
 from .replay_bridge import ReplayService, REPLAY_INSTRUCTIONS
+from .player_card import CARD_REVISION as PLAYER_CARD_REVISION, render_player_card
 from .formatters import (
     format_record,
     format_records,
@@ -1340,6 +1341,10 @@ class MahjongHelperPlugin(Star):
 
     async def _query_player_view(self, event: AstrMessageEvent, parsed: PlayerQuery):
         """Only an unspecified mode may fall back from four to three players."""
+        if parsed.section in CARD_SECTIONS and not parsed.text and not parsed.mode_explicit and self.state_dir:
+            async for result in self._query_player_dual_card(event, parsed):
+                yield result
+            return
         automatic = parsed.mode == 4 and not parsed.mode_explicit
         try:
             async for result in self._query_player_view_mode(event, parsed):
@@ -1355,6 +1360,55 @@ class MahjongHelperPlugin(Star):
                 yield result
         except PlayerDataMissing:
             yield event.plain_result("四麻、三麻都没有查到战绩数据，仅收录金之间及以上公开对局。")
+
+    async def _query_player_dual_card(self, event, parsed):
+        """Fetch both modes concurrently; a failed panel cannot hide the other."""
+        try:
+            try:
+                uid, _ = await self._resolve_target(event, parsed.player, 4)
+            except PlayerDataMissing:
+                uid, _ = await self._resolve_target(event, parsed.player, 3)
+            _, _, _, api = self._ready()
+            since = int((time.time() - parsed.days * 86400) * 1000) if parsed.days else None
+            period = f'近{parsed.days}天' if parsed.days else ''
+
+            async def fetch(mode):
+                stats, ext = await asyncio.gather(
+                    api.player_stats(uid, mode, room_modes(mode, parsed.room), since),
+                    api.extended_stats(uid, mode, room_modes(mode, parsed.room), since),
+                    return_exceptions=True,
+                )
+                if isinstance(stats, Exception):
+                    return {'stats': None, 'error': '该模式接口暂时不可用，请稍后重试'}
+                if not stats or stats.get('count') in (0, '0'):
+                    return {'stats': None}
+                return {'stats': stats, 'extended': {} if isinstance(ext, Exception) else ext}
+
+            results = await asyncio.gather(fetch(3), fetch(4))
+            panels = dict(zip((3, 4), results))
+            if not any(data.get('stats') for data in results):
+                message = ('牌谱屋接口暂时不可用，请稍后重试。' if any(data.get('error') for data in results)
+                           else '四麻、三麻都没有查到战绩数据，仅收录金之间及以上公开对局。')
+                yield event.plain_result(message)
+                return
+            payload = json.dumps([PLAYER_CARD_REVISION, uid, parsed.section, parsed.room, period, panels],
+                                 sort_keys=True, ensure_ascii=False, default=str)
+            digest = hashlib.sha256(payload.encode('utf-8')).hexdigest()[:20]
+            path = self.state_dir / 'cards' / f'{uid}-dual-{digest}.png'
+            try:
+                if not path.is_file():
+                    await asyncio.to_thread(render_player_card, path, uid, parsed.section, panels, parsed.room, period)
+                yield event.chain_result([Comp.Image.fromFileSystem(str(path))])
+            except Exception:
+                logger.exception('双模式卡片生成失败，改用文字输出')
+                lines = [format_view(uid, mode, parsed.section, data['stats'], data.get('extended'), parsed.room, period)
+                         if data.get('stats') else f'{"三麻" if mode == 3 else "四麻"}：'+data.get('error', '暂无公开战绩')
+                         for mode, data in panels.items()]
+                yield event.plain_result('\n\n'.join(lines))
+        except PlayerDataMissing:
+            yield event.plain_result('四麻、三麻都没有查到该玩家，仅收录金之间及以上公开对局。')
+        except Exception as exc:
+            yield event.plain_result(self._error_text(exc))
 
     async def _query_player_view_mode(self, event: AstrMessageEvent, parsed: PlayerQuery):
         """Shared read-only player view for commands and native AI tools."""
@@ -1398,7 +1452,7 @@ class MahjongHelperPlugin(Star):
                     raise PlayerDataMissing(uid)
                 if canonical in CARD_SECTIONS and not plain and self.state_dir:
                     try:
-                        payload = json.dumps([uid, mode, canonical, room, period, stats, extended],
+                        payload = json.dumps([PLAYER_CARD_REVISION, uid, mode, canonical, room, period, stats, extended],
                                              sort_keys=True, ensure_ascii=False, default=str)
                         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
                         path = self.state_dir / "cards" / f"{uid}-{digest}.png"
