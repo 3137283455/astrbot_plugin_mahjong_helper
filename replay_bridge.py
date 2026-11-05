@@ -6,15 +6,17 @@ from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 import astrbot.api.message_components as Comp
-from .replay_core import ReplayError,ReplayStore,parse_request,summarize,FORM_URL,TASK_RE
-from .replay_card import render_replay_card
+from .replay_core import ReplayError,ReplayStore,parse_request,summarize,FORM_URL,TASK_RE,URL_RE,hand_name,report_url
+from .replay_card import render_replay_card,render_batch_card
+from .replay_batch import ReplayBatches,parse_sources
 
-REPLAY_INSTRUCTIONS='''单牌谱复盘工具 mahjong_replay：用户提供雀魂牌谱链接、要求分析某一场或查看AI一致率时使用。
+REPLAY_INSTRUCTIONS='''电脑批量复盘V2。单牌谱复盘工具 mahjong_replay：用户提供雀魂牌谱链接、要求分析某一场或查看AI一致率时使用。
 query使用“完整链接 开局南家”等参数；缺少分析席位时不要猜测，由工具询问。
 “复盘状态、复盘结果、复盘记录、分歧、分局南二、取消复盘”等也交给该工具。
 当前仅四麻东南战。聚合牌风锐评仍使用mahjong_review；这两个工具用途不同。
 复盘是异步任务，工具会直接发送进度和结果卡片。不要编造一致率、失误、点数损失或重复提交。
 若上游要求人工验证，说明需要用户手动生成报告再导入，不声称分析已成功。'''
+REPLAY_INSTRUCTIONS+='\n用户提供多条链接时，query填“批量\\n链接1 开局西家\\n链接2 开局南家”（实际换行），一次调用，不要逐个重复调用。可用汇总、状态、取消加批次编号。最近N场填“最近 玩家UID或完整昵称 5”，是否能取得列表由工具核实，不编造链接。'
 
 HELP='''🀄 单牌谱复盘（四麻东南战）
 /复盘 牌谱链接 开局南家
@@ -24,6 +26,9 @@ HELP='''🀄 单牌谱复盘（四麻东南战）
 /复盘 取消　/复盘 重试
 以上默认本人在当前会话的最近任务，也可在末尾加任务编号。
 /复盘 Mortal报告链接：导入在线站生成的报告。
+/复盘 批量：下一行起每行“牌谱链接 开局西家”；最多10份。
+/复盘 汇总　/复盘 状态：查看最近批次汇总或进度。
+/复盘 最近 玩家 5：尝试取得最近四麻东南牌谱；接口受限时明确提示。
 后台按提交顺序处理；完成后群聊@发起人、私聊直接发送，不占用其他命令。
 同样支持 /雀 复盘；不支持三麻、东风战。
 一致率只是与模型决策的吻合程度，不等于实战胜率。'''
@@ -32,7 +37,9 @@ STATUS={'queued':'排队中','running':'正在分析','done':'已完成','manual
 class ReplayService:
     def __init__(self,context,folder,config=None):
         self.context=context;self.store=ReplayStore(Path(folder)/'replays');self.config=config or {}
-        self.process=None;self.current_id='';self.wake=asyncio.Event();self.store.recover()
+        self.batches=ReplayBatches(self.store);self.recent_loader=None
+        self.process=None;self.current_id='';self.wake=asyncio.Event();self.pc_gateway=None;self.pc_error=''
+        if self.config.get('replay_backend','server')!='pc':self.store.recover()
 
     async def db_call(self,name,*args,**kwargs):
         return await asyncio.to_thread(getattr(self.store,name),*args,**kwargs)
@@ -52,12 +59,17 @@ class ReplayService:
 
     async def describe(self,job):
         info=await self.db_call('queue_info',job['id']) if job['status']=='queued' else None
-        return self.status_text(job,info)
+        text=self.status_text(job,info)
+        if self.config.get('replay_backend','server')=='pc' and job['status'] in ('queued','running'):
+            online=await asyncio.to_thread(self.pc_gateway.queue.status) if self.pc_gateway else {'online':False}
+            if not online['online']:text+='\n电脑工作端当前离线，任务已保留，连接恢复后继续。'
+        return text
 
     async def handle(self,event,text):
         event.should_call_llm(True)
         try:
-            if len(text)>1800:raise ReplayError('复盘参数太长，请只发完整链接和开局席位。')
+            if len(text)>6000:raise ReplayError('复盘参数太长，每批最多10条完整链接。')
+            if await self.handle_batches(event,text):return
             request=parse_request(text);scope=event.unified_msg_origin;actor=str(event.get_sender_id())
             action=request['action'];source=request['source']
             if not text.strip() or action=='help':
@@ -102,6 +114,8 @@ class ReplayService:
 
     def status_text(self,job,queue_info=None):
         result=f"复盘 #{job['id']} · {STATUS[job['status']]}"
+        if job['status']=='running' and job.get('phase')=='verification':
+            return result+'\n电脑工作端正在等待人工验证；请管理员在专用浏览器完成验证，随后自动继续，无需重发任务。'
         if job['status'] in ('queued','running'):
             if queue_info is not None:result+=f"\n前方还有 {queue_info['ahead']} 个任务（含正在分析），按提交顺序处理。"
             group=job.get('delivery')=='group' or (not job.get('delivery') and ':GroupMessage:' in job['scope'])
@@ -113,13 +127,65 @@ class ReplayService:
 
     def result_chain(self,job,view='result',hand=None):
         report=json.loads(Path(job['report_path']).read_text(encoding='utf-8'))
-        data=summarize(report,job['seat'],job['model'])
+        data=summarize(report,job['seat'])
         if hand is not None and not any(h['kyoku']==hand for h in data['hands']):raise ReplayError('这份牌谱没有该局，请先查看总览里的分局列表。')
         card=render_replay_card(data,self.store.folder/'cards'/f"{job['id']}-{view}-{hand}.png",job['id'],view,hand)
         chain=MessageChain().message(f"🀄 复盘 #{job['id']}\n").file_image(str(card))
         if TASK_RE.fullmatch(str(job.get('remote_task',''))):
-            chain.message('\n完整逐巡复盘：https://mjai.ekyu.moe/killerducky/?data=/report/'+job['remote_task']+'.json')
+            chain.message('\n完整逐巡复盘：'+report_url(job))
+            differences=[d for d in data['differences'] if hand is None or d['kyoku']==hand][:8 if view!='result' else 3]
+            for d in differences:
+                chain.message(f"\n{hand_name(d['kyoku'],d['honba'])} 第{d['turn']}巡："+report_url(job,d['hand_index'],d['ply']))
+        chain.message('\n输入链接：'+job['url'])
         return chain
+
+    def batch_chain(self,batch):
+        data=self.batches.summary(batch);path=render_batch_card(data,self.store.folder/'cards'/(batch['id']+'.png'))
+        chain=MessageChain().message('🀄 多牌谱复盘 '+batch['id']+'\n').file_image(str(path))
+        for game in data['games']:
+            link=report_url(game) or game['url'];status=f"{game['accordance']:.2%}" if 'accordance' in game else STATUS.get(game['status'],game['status'])
+            chain.message(f"\n{game['position']}. {status} · 单场 #{game['job_id']}\n"+link)
+        chain.message('\n单场详情：/复盘 分歧 单场编号；完整链接可查看每一手。')
+        return chain
+
+    async def handle_batches(self,event,text):
+        scope=event.unified_msg_origin;actor=str(event.get_sender_id());tokens=text.strip().split();first=tokens[0] if tokens else ''
+        if first=='最近':
+            if not self.recent_loader:raise ReplayError('最近对局入口尚未就绪，请先用 /复盘 批量 提供完整链接。')
+            await event.send(event.plain_result('正在查询最近四麻东南对局；其他命令照常使用。'))
+            try:sources=await self.recent_loader(event,' '.join(tokens[1:]))
+            except Exception as exc:raise ReplayError(str(exc)+'\n暂未提交复盘任务；可先用 /复盘 批量 提供链接。') from exc
+            batch=await asyncio.to_thread(self.batches.create,scope,actor,sources,self.delivery(event),'最近对局 · '+' '.join(tokens[1:]),'time')
+            self.wake.set();await event.send(event.plain_result(f"最近对局已加入批次 {batch['id']}，按时间从早到晚分析，共{len(batch['items'])}场。完成后发送趋势汇总。"))
+            if not batch['pending']:await event.send(self.addressed(batch,await asyncio.to_thread(self.batch_chain,batch)))
+            return True
+        if first=='批量' or len(URL_RE.findall(text))>1:
+            sources=parse_sources(text);batch=await asyncio.to_thread(self.batches.create,scope,actor,sources,self.delivery(event));self.wake.set()
+            if not batch['pending']:await event.send(self.addressed(batch,await asyncio.to_thread(self.batch_chain,batch)))
+            else:await event.send(event.plain_result(f"批次 {batch['id']} 已加入后台队列，共{len(batch['items'])}份（重复链接已合并）。\n完成后@你发送汇总卡片；/复盘 状态 看进度，/复盘 取消 取消此批。其他功能照常使用。" if self.delivery(event)=='group' else f"批次 {batch['id']} 已入队，共{len(batch['items'])}份；完成后在本私聊发送汇总。/复盘 状态 查进度。"))
+            return True
+        match=re.search(r'\b[Bb][0-9a-fA-F]{12}\b',text);batch_id='B'+match[0][1:].lower() if match else ''
+        actions={'汇总':'结果','批量状态':'状态','批量结果':'结果','批量取消':'取消'};action=actions.get(first,first)
+        if action not in ('结果','状态','取消'):return False
+        if not batch_id and (len(tokens)>1 or not await asyncio.to_thread(self.batches.latest_is_batch,scope,actor)):return False
+        batch=await asyncio.to_thread(self.batches.get,scope,actor,batch_id)
+        if action=='取消':
+            await asyncio.to_thread(self.batches.cancel,scope,actor,batch['id'])
+            if self.current_id in {j['id'] for j in batch['items']}:self.stop_process()
+            await event.send(event.plain_result(f"批次 {batch['id']} 的未结束任务已取消；已完成报告仍可用 /复盘 汇总 查看。"));return True
+        if action=='状态':
+            message=f"批次 {batch['id']}：成功{batch['done']}，等待/分析{batch['pending']}，未完成{batch['failed']}，共{len(batch['items'])}份。"
+            if any(j.get('phase')=='verification' for j in batch['items']):message+='\n正在等待管理员在电脑专用浏览器完成验证。'
+            if self.config.get('replay_backend')=='pc' and batch['pending']:
+                status=await asyncio.to_thread(self.pc_gateway.queue.status) if self.pc_gateway else {'online':False}
+                if not status['online']:message+='\n电脑工作端离线；任务已保留，连接恢复后自动继续。'
+            await event.send(event.plain_result(message));return True
+        await event.send(self.addressed(batch,await asyncio.to_thread(self.batch_chain,batch)));return True
+
+    async def notify_batches(self):
+        for batch in await asyncio.to_thread(self.batches.ready):
+            try:await self.context.send_message(batch['scope'],self.addressed(batch,await asyncio.to_thread(self.batch_chain,batch)))
+            except Exception:logger.exception('批量复盘通知失败，可通过 /复盘 汇总 读取')
 
     async def send_result(self,event,job,view='result',hand=None):
         chain=await asyncio.to_thread(self.result_chain,job,view,hand)
@@ -185,8 +251,11 @@ class ReplayService:
         except Exception:logger.exception('复盘通知发送失败，可通过 /复盘 结果 手动读取')
 
     async def run(self):
+        if self.config.get('replay_backend','server')=='pc':
+            await self.run_pc();return
         try:
             while True:
+                await self.notify_batches()
                 job=await self.db_call('next')
                 if not job:
                     pending=await self.db_call('unnotified')
@@ -207,3 +276,28 @@ class ReplayService:
                 if completed['status'] in ('done','failed','manual') and not completed['notified']:
                     await self.notify(completed)
         finally:self.stop_process()
+
+    async def run_pc(self):
+        from .replay_pc import PCGateway
+        try:
+            while True:
+                await self.notify_batches()
+                if self.pc_gateway is None:
+                    try:
+                        gateway=await asyncio.to_thread(PCGateway,self.store,self.store.folder/'pc_worker.json')
+                        gateway.start();self.pc_gateway=gateway;self.pc_error=''
+                        logger.info('Mortal电脑工作端网关已启动，仅监听本机')
+                    except Exception:
+                        if not self.pc_error:logger.exception('Mortal电脑工作端网关暂不可用')
+                        self.pc_error='电脑工作端网关暂不可用'
+                        await asyncio.sleep(5);continue
+                for job in await self.db_call('unnotified'):await self.notify(job)
+                for job in await asyncio.to_thread(self.pc_gateway.queue.attention):
+                    try:
+                        message=f"复盘 #{job['id']} 需要管理员在电脑工作端的专用浏览器完成验证。\n任务已保留，验证通过后自动继续，其他机器人功能照常使用。"
+                        await self.context.send_message(job['scope'],self.addressed(job,MessageChain().message(message)))
+                    except Exception:logger.exception('电脑工作端验证提醒发送失败')
+                await asyncio.sleep(1)
+        finally:
+            if self.pc_gateway is not None:
+                await asyncio.to_thread(self.pc_gateway.close);self.pc_gateway=None

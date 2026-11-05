@@ -1,0 +1,5 @@
+private/
+runtime/
+logs/
+status.json
+*.lock

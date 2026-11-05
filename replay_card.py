@@ -49,3 +49,40 @@ def render_replay_card(summary,output,job_id,view='result',hand=None):
     text(60,height-42,'详单：/复盘 分歧    分局：/复盘 分局 南2    记录：/复盘 记录',23,MUTED)
     output=Path(output);output.parent.mkdir(parents=True,exist_ok=True);image.save(output)
     return output
+
+def render_batch_card(data,output):
+    width=1400;height=780+len(data['games'])*77
+    image=Image.new('RGB',(width,height),BG);draw=ImageDraw.Draw(image)
+    def text(x,y,value,size=28,color=TEXT,bold=False,w=1250):
+        font=_font(size,bold);draw.text((x,y),_fit(draw,str(value),font,w),font=font,fill=color)
+    draw.rounded_rectangle((40,35,1360,200),radius=24,fill=PANEL)
+    text(70,62,'多牌谱复盘 · 一致率趋势',44,bold=True)
+    text(70,130,f"Mortal {data['model']} · {data['id']} · 成功 {data['done']} / {len(data['games'])}",28,MUTED)
+    accord=f"{data['accordance']:.2%}" if data['accordance'] is not None else '暂无成功报告'
+    text(65,230,'汇总一致率  '+accord,40,TEAL,True)
+    text(65,290,f"一致 {data['matches']} / 评估决策 {data['total']}；等待 {data['pending']}，未完成 {data['failed']}",27,MUTED)
+    x0,y0,x1,y1=110,370,1300,590
+    for rate in (0,25,50,75,100):
+        y=y1-(y1-y0)*rate/100;draw.line((x0,y,x1,y),fill='#324353',width=1);text(52,y-15,str(rate),21,MUTED,w=55)
+    previous=None;count=max(1,len(data['games'])-1)
+    for i,game in enumerate(data['games']):
+        x=x0+(x1-x0)*i/count;text(x-8,y1+12,str(game['position']),22,MUTED,w=40)
+        if 'accordance' not in game:previous=None;continue
+        y=y1-(y1-y0)*game['accordance']
+        if previous:draw.line((*previous,x,y),fill=TEAL,width=4)
+        draw.ellipse((x-6,y-6,x+6,y+6),fill=GOLD);previous=(x,y)
+    text(65,645,(data.get('label','')+'；按对局时间从早到晚展示。') if data.get('ordered_by')=='time' else '按链接提交顺序展示；各场指定席位，未推断为同一玩家。',25,MUTED)
+    text(65,690,'序号 / 席位',25,MUTED);text(450,690,'一致 / 评估',25,MUTED);text(850,690,'一致率',25,MUTED);text(1110,690,'变化',25,MUTED)
+    previous=None
+    for i,game in enumerate(data['games']):
+        y=735+i*77;draw.rounded_rectangle((50,y-6,1350,y+61),radius=10,fill=PANEL)
+        seat='东南西北'[game['seat']]+'家' if type(game.get('seat')) is int else '报告席位'
+        text(70,y,f"{game['position']:02d} · {seat}",29)
+        if 'accordance' in game:
+            text(450,y,f"{game['matches']} / {game['total']}",29,TEAL)
+            text(850,y,f"{game['accordance']:.2%}",29,TEAL)
+            delta='—' if previous is None else f"{(game['accordance']-previous)*100:+.2f}pp"
+            text(1110,y,delta,28,GOLD,w=210);previous=game['accordance']
+        else:text(450,y,{'queued':'排队中','running':'分析中','failed':'失败','manual':'需验证','cancelled':'已取消'}.get(game['status'],game['status']),28,MUTED)
+    text(65,height-40,'汇总按决策数加权；变化以百分点表示，失败记录不计入汇总。',24,MUTED)
+    output=Path(output);output.parent.mkdir(parents=True,exist_ok=True);image.save(output);return output

@@ -10,7 +10,7 @@ FORM_URL='https://mjai.ekyu.moe/zh-cn.html'
 HOSTS={'game.maj-soul.com','game.maj-soul.net','www.maj-soul.net','www.maj-soul.com','mahjongsoul.game.yo-star.com','game.mahjongsoul.com','mahjongsoul.com','www.mahjongsoul.com','tenhou.net'}
 SEATS={'东':0,'东家':0,'东起':0,'起家东家':0,'南':1,'南家':1,'南起':1,'西':2,'西家':2,'西起':2,'北':3,'北家':3,'北起':3}
 SEAT_NAMES=('东起','南起','西起','北起')
-URL_RE=re.compile(r'https://[^\s<>"`]+',re.I)
+URL_RE=re.compile(r'https://[^\s<>"`\u3000-\u9fff]+',re.I)
 TASK_RE=re.compile(r'^[a-zA-Z0-9_-]{8,100}$')
 HAND_RE=re.compile(r'^([东南西北ESWN])\s*([一二三四1-4])(?:[局]?(?:[.．]|[\s]*)(\d+)本?场?)?$',re.I)
 
@@ -80,6 +80,37 @@ def action_text(action):
 
 def finite(value):return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value)
 
+def review_positions(report):
+    """Map review entries to the public KillerDucky hand/ply URL coordinates."""
+    rounds=[];current=None
+    for event in report.get('mjai_log',[]):
+        if not isinstance(event,dict):continue
+        kind=event.get('type')
+        if kind=='start_kyoku':current=[]
+        elif kind=='end_kyoku':
+            if current is not None:rounds.append(current);current=None
+        elif kind not in ('start_game','end_game','dora') and current is not None:current.append(event)
+    result={};seat=report.get('player_id')
+    for hi,hand in enumerate(report.get('review',{}).get('kyokus',[])):
+        if hi>=len(rounds):break
+        entries=hand.get('entries',[]);index=0
+        for ply,event in enumerate(rounds[hi]):
+            if index>=len(entries):break
+            review=entries[index];actor=event.get('actor');kind=event.get('type')
+            if (kind=='tsumo' and actor!=seat) or (kind=='dahai' and actor==seat):continue
+            riichi=(kind=='reach' and actor==seat and index>0 and review.get('junme')==entries[index-1].get('junme'))
+            if actor==review.get('last_actor') and (event.get('pai')==review.get('tile') or riichi):
+                result[(hi,index)]=ply;index+=1
+    return result
+
+def report_url(job,hand_index=None,ply=None):
+    task=str(job.get('remote_task',''))
+    if not TASK_RE.fullmatch(task):return ''
+    url='https://mjai.ekyu.moe/killerducky/?data=/report/'+task+'.json'
+    if type(hand_index) is int and hand_index>=0:url+='&hand='+str(hand_index)
+    if type(ply) is int and ply>=0:url+='&ply='+str(ply)
+    return url
+
 def summarize(report,expected_seat=None,expected_model=MODEL):
     if not isinstance(report,dict) or not isinstance(report.get('review'),dict):raise ReplayError('返回内容不是有效的 Mortal JSON 报告。')
     review=report['review'];seat=report.get('player_id',expected_seat)
@@ -92,13 +123,13 @@ def summarize(report,expected_seat=None,expected_model=MODEL):
     if type(total) is not int or type(matches) is not int or total<=0 or not 0<=matches<=total:raise ReplayError('报告的评估决策数或一致数无效，不能计算一致率。')
     kyokus=review.get('kyokus')
     if not isinstance(kyokus,list) or len(kyokus)>100:raise ReplayError('报告分局内容无效。')
-    hands=[];diffs=[];num_entries=0
-    for hand in kyokus:
+    hands=[];diffs=[];num_entries=0;positions=review_positions(report)
+    for hand_index,hand in enumerate(kyokus):
         if not isinstance(hand,dict):raise ReplayError('报告分局格式不正确。')
         k=hand.get('kyoku');honba=hand.get('honba',0);entries=hand.get('entries')
         if type(k) is not int or not 0<=k<=15 or type(honba) is not int or not isinstance(entries,list):raise ReplayError('报告局号或逐巡内容不正确。')
         htotal=0;hmatches=0
-        for e in entries:
+        for entry_index,e in enumerate(entries):
             if not isinstance(e,dict) or type(e.get('is_equal')) is not bool:raise ReplayError('报告逐巡内容缺少是否一致标记。')
             htotal+=1;hmatches+=int(e['is_equal']);num_entries+=1
             if num_entries>20000:raise ReplayError('报告内容超过单份牌谱大小限制。')
@@ -108,7 +139,8 @@ def summarize(report,expected_seat=None,expected_model=MODEL):
                 differences['choice_rank']=rank;differences['choices']=len(details)
                 # This only orders review points; no point-loss or "mistake" claim.
                 differences['priority']=rank or 0;diffs.append(differences)
-        hands.append({'kyoku':k,'honba':honba,'total':htotal,'matches':hmatches,'diffs':htotal-hmatches})
+                differences.update(hand_index=hand_index,entry_index=entry_index,ply=positions.get((hand_index,entry_index)))
+        hands.append({'kyoku':k,'honba':honba,'hand_index':hand_index,'total':htotal,'matches':hmatches,'diffs':htotal-hmatches})
     if num_entries!=total or sum(h['matches'] for h in hands)!=matches:raise ReplayError('逐巡明细与总计不一致，暂不输出可能错误的分析。')
     if str(report.get('game_length','')).lower() in ('tonpu','tonpuusen','east','tonpuu'):raise ReplayError('这份报告是东风战，当前版本仅接入四麻东南战。')
     names=[]
@@ -128,6 +160,8 @@ def summarize(report,expected_seat=None,expected_model=MODEL):
 def hand_name(k,honba=0):return '东南西北'[k//4]+str(k%4+1)+(' · '+str(honba)+'本场' if honba else '')
 
 class ReplayStore:
+    @staticmethod
+    def cache_key(source):return hashlib.sha256(json.dumps([source['replay_id'],source.get('seat'),MODEL,'all',0.1,'v1']).encode()).hexdigest()
     def __init__(self,folder):
         self.folder=Path(folder);self.folder.mkdir(parents=True,exist_ok=True);self.path=self.folder/'replay.db'
         with self.db() as db:db.executescript('''PRAGMA journal_mode=WAL;
@@ -152,7 +186,7 @@ class ReplayStore:
     def create(self,scope,actor,source,delivery=''):
         if delivery not in ('','group','private'):raise ValueError('Invalid replay delivery')
         if source['kind']=='replay' and source.get('seat') not in range(4):raise ReplayError('请指定开局东家、南家、西家或北家。')
-        key=hashlib.sha256(json.dumps([source['replay_id'],source.get('seat'),MODEL,'all',0.1,'v1']).encode()).hexdigest()
+        key=self.cache_key(source)
         with self.db() as db:
             same=db.execute("SELECT * FROM jobs WHERE scope=? AND actor=? AND cache_key=? AND status IN ('queued','running','done','manual') ORDER BY created DESC LIMIT 1",(scope,actor,key)).fetchone()
             if same:
@@ -161,7 +195,7 @@ class ReplayStore:
                     db.execute('UPDATE jobs SET delivery=? WHERE id=?',(delivery,same['id']));same['delivery']=delivery
                 return same,False
             if db.execute("SELECT 1 FROM jobs WHERE scope=? AND actor=? AND status IN ('queued','running')",(scope,actor)).fetchone():raise ReplayError('你在本会话已有一个复盘任务，请先查看状态或取消。')
-            if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=6:raise ReplayError('复盘队列已满，请稍后再试。')
+            if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=30:raise ReplayError('复盘队列已满，请稍后再试。')
             cached=db.execute('SELECT * FROM cache WHERE cache_key=?',(key,)).fetchone();cached=cached if cached and Path(cached['report_path']).is_file() else None
             cached_summary=summarize(json.loads(Path(cached['report_path']).read_text(encoding='utf-8')),source.get('seat'),'' if source['kind']=='report' else MODEL) if cached else None
             now=time.time();job_id=secrets.token_hex(6);status='done' if cached else 'queued';report_path=cached['report_path'] if cached else ''
@@ -195,8 +229,10 @@ class ReplayStore:
             if not job:raise ReplayError('没有找到你在当前会话的复盘任务。')
             if job['status'] not in ('failed','manual','cancelled'):raise ReplayError('只有未完成、人工验证或取消的任务可以重试。')
             if db.execute("SELECT 1 FROM jobs WHERE scope=? AND actor=? AND status IN ('queued','running')",(scope,actor)).fetchone():raise ReplayError('你已有一个正在执行的复盘任务。')
-            if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=6:raise ReplayError('复盘队列已满，请稍后再试。')
+            if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]>=30:raise ReplayError('复盘队列已满，请稍后再试。')
             db.execute("UPDATE jobs SET status='queued',error='',notified=0,created=?,updated=? WHERE id=?",(time.time(),time.time(),job_id))
+            if 'lease_token' in {r['name'] for r in db.execute('PRAGMA table_info(jobs)')}:
+                db.execute("UPDATE jobs SET lease_token='',lease_until=0,worker_id='',phase='',attention_notified=0 WHERE id=?",(job_id,))
     def unnotified(self):
         with self.db() as db:return [dict(r) for r in db.execute("SELECT * FROM jobs WHERE status IN ('done','failed','manual') AND notified=0")]
     def finish_error(self,job_id,status,error):

@@ -96,6 +96,7 @@ class MahjongHelperPlugin(Star):
             asyncio.create_task(self._subscription_scheduler()),
         ]
         self.replays = ReplayService(self.context, self.state_dir, self.config)
+        self.replays.recent_loader = self._recent_replay_sources
         self._tasks.append(asyncio.create_task(self.replays.run()))
         logger.info("日麻助手已加载，共 %d 道何切题", len(self.questions.questions))
         if self.config.get("ai_enabled", False):
@@ -119,7 +120,7 @@ class MahjongHelperPlugin(Star):
                         tool_names.append("bilibili_subscription")
                     if tool_names is not None and "group_data" not in tool_names:
                         tool_names.append("group_data")
-                    if "单牌谱复盘工具 mahjong_replay" not in persona.system_prompt:
+                    if "电脑批量复盘V2" not in persona.system_prompt:
                         update["system_prompt"] = update.get("system_prompt", persona.system_prompt) + "\n\n" + REPLAY_INSTRUCTIONS
                     if tool_names is not None and "mahjong_replay" not in tool_names:
                         tool_names.append("mahjong_replay")
@@ -840,12 +841,38 @@ class MahjongHelperPlugin(Star):
             return
         await self.replays.handle(event, str(query))
 
+    async def _recent_replay_sources(self,event,query):
+        """Use permitted records data only; never infer an unknown player's seat."""
+        from .replay_core import parse_url,ReplayError
+        tokens=query.split();count=5;room='';name=[]
+        for token in tokens:
+            if token in ('金','玉','王','王座'):room={'金':'9','玉':'12','王':'16','王座':'16'}[token]
+            elif token.isdigit() and 1<=int(token)<=10:count=int(token)
+            else:name.append(token)
+        player=' '.join(name);_,_,db,api=self._ready()
+        if not player:uid=db.get_main_uid(self._actor_id(event))
+        elif UID_RE.fullmatch(player):uid=player
+        else:
+            players=await api.search_player(player,4);exact=[p for p in players if player_name(p)==player]
+            candidates=exact or players
+            if len(candidates)!=1:raise ReplayError('昵称没有唯一匹配，请用 /雀 搜 昵称 确认UID，再用 /复盘 最近 UID 5。')
+            uid=player_uid(candidates[0])
+        if not uid:raise ReplayError('请提供玩家UID/完整昵称，或先 /雀 绑 UID。')
+        records=await api.recent_records(str(uid),4,count,room or '9.12.16')
+        if not records:raise ReplayError('没有取得可分析的四麻东南对局，数据范围为金之间及以上。')
+        sources=[]
+        for record in reversed(records[:count]):
+            players=record.get('players') or [];seat=next((i for i,p in enumerate(players) if str(p.get('accountId'))==str(uid)),None)
+            if len(players)!=4 or seat is None:raise ReplayError('对局记录未提供明确的目标玩家席位，未自动选择。')
+            uuid=str(record.get('uuid',''));source=parse_url('https://game.maj-soul.com/1/?paipu='+uuid+'_a'+str(uid));source['seat']=seat;sources.append(source)
+        return sources
+
     @filter.llm_tool(name="mahjong_replay")
     async def replay_ai(self, event: AstrMessageEvent, query: str = "帮助"):
-        """单条雀魂牌谱的 Mortal AI一致率、分歧决策及分局复盘，异步返回结果卡片。
+        """雀魂单条/多条牌谱的Mortal4.1b一致率、逐巡链接、分局和批量趋势，异步返回卡片。
 
         Args:
-            query(string): 完整牌谱链接与开局东家/南家/西家/北家，或状态、结果、记录、分歧、分局 南2、取消、重试。缺席位不要猜测；可导入mjai.ekyu.moe报告链接。仅四麻东南战。
+            query(string): 单条填链接与开局席位；多条填批量并换行，每行链接+开局席位，最多10份；也可最近 玩家 5、汇总、状态、结果、记录、分歧、分局 南2、取消、重试。缺席位不要猜。仅四麻东南战Mortal4.1b。
         """
         if not self._claim_ai_action(event):
             return
@@ -1245,7 +1272,8 @@ class MahjongHelperPlugin(Star):
             if self.replays is None:
                 yield event.plain_result("复盘功能尚未加载，请稍后重试。")
                 return
-            await self.replays.handle(event, (replay_actions[section] + " " + arg1).strip())
+            raw_arguments=query.strip()[len(section):].lstrip()
+            await self.replays.handle(event, (replay_actions[section] + " " + raw_arguments).strip())
             return
         if section in {"搜", "搜索", "绑", "绑定", "号", "我的", "切", "切换", "解", "解绑"}:
             if section in {"号", "我的"}:

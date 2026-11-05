@@ -36,6 +36,12 @@
     "default": "",
     "obvious_hint": true
   },
+  "replay_backend": {
+    "description": "复盘执行端：server=服务器浏览器；pc=电脑工作端（仅Mortal4.1b，电脑离线时保留队列）",
+    "type": "string",
+    "default": "server",
+    "options": ["server", "pc"]
+  },
   "replay_runtime": {
     "description": "单牌谱复盘独立环境目录（包含.venv及browsers），默认服务器/bot/mahjong-replay-worker；不需要雀魂账号或模型API密钥",
     "type": "string",
