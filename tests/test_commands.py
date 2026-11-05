@@ -100,6 +100,13 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as d:
             p=self.setup_plugin(d);e=Event('');await p.handle(e,'')
             self.assertIn('QQ 群',e.sent[0]);self.assertEqual(e.calls,[])
+    async def test_essence_notice_wakes_enabled_group_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=self.setup_plugin(d);p.poll_wake=asyncio.Event();e=Event()
+            e.message_obj=SimpleNamespace(raw_message={'post_type':'notice','notice_type':'essence','sub_type':'add','group_id':987654321})
+            await p.essence_notice(e);self.assertTrue(p.poll_wake.is_set())
+            p.poll_wake.clear();p.store.enable('12345:987654321','12345','987654321',False)
+            await p.essence_notice(e);self.assertFalse(p.poll_wake.is_set())
     def test_render_real_chinese_cards(self):
         with tempfile.TemporaryDirectory() as d:
             m=[{'id':150,'result':validate(result(names=['一剑风起醉英豪','かな 空格ABC','丙']))}]

@@ -83,7 +83,10 @@ class EssenceSource:
         if lock.locked():return False
         async with lock:
             try:
-                data=await asyncio.wait_for(bot.call_action(action='get_essence_msg_list',group_id=int(gid)),45)
+                # Large groups may return hundreds of essence messages. NapCat
+                # currently needs about a minute for that payload, so the old
+                # 45-second guard caused every later scan to fail forever.
+                data=await asyncio.wait_for(bot.call_action(action='get_essence_msg_list',group_id=int(gid)),120)
                 entries,counts=extract_entries(data)
                 self.store.reconcile(scope,entries)
                 self.store.audit(scope,'system','scan',counts)

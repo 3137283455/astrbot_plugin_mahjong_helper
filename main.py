@@ -62,7 +62,7 @@ HELP=[
  '人工修正：/群数据 修正 编号 三麻 "甲=65000" "乙=42000" "丙=-2000"',
  '按顺位从高到低填写所有人；只在核对原图后确认，不确定就保留待确认。',
  '别名：/群数据 合并 "旧昵称" "新昵称"；撤销别名：/群数据 取消合并 "旧昵称"',
- '每约2分钟检查精华变更，识别异步进行；取消精华后不再计入。',
+ '新增/取消精华会立即唤醒同步，并每约2分钟兜底检查；识别异步进行。',
  '管理员 /群数据 时间：查看数据截至日期、各模式最新被飞和程序检查时间。',
  '管理员 /群数据 同步：查看在线同步状态；/群数据 同步更新 立即同步。',
  '正常终局、被飞终局都录入；S0赛季已封存，与S1赛季独立统计。',
@@ -121,6 +121,7 @@ class GroupDataPlugin(Star):
         self.card_dir=self.folder/'cards';self.card_dir.mkdir(exist_ok=True)
         self.source=EssenceSource(self.store,self.folder/'images')
         self.recognizer=Recognizer(self.context,self.config,self.store)
+        self.poll_wake=asyncio.Event()
         self.tasks=[asyncio.create_task(self._poll()),asyncio.create_task(self.recognizer.loop()),asyncio.create_task(self.recognizer.llm_loop())]
         self.online=None
         target=self.folder/'feishu_target.json'
@@ -145,6 +146,7 @@ class GroupDataPlugin(Star):
         return task
     async def _poll(self):
         while True:
+            self.poll_wake.clear();started=time.monotonic()
             try:
                 for platform in self.context.platform_manager.get_insts():
                     if platform.meta().name!='aiocqhttp':continue
@@ -164,7 +166,20 @@ class GroupDataPlugin(Star):
                 for path in self.card_dir.glob('*.png'):
                     if path.stat().st_mtime<time.time()-86400:path.unlink(missing_ok=True)
             except Exception as exc:logger.warning('群数据后台检查失败：%s',type(exc).__name__)
-            await asyncio.sleep(max(60,int(self.config.get('poll_seconds',120))))
+            interval=max(60,int(self.config.get('poll_seconds',120)))
+            try:await asyncio.wait_for(self.poll_wake.wait(),max(1,interval-(time.monotonic()-started)))
+            except asyncio.TimeoutError:pass
+
+    @filter.event_message_type(filter.EventMessageType.ALL,priority=131)
+    async def essence_notice(self,event:AstrMessageEvent):
+        """Wake the pull loop immediately after QQ adds/removes an essence."""
+        raw=getattr(getattr(event,'message_obj',None),'raw_message',None)
+        if not isinstance(raw,dict) or raw.get('post_type')!='notice' or raw.get('notice_type')!='essence':return
+        gid=str(raw.get('group_id') or '')
+        if not gid.isdigit():return
+        scope=str(event.get_self_id())+':'+gid
+        group=self.store.group(scope)
+        if group and group['enabled']:self.poll_wake.set()
     async def admin(self,event):
         if event.is_admin():return True
         try:
