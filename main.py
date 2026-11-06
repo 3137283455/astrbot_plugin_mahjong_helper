@@ -671,9 +671,7 @@ class GroupDataPlugin(Star):
                 for mode,data,provisional,info in prepared:
                     if action=='评分':
                         name=player_name(' '.join(rest),aliases)
-                        lines=[f'{period_name} · {mode}麻'+(f' · 近{days}天收录' if days else ''),*personal_lines(data,name),
-                               f'同筛选正式玩家 {data["formal_count"]} 位；评分与个人档案使用相同公式。',
-                               '仅反映本群精华结算样本，赛制规则尚未进一步区分。']
+                        lines=[f'{period_name} · {mode}麻'+(f' · 近{days}天收录' if days else ''),*personal_lines(data,name)[:6]]
                         await self.card(event,'群数据 · 综合评分分析',lines)
                     else:
                         path=self.card_dir/(uuid.uuid4().hex+'.png')

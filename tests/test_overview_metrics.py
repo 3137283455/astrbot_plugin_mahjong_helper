@@ -35,7 +35,7 @@ class OverviewMetricTests(unittest.TestCase):
                 winner=next(row for row in score_matches(matches,mode)['rows'] if row['qualified'])
                 self.assertIn(display(winner['score'])+'分',text)
             with Image.open(path) as image:
-                self.assertEqual(image.size,(1440,1704))
+                self.assertEqual(image.size,(1440,1480))
                 self.assertTrue(all(0<=xy[0]<image.width and 0<=xy[1]<image.height for xy,_ in drawn))
             for mode,label,other in ((3,'三位最多','四位最多'),(4,'四位最多','三位最多')):
                 _,one=self.render(folder,matches,mode)

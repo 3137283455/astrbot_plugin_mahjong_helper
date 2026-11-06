@@ -68,14 +68,12 @@ def rank_label(row,data):
 
 def personal_lines(data,name):
     row=next((r for r in data['rows'] if r['name']==name),None)
-    if row is None:return [name+'：所选范围没有可评分的标准终局。','普通对局统计仍可查看；自定义总持点等记录不参与综合评分。']
-    return [name+' · '+('正式排名' if row['qualified'] else '暂定分，不占正式名次'),
+    if row is None:return [name+'：暂无有效评分']
+    return [name+' · '+('正式' if row['qualified'] else '暂定'),
             f'综合评分：{display(row["score"])} / 100 · {rank_label(row,data)}',f'评分有效对局：{row["games"]}场',
             f'顺位评分：{display(row["R"])} · 持点评分：{display(row["P"])}',
-            f'成绩分：{display(row["performance"])}（顺位65% + 持点35%）',
-            f'成绩折算90%：{display(F(90,100)*row["performance"])} · 场次项：{display(row["attendance"])} / 10',
-            '最终分 = 成绩分 × 90% + 10 × 场次 ÷（场次 + 20）。',
-            '满10场正式入榜；新查询默认S1，三麻四麻、S0与S1独立。']
+            f'成绩分：{display(row["performance"])}',
+            f'成绩贡献：{display(F(90,100)*row["performance"])} · 场次项：{display(row["attendance"])} / 10']
 
 def rules_text():
     return '\n'.join(['群数据 · 综合评分规则',
