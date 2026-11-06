@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from PIL import Image,ImageDraw,ImageFont
 from .core import aggregate, ranking, profile_positions
-from .scoring import display as score_display,rank_label,personal_lines
+from .scoring import display as score_display,rank_label,personal_lines,score_matches
 from .pagination import page_rows,navigation
 
 W=1440
@@ -39,12 +39,12 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
     title='群数据 · '+period_name+(' · 三麻总览' if selected_mode==3 else ' · 四麻总览' if selected_mode==4 else ' · 对局总览')
     queued=summary.get('new',0)+summary.get('llm_pending',0)+summary.get('local_error',0)
     review=summary.get('review',0);failed=summary.get('download_error',0)
-    im,d=base(title,f'正常结算 + 被飞结算    已确认 {len(matches)} 场    识别中 {queued} 张    待核对 {review} 张',1600)
+    im,d=base(title,f'正常结算 + 被飞结算    已确认 {len(matches)} 场    识别中 {queued} 张    待核对 {review} 张',1704)
     notice=f'还有 {review} 张待核对、{queued} 张识别中、{failed} 张读取失败；完成确认后才进入统计。' if review or queued or failed else '已确认对局均已计入；新赛季与历史赛季分别统计。'
     d.text((58,222),notice,font=font(25),fill=GOLD if review or queued or failed else MUTED)
     for col,mode in enumerate(modes):
         x=48+col*692;panel_width=1344 if len(modes)==1 else 654;stats=aggregate(matches,mode,aliases);games=sum(s['games'] for s in stats)//mode
-        d.rounded_rectangle((x,278,x+panel_width,1190),radius=28,fill=PANEL)
+        d.rounded_rectangle((x,278,x+panel_width,1294),radius=28,fill=PANEL)
         d.text((x+30,300),f'{"三麻" if mode==3 else "四麻"}  /  {games} 场',font=font(39,True),fill=TEAL)
         d.text((x+30,365),f'{len(stats)} 位玩家 · {sum(s["fly"] for s in stats)} 人次被飞',font=font(28),fill=MUTED)
         if not stats:
@@ -52,11 +52,14 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
             d.text((x+30,550),'旧赛季在查询后加 S0 查看',font=font(27),fill=MUTED)
             continue
         y=440
-        for metric,label,suffix in [('场次','出场最多','场'),('一位率','一位率最高',''),('二位率','二位率最高',''),('平均顺位','平均顺位最佳',''),('最高','最高持点','点'),('最低','最低持点','点'),('被飞','被飞最多','次')]:
-            rows=ranking(stats,metric)
+        last_place='三位' if mode==3 else '四位'
+        for metric,label,suffix in [('场次','出场最多','场'),('综合分','综合分最高','分'),('一位','一位最多','次'),(last_place,last_place+'最多','次'),('平均顺位','平均顺位最佳',''),('最高','最高持点','点'),('最低','最低持点','点'),('被飞','被飞最多','次')]:
+            rows=([{**r,'value':r['score'],'kind':'score'} for r in score_matches(matches,mode,aliases)['rows'] if r['qualified']]
+                  if metric=='综合分' else ranking(stats,metric))
             if rows and (metric not in ('被飞',) or rows[0]['value']>0):
                 r=rows[0]
-                if r['kind']=='rate':v=f'{float(r["value"]):.1%} · {r["numerator"]}次'
+                if r['kind']=='score':v=score_display(r['value'])+'分'
+                elif r['kind']=='rate':v=f'{float(r["value"]):.1%} · {r["numerator"]}次'
                 elif metric=='平均顺位':v=f'{float(r["value"]):.2f}'
                 else:v=f'{int(r["value"]):,}{suffix}'
                 if metric in ('最高','最低'):label+=f' · 原图 #{r[("max_points" if metric=="最高" else "min_points")+"_source"]}'
@@ -67,17 +70,17 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
                 d.text((x+panel_width-254,y+42),v,font=font(28,True),fill=RED if metric in ('被飞','最低') else GOLD)
             else:
                 d.text((x+30,y),label,font=font(25),fill=MUTED)
-                d.text((x+30,y+42),'无人被飞' if metric=='被飞' else '暂无记录',font=font(30),fill=INK)
+                d.text((x+30,y+42),'无人被飞' if metric=='被飞' else '暂无满10场玩家' if metric=='综合分' else '暂无记录',font=font(30),fill=INK)
             y+=104
-    d.text((58,1220),'最近录入的已确认结算',font=font(30,True),fill=TEAL)
+    d.text((58,1324),'最近录入的已确认结算',font=font(30,True),fill=TEAL)
     latest=sorted(matches,key=lambda m:(m.get('stamp',0),m['id']),reverse=True)[:2]
     for i,m in enumerate(latest):
         line=f'#{m["id"]} · {m["result"]["mode"]}麻 · '+' / '.join(f'{p["name"]} {p["points"]:,}' for p in m['result']['players'])
-        d.text((58,1274+i*44),fit(d,line,25,1320),font=font(25),fill=INK)
-    if not latest:d.text((58,1274),'暂无已确认结算；识别状态可发送 /群数据 状态 查看。',font=font(26),fill=MUTED)
-    d.text((58,1387),'/群数据 个人 昵称    /群数据 一位率 四麻    /群数据 极值 昵称',font=font(28),fill=INK)
-    d.text((58,1432),'/群数据 最近 5    /群数据 表格    历史查询加 S0    /群数据 帮助',font=font(27),fill=INK)
-    footer(d,1490,group,days,period_name);im.save(path);return path
+        d.text((58,1378+i*44),fit(d,line,25,1320),font=font(25),fill=INK)
+    if not latest:d.text((58,1378),'暂无已确认结算；识别状态可发送 /群数据 状态 查看。',font=font(26),fill=MUTED)
+    d.text((58,1491),'/群数据 个人 昵称    /群数据 综合榜    /群数据 极值 昵称',font=font(28),fill=INK)
+    d.text((58,1536),'/群数据 最近 5    /群数据 表格    历史查询加 S0    /群数据 帮助',font=font(27),fill=INK)
+    footer(d,1594,group,days,period_name);im.save(path);return path
 
 def leaderboard(path,group,mode,metric,stats,days=0,minimum=1,period_name='当前周期',page=1,nav=None):
     info=page_rows(ranking(stats,metric,minimum),page);rows=info['rows'];height=max(790,390+len(rows)*91+245)
