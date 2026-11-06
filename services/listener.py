@@ -407,6 +407,9 @@ class DynamicListener:
             dyn_id=dyn_id,
         )
         dispatch_result = await self.dispatcher.publish(notification)
+        if not dispatch_result.sent and not dispatch_result.dropped:
+            # Preserve the polling cursor when delivery has not been confirmed.
+            raise RuntimeError(f"Subscription delivery failed: {dispatch_result.reason}")
         if category != "dynamic" or not dispatch_result.sent or summary_payload is None:
             return
         await self._send_ai_summary(sub_user, summary_payload, dyn_id)
@@ -656,9 +659,10 @@ class DynamicListener:
                 )
             except Exception as e:
                 logger.error(
-                    f"发送缓存动态失败（已忽略）: sub_user={sub_user} "
+                    f"发送缓存动态失败（下轮重试）: sub_user={sub_user} "
                     f"dyn_id={dyn_id} error={e}"
                 )
+                raise
             return
 
         send_node_flag = self.node
@@ -685,9 +689,10 @@ class DynamicListener:
                 )
             except Exception as e:
                 logger.error(
-                    f"动态推送失败（已缓存并忽略）: sub_user={sub_user} "
+                    f"动态推送失败（已缓存，下轮重试）: sub_user={sub_user} "
                     f"dyn_id={dyn_id} error={e}"
                 )
+                raise
             finally:
                 self._cache_render(dyn_id, ls, send_node_flag)
             return
@@ -719,9 +724,10 @@ class DynamicListener:
                 logger.info(f"动态推送完成(图片): sub_user={sub_user} dyn_id={dyn_id}")
             except Exception as e:
                 logger.error(
-                    f"动态推送失败（已缓存并忽略）: sub_user={sub_user} "
+                    f"动态推送失败（已缓存，下轮重试）: sub_user={sub_user} "
                     f"dyn_id={dyn_id} error={e}"
                 )
+                raise
             return
 
         logger.warning(
@@ -748,8 +754,9 @@ class DynamicListener:
             )
         except Exception as e:
             logger.error(
-                f"动态推送失败（已忽略）: sub_user={sub_user} dyn_id={dyn_id} error={e}"
+                f"动态推送失败（下轮重试）: sub_user={sub_user} dyn_id={dyn_id} error={e}"
             )
+            raise
 
     def _resolve_platform_name(self, sub_user: str) -> str:
         """解析 sub_user 所属平台的类型名（如 telegram、aiocqhttp）。"""

@@ -1,3 +1,6 @@
+# v1.7.2+dark.2
+- 修复发送失败仍记为已处理、后续轮询不再推送的问题；失败时保留游标与渲染缓存，下轮重试，不影响其他订阅目标。
+
 # v1.7.2
 - 修复自定义头像功能导致直播开播/下播推送报 `NameError` 的问题。[issue#114](https://github.com/Soulter/astrbot_plugin_bilibili/issues/114)
 
