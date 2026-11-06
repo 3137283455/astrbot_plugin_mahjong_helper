@@ -405,12 +405,14 @@ class DynamicListener:
             send_node=self.node or send_node,
             category=category,
             dyn_id=dyn_id,
+            meta={"source_url": getattr(summary_payload, "url", "")},
         )
         dispatch_result = await self.dispatcher.publish(notification)
         if not dispatch_result.sent and not dispatch_result.dropped:
             # Preserve the polling cursor when delivery has not been confirmed.
             raise RuntimeError(f"Subscription delivery failed: {dispatch_result.reason}")
-        if category != "dynamic" or not dispatch_result.sent or summary_payload is None:
+        if (category != "dynamic" or not dispatch_result.sent or summary_payload is None
+                or dispatch_result.reason == "already_delivered"):
             return
         await self._send_ai_summary(sub_user, summary_payload, dyn_id)
 

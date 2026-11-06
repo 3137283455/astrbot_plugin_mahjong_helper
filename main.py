@@ -93,6 +93,7 @@ class Main(Star):
         self.notification_dispatcher = SubscriptionNotificationDispatcher(
             context=self.context,
             on_sent=self._on_subscription_notification_sent,
+            state_path=Path(self.data_manager.path).parent / "delivery_receipts.json",
         )
 
         # 优先使用 DataManager 中的凭据
