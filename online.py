@@ -77,6 +77,14 @@ class OnlineSync:
 
     def annotations(self,key):return self.get('annotations:'+key,{})
 
+    def frozen_fields(self,fields):
+        """Archived online rows are outside the ongoing synchronization contract."""
+        keys=[str(fields.get(k) or '') for k in ('对局ID','统计ID','周期ID')]
+        for p in periods.all_periods(self.store,self.scope):
+            if p['state']!='archived':continue
+            if fields.get('赛季')==p['name'] or any(p['id'] in key.split(':') for key in keys):return True
+        return False
+
     def detail(self,scope,period,match,status='已确认'):
         data=match['result'];key=scope+':'+period['id']+':'+str(match['id'])
         fields={'对局ID':key,'群标识':scope,'周期ID':period['id'],'赛季':period['name'],'模式':data['mode'],
@@ -91,6 +99,7 @@ class OnlineSync:
     def projection(self):
         scope=self.scope;out={};metadata={};players={};source_rows={}
         for p in periods.all_periods(self.store,scope):
+            if p['state']!='current':continue
             pid=p['id'];matches=self.store.matches(scope,period=pid);aliases=self.store.aliases(scope,pid)
             metadata[pid]={'周期ID':pid,'群标识':scope,'周期名称':p['name'],'状态':'进行中' if p['state']=='current' else '已封存',
                            '开始时间':int(p['started']*1000),'封存清单校验值':p['checksum']}
@@ -117,7 +126,7 @@ class OnlineSync:
             if key in out:continue
             old=json.loads(link['baseline']);pid=old.get('周期ID')
             p=next((p for p in periods.all_periods(self.store,scope) if p['id']==pid),None)
-            if not p:continue
+            if not p or p['state']!='current':continue
             fields={**old,**self.annotations(key),'赛季':p['name'],'确认状态':'停用','同步状态':'已同步'}
             source=self.store.get_source(scope,int(old.get('精华来源编号',0)))
             payload=(source.get('override_result') or source.get('result')) if source else None
@@ -223,6 +232,7 @@ class OnlineSync:
         table=self.tables[kind];rows=await self.client.records(table);index={}
         for row in rows:
             normalized=normalize(row.get('fields') or {})
+            if self.frozen_fields(normalized):continue
             if normalized.get('群标识')!=self.scope:continue
             key=normalized.get(id_field)
             if key in index:raise ValueError('派生表存在重复ID：'+kind)
@@ -258,7 +268,8 @@ class OnlineSync:
                 await self.client.ensure_fields(self.tables['players'],SCORE_FIELDS)
                 self._score_schema_ready=True
             table=self.tables['matches'];remote=await self.client.records(table);errors=[]
-            remote=[r for r in remote if normalize(r.get('fields') or {}).get('群标识') in (None,self.scope)]
+            remote=[r for r in remote if normalize(r.get('fields') or {}).get('群标识') in (None,self.scope)
+                    and not self.frozen_fields(normalize(r.get('fields') or {}))]
             for row in remote:
                 try:await self.import_new(row)
                 except ValueError as exc:

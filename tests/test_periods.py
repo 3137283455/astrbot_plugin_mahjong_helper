@@ -13,6 +13,25 @@ def normal(names=None):
 
 
 class PeriodTests(unittest.TestCase):
+    def test_frozen_database_snapshot_cannot_be_updated_or_deleted(self):
+        import sqlite3
+        self.seed(1);periods.cutover(self.store,self.scope)
+        archived=periods.select(self.store,self.scope,'历史')
+        for statement in ("UPDATE periods SET snapshot='{}' WHERE id=?",'DELETE FROM periods WHERE id=?'):
+            with self.assertRaises(sqlite3.IntegrityError):
+                with self.store.db:self.store.db.execute(statement,(archived['id'],))
+
+    def test_frozen_source_and_image_cache_are_not_rescanned_or_overwritten(self):
+        row=self.seed(1);periods.cutover(self.store,self.scope)
+        source=dict(self.store.db.execute('SELECT * FROM sources WHERE id=?',(row['id'],)).fetchone())
+        image=self.store.image('a')
+        self.store.reconcile(self.scope,[])
+        self.store.reconcile(self.scope,[{'msg':'1','idx':0,'stamp':999}])
+        self.store.attach(row['id'],'changed','changed.png');self.store.source_error(row['id'],'changed')
+        self.store.save('a','ignored')
+        self.assertEqual(dict(self.store.db.execute('SELECT * FROM sources WHERE id=?',(row['id'],)).fetchone()),source)
+        self.assertEqual(self.store.image('a'),image)
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.store=Store(Path(self.tmp.name)/'test.db');self.scope='bot:group'
         self.store.enable(self.scope,'bot','group')

@@ -1,6 +1,6 @@
 """Persistent group-local nickname glyph memory from checked originals.
 
-No fuzzy spelling, model-generated training labels or public screenshot uploads.
+Uses confirmed labels only, never fresh model guesses or fuzzy name merging.
 """
 from __future__ import annotations
 import copy
@@ -113,30 +113,35 @@ class VerifiedNames:
         # Overrides are the explicit administrator verification boundary. Mere
         # agreement between OCR/LLM passes is never used as a training label.
         evidence=self.store.training_rows(scope) if hasattr(self.store,'training_rows') else self.store.rows(scope)
-        rows=[r for r in evidence if r.get('override_status')=='accepted' and r.get('override_result')]
+        rows=[]
+        for row in evidence:
+            label=row.get('override_result') if row.get('override_status')=='accepted' else (
+                row.get('result') if row.get('_glyph_archived') and not row.get('override_status') and row.get('status')=='accepted' else None)
+            if label:rows.append({**row,'glyph_label':label})
         saved=[];blocked=set()
         if hasattr(self.store,'db'):
             saved=[dict(r) for r in self.store.db.execute('SELECT * FROM nickname_glyphs WHERE scope=?',(scope,))]
             blocked={r[0] for r in self.store.db.execute('SELECT name FROM nickname_glyph_blocks WHERE scope=?',(scope,))}
-        key=(tuple(sorted((r['hash'],r['override_result']) for r in rows)),
+        key=(tuple(sorted((r['hash'],r['glyph_label']) for r in rows)),
              tuple(sorted((r['hash'],r['place'],r['name'],r['stamp']) for r in saved if r['explicit'])),tuple(sorted(blocked)))
         if self.cache.get(scope,{}).get('key')==key:return self.cache[scope]['items']
         items=[];counts={};writes=[]
         persisted={(r['hash'],r['place'],r['name']):r for r in saved}
-        corrected={(r['hash'],p['place']):p['name'] for r in rows for p in json.loads(r['override_result'])['players']}
+        corrected={(r['hash'],p['place']):p['name'] for r in rows for p in json.loads(r['glyph_label'])['players']}
         for row in saved:
             if row['explicit'] and row['name'] not in blocked:
                 if corrected.get((row['hash'],row['place']),row['name'])!=row['name']:continue
                 items.append({'name':row['name'],'hash':row['hash'],'source':row['source'],'place':row['place'],
-                              'fp':json.loads(row['fp']),'explicit':True})
+                              'fp':json.loads(row['fp']),'explicit':True,'origin':'registered'})
         for row in rows:
             try:
-                result=json.loads(row['override_result']);raw=json.loads(row.get('raw') or '[]');ocr=next((x['local_ocr'] for x in raw if 'local_ocr' in x),None)
+                result=json.loads(row['glyph_label']);raw=json.loads(row.get('raw') or '[]');ocr=next((x['local_ocr'] for x in raw if 'local_ocr' in x),None)
                 cached=[persisted.get((row['hash'],p['place'],p['name'])) for p in result['players']]
                 if all(cached):
                     for p,c in zip(result['players'],cached):
                         if p['name'] in blocked or c['explicit']:continue
-                        items.append({'name':p['name'],'hash':row['hash'],'source':row['id'],'fp':json.loads(c['fp']),'explicit':False})
+                        items.append({'name':p['name'],'hash':row['hash'],'source':row['id'],'fp':json.loads(c['fp']),'explicit':False,
+                                      'origin':'archived-confirmed' if row.get('_glyph_archived') else 'manual-confirmed'})
                     continue
                 for region in name_regions(row['path'],ocr):
                     p=result['players'][region['place']-1]
@@ -144,7 +149,8 @@ class VerifiedNames:
                     if any(x['hash']==row['hash'] and x['name']==p['name'] and x.get('explicit') for x in items):continue
                     fp=fingerprint(region['crop'])
                     if fp is None:continue
-                    items.append({'name':p['name'],'hash':row['hash'],'source':row['id'],'fp':fp,'explicit':False});counts[p['name']]=counts.get(p['name'],0)+1
+                    items.append({'name':p['name'],'hash':row['hash'],'source':row['id'],'fp':fp,'explicit':False,
+                                  'origin':'archived-confirmed' if row.get('_glyph_archived') else 'manual-confirmed'});counts[p['name']]=counts.get(p['name'],0)+1
                     writes.append((scope,row['hash'],region['place'],p['name'],row['id'],json.dumps(fp),time.time()))
             except (OSError,ValueError,KeyError,TypeError,IndexError):continue
         if writes and hasattr(self.store,'db'):

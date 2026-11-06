@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import aiohttp
 from PIL import Image
+from . import periods
 
 MAX_BYTES=20*1024*1024
 
@@ -93,6 +94,7 @@ class EssenceSource:
                 async def fetch(entry):
                     if self.store.is_excluded(scope,entry['msg'],entry['idx']):return
                     row=self.store.source(scope,entry['msg'],entry['idx'])
+                    if periods.archived_source(self.store,row['id']):return
                     if row['hash'] and self.store.image(row['hash']) and Path(self.store.image(row['hash'])['path']).is_file():return
                     async with self.download_lock:
                         try:

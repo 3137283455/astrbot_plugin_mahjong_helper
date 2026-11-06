@@ -76,8 +76,14 @@ class Store:
         previous=self._accepted_hashes(scope)
         previous_rows={(r['id'],r['hash']) for r in self.rows(scope)}
         with self.db:
-            self.db.execute("UPDATE sources SET active=0 WHERE scope=? AND origin='qq'",(scope,))
+            frozen={(r['msg'],r['idx']) for r in self.db.execute('''SELECT s.msg,s.idx FROM sources s
+                JOIN source_periods sp ON sp.source_id=s.id JOIN periods p ON p.id=sp.period_id
+                WHERE s.scope=? AND p.state='archived' ''',(scope,))}
+            self.db.execute("""UPDATE sources SET active=0 WHERE scope=? AND origin='qq' AND NOT EXISTS(
+                SELECT 1 FROM source_periods sp JOIN periods p ON p.id=sp.period_id
+                WHERE sp.source_id=sources.id AND p.state='archived')""",(scope,))
             for e in entries:
+                if (e['msg'],e['idx']) in frozen:continue
                 self.db.execute('INSERT INTO sources(scope,msg,idx,stamp,seen) VALUES(?,?,?,?,?) ON CONFLICT(scope,msg,idx) DO UPDATE SET active=1,stamp=excluded.stamp,seen=excluded.seen',(scope,e['msg'],e['idx'],e['stamp'],now))
             periods.assign(self,scope)
             self.db.execute("UPDATE groups SET last_scan=?,error='' WHERE scope=?",(now,scope))
@@ -94,8 +100,10 @@ class Store:
         self.db.execute('INSERT OR REPLACE INTO source_exclusions VALUES(?,?,?,?,?)',(scope,row['msg'],row['idx'],reason,time.time()));self.db.commit()
         self._notify(scope)
     def source_error(self,id,reason):
+        if periods.archived_source(self,id):return False
         self.db.execute('UPDATE sources SET error=? WHERE id=?',(reason,id));self.db.commit()
     def attach(self,id,digest,path):
+        if periods.archived_source(self,id):return False
         with self.db:
             previous=self.db.execute('SELECT scope,hash FROM sources WHERE id=?',(id,)).fetchone()
             self.db.execute('INSERT OR IGNORE INTO images(hash,path) VALUES(?,?)',(digest,str(path)))
@@ -106,6 +114,8 @@ class Store:
         row=self.db.execute('SELECT * FROM images WHERE hash=?',(digest,)).fetchone()
         return dict(row) if row else None
     def save(self,digest,status,result=None,raw=None,reason='',model='',retry=0):
+        references=self.db.execute('SELECT id FROM sources WHERE hash=?',(digest,)).fetchall()
+        if references and all(periods.archived_source(self,r['id']) for r in references):return False
         previous=self.image(digest)
         changed=previous is not None and (previous['status']!='accepted' or json.loads(previous['result'] or 'null')!=result)
         with self.db:
@@ -145,12 +155,12 @@ class Store:
         if selected and selected['state']=='archived':return json.loads(selected['snapshot'])['aliases']
         return {r['old']:r['new'] for r in self.db.execute('SELECT old,new FROM aliases WHERE scope=?',(scope,))}
     def training_rows(self,scope):
-        """Keep explicitly verified glyph evidence without counting archived games."""
+        """Read confirmed archive labels solely as glyph evidence, never as new games."""
         rows=self.rows(scope);seen={r['hash'] for r in rows}
         for p in periods.all_periods(self,scope):
             if p['state']!='archived':continue
             for row in json.loads(p['snapshot'])['rows']:
-                if row['hash'] not in seen:rows.append(row);seen.add(row['hash'])
+                if row['hash'] not in seen:rows.append({**row,'_glyph_archived':True});seen.add(row['hash'])
         return rows
     def merge(self,scope,old,new):
         old=normalize_name(old);new=normalize_name(new);aliases=self.aliases(scope)

@@ -60,10 +60,6 @@ async def verify(args):
                 await client.update(table,rid,{'确认状态':'停用'});await online.once();assert not store.matches(scope)
                 await client.update(table,rid,{'确认状态':'已确认'});await online.once();assert len(store.matches(scope))==1
                 checks.append('real_api_soft_disable_and_restore')
-                historic=next(k for k in online.links() if k!=key);hrid=online.links()[historic]['record_id']
-                await client.update(table,hrid,{'一位昵称':'同步验证_禁止改历史'});await online.once()
-                assert store.matches(scope,period='历史')[0]['result']['players'][0]['name']=='同步验证1甲'
-                checks.append('real_api_archive_immutable')
                 current_fields=normalize(next(r for r in await client.records(table) if r['record_id']==rid)['fields'])
                 await client.create(table,{'模式':3,'确认状态':'已确认','群标识':scope,'原图附件':current_fields['原图附件'],
                     '一位昵称':'同步验证_新增甲','一位持点':65000,'二位昵称':'同步验证_新增乙','二位持点':35000,

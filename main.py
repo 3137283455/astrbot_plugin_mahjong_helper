@@ -477,7 +477,7 @@ class GroupDataPlugin(Star):
                 if rest[0]=='查看' and len(rest)==2:
                     items=[r for r in bank.templates(scope) if r['name']==rest[1]]
                     lines=[f'字形标签：{rest[1]}；{len(items)}份样本。']
-                    lines.extend(f'原图 #{r["source"]} · '+('明确登记' if r.get('explicit') else '历史人工确认') for r in items)
+                    lines.extend(f'原图 #{r["source"]} · '+('明确登记' if r.get('explicit') else '封存确认样本' if r.get('origin')=='archived-confirmed' else '历史人工确认') for r in items)
                     await self.send_result(event,event.plain_result('\n'.join(lines)));return
                 if rest[0]=='录入' and len(rest)==4:
                     row=self.store.original_source(scope,int(rest[1]))

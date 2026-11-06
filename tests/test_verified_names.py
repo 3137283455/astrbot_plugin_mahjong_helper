@@ -11,6 +11,16 @@ class FakeStore:
     def rows(self,scope):return [r for r in self.records if r['scope']==scope]
 
 class VerifiedNameTests(unittest.TestCase):
+    def test_confirmed_archive_names_are_read_only_training_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            a,_=self.screen(d,1,manual=False);b,_=self.screen(d,2,manual=False,offset=100)
+            target,ocr=self.screen(d,3,manual=False,offset=200)
+            for r in (a,b):r['_glyph_archived']=True;r['status']='accepted'
+            original=json.dumps([a,b],sort_keys=True)
+            index=VerifiedNames(FakeStore([a,b,target]))
+            self.assertEqual([r['name'] for r in index.match(target,ocr)],['ALPHA','BETA','GAMMA'])
+            self.assertEqual(json.dumps([a,b],sort_keys=True),original)
+
     def test_old_wrong_label_cannot_rewrite_agreeing_model_names(self):
         reading={'is_result':True,'mode':3,'confidence':.99,'players':[{'place':1,'points':60000,'name':'天爻杳药'}]}
         old={'mode':3,'place':1,'points':60000,'name':'天爻杏药','method':'historical-pair'}

@@ -8,6 +8,16 @@ from astrbot_plugin_group_data import periods
 from test_periods import normal
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
+ async def test_archived_missing_attachment_is_not_downloaded_again(self):
+  with tempfile.TemporaryDirectory() as d:
+   store=Store(Path(d)/'state.db');self.addCleanup(store.close);scope='b:g';store.enable(scope,'b','g')
+   store.reconcile(scope,[{'msg':'1','idx':0,'stamp':1}]);row=store.source(scope,'1',0)
+   store.attach(row['id'],'old',Path(d)/'missing.png');store.save('old','accepted',normal());periods.cutover(store,scope)
+   src=EssenceSource(store,Path(d)/'images')
+   bot=type('Bot',(),{'call_action':AsyncMock(return_value=[{'message_id':1,'content':[{'type':'image','data':{'url':'https://qpic.cn/old'}}]}])})()
+   with patch('astrbot_plugin_group_data.source.download',AsyncMock()) as fetch:
+    self.assertTrue(await src.sync(scope,bot,123));fetch.assert_not_awaited()
+
  async def test_failed_listing_does_not_clear_existing_sources(self):
   with tempfile.TemporaryDirectory() as d:
    store=Store(Path(d)/'state.db');self.addCleanup(store.close);store.enable('b:g','b','g');store.reconcile('b:g',[{'msg':'1','idx':0,'stamp':1}])

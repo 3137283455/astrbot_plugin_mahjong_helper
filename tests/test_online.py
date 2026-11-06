@@ -31,10 +31,10 @@ class FakeFeishu:
 
 
 class OnlineTests(unittest.IsolatedAsyncioTestCase):
-    async def test_score_fields_are_derived_for_both_seasons_and_cleared_after_removal(self):
+    async def test_score_fields_are_derived_for_current_season_and_cleared_after_removal(self):
         key,rid,source=await self.current()
         all_fields=[normalize(r['fields']) for r in self.fake.rows['players'].values()]
-        self.assertEqual({r['赛季'] for r in all_fields},{'S0赛季','S1赛季'})
+        self.assertEqual({r['赛季'] for r in all_fields},{'S1赛季'})
         self.assertTrue(all(r['评分有效场次']==1 and r['综合评分状态']=='暂定' for r in all_fields))
         self.assertTrue(all('综合评分排名' not in r for r in all_fields))
         self.assertTrue(all(0<=r['综合评分']<=100 for r in all_fields))
@@ -62,7 +62,7 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         key=self.scope+':'+periods.select(self.store,self.scope)['id']+':'+str(source['id'])
         return key,self.online.links()[key]['record_id'],source
     async def test_export_idempotency_preserves_archives_and_uploads_original_once(self):
-        await self.online.once();updates=self.fake.updates
+        await self.current();updates=self.fake.updates
         await self.online.once()
         self.assertEqual(len(self.fake.rows['matches']),1);self.assertEqual(self.fake.uploads,1)
         self.assertEqual(len(self.fake.rows['players']),4)
@@ -137,10 +137,18 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         self.store.enable('other:group','other','group')
         self.store.reconcile('other:group',[{'msg':'1','idx':0,'stamp':200}])
         self.assertFalse(self.online.wake.is_set())
-    async def test_archive_edits_restored_and_listing_failure_keeps_all_local_data(self):
-        await self.online.once();rid=next(iter(self.fake.rows['matches']))
-        self.fake.edit(rid,{'一位昵称':'不能改历史'})
-        await self.online.once();self.assertEqual(self.fake.rows['matches'][rid]['fields']['一位昵称'],'甲')
+    async def test_archived_online_rows_are_never_updated_zeroed_or_recreated(self):
+        archived=periods.select(self.store,self.scope,'历史')['id']
+        old=await self.fake.create('matches',{'对局ID':self.scope+':'+archived+':1','周期ID':archived,'群标识':self.scope,'一位昵称':'历史原值'})
+        player=await self.fake.create('players',{'统计ID':archived+':4:old','周期ID':archived,'群标识':self.scope,'场次':20})
+        self.fake.edit(old['record_id'],{'一位昵称':'手工编辑的历史行'})
+        before=copy.deepcopy(self.fake.rows)
+        await self.current()
+        self.assertEqual(self.fake.rows['matches'][old['record_id']],before['matches'][old['record_id']])
+        self.assertEqual(self.fake.rows['players'][player['record_id']],before['players'][player['record_id']])
+        del self.fake.rows['matches'][old['record_id']]
+        await self.online.once();self.assertNotIn(old['record_id'],self.fake.rows['matches'])
+        self.assertTrue(all(r['fields'].get('周期ID')!=archived for r in self.fake.rows['matches'].values()))
         self.fake.fail=True
         with self.assertRaises(FeishuError):await self.online.once()
         self.assertEqual(len(self.store.matches(self.scope,period='历史')),1)
@@ -161,6 +169,7 @@ class OnlineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):await self.online.once()
         self.assertEqual(len(self.store.matches(self.scope)),1)
     async def test_uncertain_batch_response_recovers_by_stable_id_without_duplicates(self):
+        self.seed('2','new')
         original=self.fake.batch_create;failed=False
         async def uncertain(table,fields):
             nonlocal failed

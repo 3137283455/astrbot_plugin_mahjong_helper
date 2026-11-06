@@ -22,6 +22,10 @@ def install(db):
     CREATE TABLE IF NOT EXISTS online_links(
         key TEXT PRIMARY KEY,table_key TEXT NOT NULL,record_id TEXT NOT NULL,
         baseline TEXT NOT NULL,local_digest TEXT NOT NULL,error TEXT DEFAULT '',deleted INTEGER DEFAULT 0);
+    CREATE TRIGGER IF NOT EXISTS frozen_period_no_update BEFORE UPDATE ON periods
+        WHEN OLD.state='archived' BEGIN SELECT RAISE(ABORT,'封存赛季只读'); END;
+    CREATE TRIGGER IF NOT EXISTS frozen_period_no_delete BEFORE DELETE ON periods
+        WHEN OLD.state='archived' BEGIN SELECT RAISE(ABORT,'封存赛季不可删除'); END;
     ''')
     columns={r['name'] for r in db.execute('PRAGMA table_info(sources)')}
     if 'origin' not in columns:
@@ -112,3 +116,8 @@ def assert_current(store,scope,row):
     if row['scope']!=scope:raise ValueError('不能修改其他群的记录')
     if current and row['id'] not in current_ids(store,scope):
         raise ValueError('该记录已封存，不能修改；历史统计保持原样')
+
+
+def archived_source(store,id):
+    return store.db.execute('''SELECT 1 FROM source_periods sp JOIN periods p ON p.id=sp.period_id
+        WHERE sp.source_id=? AND p.state='archived' ''',(id,)).fetchone() is not None
