@@ -28,7 +28,8 @@ HELP='''🀄 单牌谱复盘（四麻东南战）
 /复盘 分歧　/复盘 分局 南2
 /复盘 取消　/复盘 重试
 /复盘 重发：重新发送已保存结果，不重新分析。
-/复盘 链接　/复盘 原谱：分别查看报告链接、原始牌谱。
+/复盘 链接　/复盘 原谱：分别查看总览网页、原始牌谱。
+单场和批量结果均合并转发；逐巡入口集中在网页，原谱可点击复制。
 以上默认本人在当前会话的最近任务，也可在末尾加任务编号。
 /复盘 Mortal报告链接：导入在线站生成的报告。
 /复盘 批量：下一行起每行“牌谱链接 开局西家”；最多10份。
@@ -142,7 +143,8 @@ class ReplayService:
                     result=json.loads(job['result_json']);batch=await asyncio.to_thread(self.batches.get,scope,actor,result['batch_id'])
                     await self.deliver_result(event,batch,await asyncio.to_thread(self.batch_chain,batch));return
                 if action=='links':
-                    await self.reply(event,event.plain_result(report_url(job) or job['url']));return
+                    url=await asyncio.to_thread(self.pages.single_link,job) if self.pages else report_url(job) or job['url']
+                    await self.reply(event,event.plain_result(url));return
                 if action=='hand' and request['hand'] is None:raise ReplayError('请指定局数，例如 /复盘 分局 南2。')
                 await self.send_result(event,job,'result' if action=='resend' else action,request['hand']);return
             await self.reply(event,event.plain_result(await self.describe(job)))
@@ -171,14 +173,16 @@ class ReplayService:
         data=summarize(report,job['seat'])
         if hand is not None and not any(h['kyoku']==hand for h in data['hands']):raise ReplayError('这份牌谱没有该局，请先查看总览里的分局列表。')
         card=render_replay_card(data,self.store.folder/'cards'/f"{job['id']}-{view}-{hand}.png",job['id'],view,hand)
-        chain=MessageChain().message(f"🀄 复盘 #{job['id']}\nMortal {data['model']} · 一致率 {data['accordance']:.2%}（{data['matches']}/{data['total']}）\n").file_image(str(card))
-        if TASK_RE.fullmatch(str(job.get('remote_task',''))):
-            chain.message('\n完整逐巡复盘：'+report_url(job))
-            differences=[d for d in data['differences'] if hand is None or d['kyoku']==hand][:8 if view!='result' else 3]
-            for d in differences:
-                chain.message(f"\n{hand_name(d['kyoku'],d['honba'])} 第{d['turn']}巡："+report_url(job,d['hand_index'],d['ply']))
-        chain.message('\n输入链接：'+job['url'])
-        return chain
+        message=f"🀄 单牌谱复盘 #{job['id']}\nMortal {data['model']} · 一致率 {data['accordance']:.2%}（{data['matches']}/{data['total']}）"
+        if self.pages:
+            message+='\n\n查看完整报告：\n'+self.pages.single_link(job)+'\n\n网页包含分局数据、重点决策与逐巡复盘入口，可直接复制牌谱。'
+        else:
+            url=report_url(job)
+            message+='\n\n'+('完整逐巡复盘：\n'+url if url else '总览网页暂不可用，分析结果已保存。')
+        message+='\n重新发送：/复盘 重发'
+        nodes=[Comp.Node(content=[Comp.Plain(message)],uin=self.bot_uin,name='慧慧 · 单牌谱复盘'),
+               Comp.Node(content=MessageChain().file_image(str(card)).chain,uin=self.bot_uin,name='慧慧 · 复盘结果')]
+        return MessageChain(chain=[Comp.Nodes(nodes)])
 
     def batch_chain(self,batch):
         data=self.batches.summary(batch);path=render_batch_card(data,self.store.folder/'cards'/(batch['id']+'.png'))

@@ -8,7 +8,15 @@ from PIL import Image,ImageDraw,ImageFont
 ROOT=Path(__file__).resolve().parents[1]
 W=2000;M=58;GAP=32;CW=(W-M*2-GAP)//2
 PAPER='#F5EFE3';INK='#202126';ORANGE='#EC5936';MUTED='#66635F';LINE='#D8CFC0';WHITE='#FFFCF6';GOLD='#F4C65B'
-EDITION='2026.11.04'
+EDITION='2026.11.06'
+REPLAY_GUIDE=[
+ [('cmd','/复盘 链接 开局南家'),('small','指定开局东 / 南 / 西 / 北家，分析单场。'),
+  ('cmd','/复盘 最近 昵称或UID 5'),('small','最近1～10场，按实际席位分析并生成趋势。'),
+  ('cmd','/复盘 批量'),('small','下一行起每行“牌谱链接 开局席位”，最多10份。')],
+ [('cmd','/复盘 状态　 /复盘 结果'),('small','看排队进度 / 查看本人在当前会话的结果。'),
+  ('cmd','/复盘 重发　 /复盘 链接'),('small','重发已存结果 / 只取总览网址，不重新分析。'),
+  ('cmd','/复盘 分歧　 /复盘 分局 南2'),('small','查看分歧或指定局；更多用法：/复盘 帮助。')],
+]
 MODULES=[
  {'id':'01','title':'群数据','tag':'S1赛季 · 群精华样本','subtitle':'场次、顺位、持点与被飞，完整看对局。','height':850,'lines':[
   ('cmd','/群数据　　/群数据 最近 5'),
@@ -140,11 +148,11 @@ class Poster:
 
 
 def render(path,catalog_path=None):
- c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(4800);d=p.d
+ c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(5600);d=p.d
  # Editorial cover with a drawn magic burst: type stays crisp at original size.
  p.pill(M,38,'HUIHUI / 功能导航',WHITE,INK,26)
  p.text(M,100,'慧慧',108,True,width=650);p.text(M+280,146,'今天想做点什么？',49,True,width=1000)
- p.text(M+4,240,'练何切 · 查符数 · 查雀魂 · 看群数据 · 听歌 · 订阅B站 · 娱乐',31,color=MUTED,width=1600)
+ p.text(M+4,240,'看群数据 · 查雀魂 · 牌谱分析 · 练何切 · 听歌 · 订阅B站 · 娱乐',31,color=MUTED,width=1600)
  d.rectangle((1694,35,1942,255),fill=ORANGE)
  p.text(1721,64,'HELP',60,True,WHITE,width=200);p.text(1723,156,'一图使用手册',25,True,WHITE,width=200)
  # Star / rays are decoration rather than an image-generated character.
@@ -155,11 +163,22 @@ def render(path,catalog_path=None):
  p.text(M+28,324,'群聊：@慧慧 + 你的需求',36,True,WHITE,width=900)
  p.text(1060,326,'私聊：直接说；常规命令可直接发',30,True,WHITE,width=850)
  p.text(M+28,389,'例如：来道何切题 / 播放第二首 / 看看四麻被飞榜 / 给我功能菜单',28,color='#E6D9C8',width=1800)
- commands=['/群数据','/雀','/何切','/符数','/歌单','/B站','/娱乐','/资讯']
+ commands=['/群数据','/雀','/复盘','/何切','/符数','/歌单','/B站','/娱乐','/资讯']
  qw=(W-2*M-(len(commands)-1)*16)/len(commands)
  for i,s in enumerate(commands):
   x=M+i*(qw+16);d.rectangle((x,479,x+qw,544),fill=WHITE,outline=INK,width=2);p.text(x+24,488,s,34,True,width=qw-40)
  y=578
+ p.panel(M,y,W-2*M,610)
+ p.text(M+27,y+18,'牌谱分析  /复盘',45,True,width=1200)
+ p.text(M+27,y+87,'Mortal 4.1b · 仅四麻东南战 · 后台排队处理，其他功能照常使用。',29,color=MUTED,width=1800)
+ for column,lines in enumerate(REPLAY_GUIDE):
+  x=M+27+column*(CW+GAP);yy=y+151
+  for kind,line in lines:
+   p.text(x,yy,line,31 if kind=='cmd' else 27,kind=='cmd',INK if kind=='cmd' else MUTED,width=CW-54)
+   yy+=49
+ p.text(M+27,y+479,'结果私聊：一条合并转发，内含结果卡片 + 总览网址。',30,True,width=1800)
+ p.text(M+27,y+533,'逐巡链接集中在网页，可复制牌谱；一致率不等于胜率，分歧不一定是失误。',27,color=MUTED,width=1800)
+ y+=642
  for i in range(0,len(MODULES),2):
   p.module(M,y,MODULES[i]);p.module(M+CW+GAP,y,MODULES[i+1]);y+=max(MODULES[i]['height'],MODULES[i+1]['height'])+32
  # New 60s catalog is a separate current menu; the original entertainment catalog stays readable.
@@ -194,9 +213,9 @@ def render(path,catalog_path=None):
  d.rectangle((M,y,W-M,y+183),fill=INK)
  p.text(M+27,y+18,'还有这些小功能',34,True,WHITE,width=700)
  p.text(M+27,y+77,'表情包：/meme status 看状态；/meme list 看已收集的表情。',29,color=WHITE,width=1800)
- p.text(M+27,y+125,'单牌谱复盘：/复盘 链接 开局西家；四麻东南，一致率与分歧。详情 /复盘 帮助',29,color='#E6D9C8',width=1800)
+ p.text(M+27,y+125,'雀魂官网：/雀魂官网；也可直接说「给我雀魂官网」。',29,color='#E6D9C8',width=1800)
  y+=220
- p.text(M,y,'继续看详细菜单：/群数据 帮助 · /雀 帮 · /何切 帮 · /B站',29,True,width=1850)
+ p.text(M,y,'继续看详细菜单：/群数据 帮助 · /雀 帮 · /复盘 帮助 · /何切 帮 · /B站',29,True,width=1850)
  p.text(M,y+51,'功能管理、登录、数据修正与@全体提醒设置，请联系管理员。',28,color=MUTED,width=1850)
  p.text(M,y+100,'娱乐内容来自第三方，部分项目需参数或可能临时不可用；以 /娱乐 当前列表为准。',26,color=MUTED,width=1850)
  d.line((M,y+162,W-M,y+162),fill=INK,width=2)
@@ -210,13 +229,17 @@ def render(path,catalog_path=None):
 
 def write_manual(path,catalog_path=None):
  c=load_catalog(catalog_path);lines=['# 慧慧功能使用手册','',f'更新：{EDITION}。群聊自然语言请求请@慧慧，私聊直接说；普通命令可直接发。娱乐命令和菜单在群聊也要@慧慧。','']
+ lines+=['## 牌谱分析','','Mortal 4.1b，仅支持四麻东南战。后台排队，其他功能照常使用。','']
+ for column in REPLAY_GUIDE:
+  lines += [('- `'+line+'`') if kind=='cmd' else '- '+line for kind,line in column]
+ lines+=['','单场和批量结果均私聊发送合并转发，内含卡片与总览网址。网页可查看逐巡入口、分局和重点决策，并复制原始牌谱。一致率不等于胜率，分歧不一定是失误。','']
  for item in MODULES:
   lines += ['## '+item['title'],'',item['subtitle'],'']+[('- `'+line+'`') if kind=='cmd' else '- '+line for kind,line in item['lines']]
   if item['example']:lines += ['',item['example']]
   lines += ['']
  lines+=['## 60s资讯站','','群聊先@慧慧，私聊直接发送。`/资讯` 查看完整图片菜单；`/资讯 热榜`、`/资讯 工具` 可分类查看。例：`/抖音热搜`、`/天气 上海`、`/翻译 hello world`。也可以自然语言请求。仅启用服务器实测通过的项目，故障接口不替换原功能。','','## 娱乐百宝箱','','群聊使用：`@慧慧 /娱乐`、`@慧慧 /娱乐 图片`；私聊可省略@。项目名后可带参数，如 `@慧慧 搜图 猫`。']
  for key,label in [('text','文字'),('image','图片'),('video','视频'),('audio','语音')]:lines+=['','### '+label,'','、'.join(c[key])+'。']
- lines+=['','项目来自第三方，部分项目需参数或可能临时不可用；以 `/娱乐` 当前列表为准。','', '## 其他功能','','表情包：`/meme status` 查看状态，`/meme list` 查看已收集表情。','','单牌谱复盘：`/复盘 链接 开局西家`，支持四麻东南战的一致率、分歧与分局卡片；`/复盘 帮助` 查看用法。在线自动提交可能需要人工验证，支持导入报告链接。','','帮助：`/help` 或 `/帮助`。']
+ lines+=['','项目来自第三方，部分项目需参数或可能临时不可用；以 `/娱乐` 当前列表为准。','', '## 其他功能','','表情包：`/meme status` 查看状态，`/meme list` 查看已收集表情。','','雀魂官网：`/雀魂官网`。','','帮助：`/help` 或 `/帮助`。']
  Path(path).write_text('\n'.join(lines)+'\n',encoding='utf8')
 
 if __name__=='__main__':

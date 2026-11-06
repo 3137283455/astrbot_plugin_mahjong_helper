@@ -55,19 +55,20 @@ class ReplayQueueTests(unittest.IsolatedAsyncioTestCase):
             try:
                 await service.started.wait();self.assertEqual(service.store.queue_info(ids[1])['ahead'],1)
                 self.assertEqual(context.sent,[]);service.release.set()
-                await until(lambda:len(context.sent)==6)
+                await until(lambda:len(context.sent)==3)
                 self.assertEqual(service.order,ids);self.assertEqual(service.peak,1)
-                expected=[('napcat:FriendMessage:'+event.actor) for event in events for _ in range(2)]
+                expected=[('napcat:FriendMessage:'+event.actor) for event in events]
                 self.assertEqual([scope for scope,_ in context.sent],expected)
-                for (_,chain),event in zip(context.sent[::2],events):
+                for (_,chain),event in zip(context.sent,events):
                     mentions=[str(p.qq) for p in chain.chain if isinstance(p,Comp.At)]
                     self.assertEqual(mentions,[])
-                    self.assertTrue(any(isinstance(p,Comp.Image) for p in chain.chain))
-                await asyncio.sleep(.1);self.assertEqual(len(context.sent),6)
+                    self.assertIsInstance(chain.chain[0],Comp.Nodes)
+                    self.assertTrue(any(isinstance(p,Comp.Image) for n in chain.chain[0].nodes for p in n.content))
+                await asyncio.sleep(.1);self.assertEqual(len(context.sent),3)
                 # Immediate cached results from a group are also delivered privately.
                 await service.handle(group,'https://game.maj-soul.com/1/?paipu=abcdefghijklmnop0 南家')
-                self.assertEqual(context.sent[-2][0],'napcat:FriendMessage:'+group.actor)
-                self.assertFalse(any(isinstance(p,Comp.At) for p in context.sent[-2][1].chain))
+                self.assertEqual(context.sent[-1][0],'napcat:FriendMessage:'+group.actor)
+                self.assertFalse(any(isinstance(p,Comp.At) for p in context.sent[-1][1].chain))
             finally:
                 task.cancel()
                 with suppress(asyncio.CancelledError):await task
@@ -97,7 +98,7 @@ class ReplayQueueTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn('雀魂快捷查询',menu[0].get_plain_text());self.assertIn('晴天',song.sent[0].get_plain_text())
                     self.assertLess(time.monotonic()-begin,.5)
                     self.assertIsNotNone(service.process);self.assertIsNone(service.process.returncode)
-                    await until(lambda:len(context.sent)==2)
+                    await until(lambda:len(context.sent)==1)
                     self.assertEqual(context.sent[0][0],'napcat:FriendMessage:'+event.actor)
                     self.assertFalse(any(isinstance(p,Comp.At) for p in context.sent[0][1].chain))
                 finally:

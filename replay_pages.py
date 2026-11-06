@@ -9,6 +9,13 @@ from .replay_core import ReplayError,summarize,report_url,hand_name
 def esc(value):return html.escape(str(value),quote=True)
 def stamp(value):return datetime.fromtimestamp(value,timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M') if value else '手动提供的牌谱'
 
+def single_batch(job):
+    """Expose one existing job without creating a batch or changing queue state."""
+    return {'id':job['id'],'scope':job['scope'],'actor':job['actor'],'single':True,
+            'label':'单牌谱复盘','ordered_by':'provided','items':[{**job,'position':1,'metadata':'{}'}],
+            'pending':int(job['status'] in ('queued','running')),'done':int(job['status']=='done'),
+            'failed':int(job['status'] not in ('queued','running','done'))}
+
 STYLE='''*{box-sizing:border-box}body{margin:0;background:#101821;color:#edf2f7;font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1100px;margin:auto;padding:32px 20px 60px}header,.panel,.game{background:#1d2b38;border:1px solid #2c4050;border-radius:20px;padding:24px;margin-bottom:20px}small,.muted{color:#a1b3c5}h1{margin:5px 0 12px;font-size:30px}h2{font-size:21px;margin:0 0 12px}h3{font-size:18px;margin:0}a{color:#53d6cb;text-decoration:none}a:hover{text-decoration:underline}.badge{display:inline-block;padding:4px 12px;border-radius:20px;background:#263e4b;color:#53d6cb}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}.metric{padding:14px 18px;background:#14212c;border-radius:12px}.metric b{display:block;color:#53d6cb;font-size:30px}.chart{width:100%;height:auto}.game-top{display:flex;justify-content:space-between;gap:20px;align-items:start}.rate{font-size:32px;color:#ffcc7a;white-space:nowrap}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:15px}.button{display:inline-block;padding:9px 16px;background:#294453;border-radius:10px}.button.primary{background:#53d6cb;color:#101821;font-weight:700}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;border-bottom:1px solid #344755;padding:9px 7px}details{margin-top:20px}summary{cursor:pointer;color:#53d6cb}.scroll{overflow:auto}.decision{padding:12px 0;border-bottom:1px solid #344755}footer{font-size:13px;color:#a1b3c5}@media(max-width:600px){main{padding:16px 12px 35px}header,.panel,.game{padding:18px;border-radius:15px}.stats{gap:8px}.metric{padding:10px}.metric b{font-size:23px}h1{font-size:25px}.game-top{gap:8px}.rate{font-size:26px}}'''
 
 STYLE+='''button.button{font:inherit;border:0;color:#53d6cb;cursor:pointer}button.button:focus-visible{outline:2px solid #ffcc7a;outline-offset:3px}textarea.copy-value{width:100%;min-height:100px;resize:vertical;background:#14212c;color:#edf2f7;border:1px solid #53d6cb;border-radius:8px;padding:12px;font:inherit;word-break:break-all}#copy-status{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);padding:10px 18px;background:#294453;border-radius:10px;max-width:90%;z-index:10}#copy-status:empty{display:none}[hidden]{display:none!important}'''
@@ -56,10 +63,15 @@ COPY_SCRIPT_HASH=base64.b64encode(hashlib.sha256(COPY_SCRIPT.encode('utf-8')).di
 
 def render_page(batch,data,reports):
     games=data['games'];title=data.get('label') or '多牌谱复盘'
+    single=batch.get('single',False)
+    if single and games and games[0].get('nickname'):title+=' · '+str(games[0]['nickname'])
     rate=f"{data['accordance']:.2%}" if data['accordance'] is not None else '等待结果'
     refresh='<meta http-equiv="refresh" content="30">' if data['pending'] else ''
     chunks=[f'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · 慧慧复盘</title>{refresh}<style>{STYLE}</style></head><body><main>']
-    chunks.append(f'<header><span class="badge">Mortal 4.1b</span><h1>{esc(title)}</h1><small>批次 {esc(batch["id"])} · 四麻东南战 · '+('按对局时间从早到晚' if data.get('ordered_by')=='time' else '按链接提交顺序')+f'</small><div class="stats"><div class="metric">汇总一致率<b>{rate}</b></div><div class="metric">分析完成<b>{data["done"]}/{len(games)}</b></div><div class="metric">评估决策<b>{data["total"]}</b></div></div><p class="muted">一致 {data["matches"]} / 评估 {data["total"]}；等待 {data["pending"]}，未完成 {data["failed"]}。汇总按评估决策数加权。</p></header>')
+    owner_label='任务' if single else '批次'
+    rate_label='AI一致率' if single else '汇总一致率'
+    order_label='单场完整报告' if single else ('按对局时间从早到晚' if data.get('ordered_by')=='time' else '按链接提交顺序')
+    chunks.append(f'<header><span class="badge">Mortal 4.1b</span><h1>{esc(title)}</h1><small>{owner_label} {esc(batch["id"])} · 四麻东南战 · '+order_label+f'</small><div class="stats"><div class="metric">{rate_label}<b>{rate}</b></div><div class="metric">分析完成<b>{data["done"]}/{len(games)}</b></div><div class="metric">评估决策<b>{data["total"]}</b></div></div><p class="muted">一致 {data["matches"]} / 评估 {data["total"]}；等待 {data["pending"]}，未完成 {data["failed"]}。'+('' if single else '汇总按评估决策数加权。')+'</p></header>')
     svg=['<svg class="chart" viewBox="0 0 1000 285" role="img" aria-label="逐场一致率趋势">'];previous=None
     for n in (0,25,50,75,100):
         y=230-n*2;svg.append(f'<line x1="55" y1="{y}" x2="970" y2="{y}" stroke="#344755"/><text x="8" y="{y+5}" fill="#a1b3c5" font-size="16">{n}%</text>')
@@ -69,7 +81,7 @@ def render_page(batch,data,reports):
         y=230-g['accordance']*200
         if previous:svg.append(f'<line x1="{previous[0]}" y1="{previous[1]}" x2="{x}" y2="{y}" stroke="#53d6cb" stroke-width="4"/>')
         svg.append(f'<circle cx="{x}" cy="{y}" r="6" fill="#ffcc7a"/><text x="{x}" y="{y-13}" text-anchor="middle" fill="#edf2f7" font-size="16">{g["accordance"]:.1%}</text>');previous=x,y
-    chunks.append('<section class="panel"><h2>逐场一致率趋势</h2>'+''.join(svg)+'</svg><small>横轴序号与下方对局一致；各场完整详情可展开查看。</small></section>')
+    if not single:chunks.append('<section class="panel"><h2>逐场一致率趋势</h2>'+''.join(svg)+'</svg><small>横轴序号与下方对局一致；各场完整详情可展开查看。</small></section>')
     statuses={'queued':'排队中','running':'正在分析','failed':'未完成','cancelled':'已取消','manual':'等待验证'}
     for g,job in zip(games,batch['items']):
         number=g['position'];rating=f'{g["accordance"]:.2%}' if 'accordance' in g else statuses.get(g['status'],g['status'])
@@ -84,7 +96,7 @@ def render_page(batch,data,reports):
         chunks.append(f'<noscript><details><summary>手动复制牌谱</summary><textarea class="copy-value" readonly aria-label="完整牌谱链接">{esc(g["url"])}</textarea></details></noscript>')
         report=reports.get(g['job_id'])
         if report:
-            chunks.append('<details><summary>展开分局数据与重点决策</summary><div class="scroll"><table><thead><tr><th>局数</th><th>一致 / 评估</th><th>一致率</th></tr></thead><tbody>')
+            chunks.append('<details'+(' open' if single else '')+'><summary>展开分局数据与重点决策</summary><div class="scroll"><table><thead><tr><th>局数</th><th>一致 / 评估</th><th>一致率</th></tr></thead><tbody>')
             for h in report['hands']:
                 value=f"{h['matches']/h['total']:.1%}" if h['total'] else '—'
                 chunks.append(f'<tr><td>{esc(hand_name(h["kyoku"],h["honba"]))}</td><td>{h["matches"]} / {h["total"]}</td><td>{value}</td></tr>')
@@ -131,13 +143,16 @@ class ReplayPages:
             token=row[0] if row else secrets.token_hex(20)
             if not row:db.execute('INSERT INTO replay_pages VALUES(?,?,?,?,?)',(token,batch['id'],batch['scope'],batch['actor'],time.time()))
         return self.public_url+'/r/'+token
+    def single_link(self,job):return self.link(single_batch(job))
     def page(self,token):
         with self.store.db() as db:row=db.execute('SELECT * FROM replay_pages WHERE token=?',(token,)).fetchone()
         if not row:raise KeyError(token)
         with self.lock:
             cached=self.cache.get(token)
             if cached and time.monotonic()-cached[0]<10:return cached[1]
-            batch=self.batches.get(row['scope'],row['actor'],row['owner']);data=self.batches.summary(batch);reports={}
+            if row['owner'].startswith('B'):batch=self.batches.get(row['scope'],row['actor'],row['owner'])
+            else:batch=single_batch(self.store.get(row['scope'],row['actor'],row['owner']))
+            data=self.batches.summary(batch);reports={}
             for job in batch['items']:
                 if job['status']=='done':reports[job['id']]=summarize(json.loads(Path(job['report_path']).read_text(encoding='utf-8')),job['seat'])
             content=render_page(batch,data,reports)
