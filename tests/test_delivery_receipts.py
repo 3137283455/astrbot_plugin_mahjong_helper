@@ -216,6 +216,8 @@ class ReceiptTests(unittest.IsolatedAsyncioTestCase):
         self.history = [self.message()]
         self.assertTrue((await dispatcher.publish(self.notice)).sent)
         self.assertTrue(any(name == "get_friend_msg_history" and params["user_id"] == 321 for name, params in self.calls))
+        self.assertTrue(all(params.get("disable_get_url") is True and params.get("parse_mult_msg") is False
+                            for name, params in self.calls if name == "get_friend_msg_history"))
 
     async def test_cancellation_during_send_survives_restart(self):
         self.context.send_message.side_effect = asyncio.CancelledError()

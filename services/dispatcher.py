@@ -194,7 +194,10 @@ class SubscriptionNotificationDispatcher:
             return "unknown"
         action = "get_group_msg_history" if is_group else "get_friend_msg_history"
         target = target.split("_")[-1] if is_group else target
-        params = {"group_id" if is_group else "user_id": int(target), "count": 50}
+        params = {
+            "group_id" if is_group else "user_id": int(target), "count": 50,
+            "disable_get_url": True, "parse_mult_msg": False,
+        }
         first_attempt = record["first_attempt"] - 2
         observed_pending = False
         cursors = set()
