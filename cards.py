@@ -17,7 +17,7 @@ def font(size,bold=False):
 
 @lru_cache(maxsize=16)
 def rank_font(size,face):
-    filename='KaushanScript-Regular.ttf' if face=='overall' else 'LiberationSans-BoldItalic.ttf'
+    filename='KaushanScript-Regular.ttf'
     return ImageFont.truetype(str(Path(__file__).parent/'assets'/'fonts'/filename),size)
 
 @lru_cache(maxsize=16)
@@ -201,7 +201,7 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum
                 d.line((left+25,y-10,right-25,y-10),fill='#304050',width=1)
                 line(left+30,y+19,label,25,160,color='#B5C1CF',anchor='lm')
                 line(left+332,y+19,value,29,132,True,TEAL,'rm')
-                if unique_first(positions[metric]):gradient_rank(im,right-28,y+19,'1st',42,'metric')
+                if unique_first(positions[metric]):gradient_rank(im,right-28,y+19,'1st',46,'metric')
                 else:line(right-28,y+19,rank(metric),24,220,True,GOLD,'rm')
             if len(items)<row_count:
                 y=top+151+(row_count-1)*step
