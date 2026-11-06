@@ -82,8 +82,13 @@ class PageTests(unittest.TestCase):
                 url=pages.link(b);self.assertEqual(url,pages.link(b));self.assertEqual(len(url.rsplit('/',1)[1]),40)
                 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}));port=pages.server.server_port
                 with opener.open('http://127.0.0.1:'+str(port)+urlsplit_path(url)) as response:
-                    html=response.read().decode();self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
+                    html=response.read().decode();policy=response.headers['Content-Security-Policy'];self.assertIn('frame-ancestors',policy)
+                    from astrbot_plugin_mahjong_helper.replay_pages import COPY_SCRIPT_HASH
+                    self.assertIn("script-src 'sha256-"+COPY_SCRIPT_HASH+"'",policy)
                 self.assertNotIn('<script>',html);self.assertIn('&lt;script&gt;',html)
+                self.assertIn('data-copy-replay=',html);self.assertIn('复制牌谱</button>',html)
+                self.assertNotIn('原始牌谱 ↗',html)
+                self.assertNotRegex(html,r'<a[^>]+href="https://game\.maj-soul\.com/')
                 self.assertIn('第 1 场',html);self.assertIn('第 2 场',html)
                 self.assertIn('mnop1_a12105509',html);self.assertIn('mnop2_a12105509',html);self.assertIn('开局西家',html)
                 self.assertIn('分局数据',html);self.assertIn('viewport',html)

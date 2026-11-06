@@ -1,5 +1,5 @@
 """Read-only, unlisted review pages protected by random share URLs."""
-import html,json,re,secrets,threading,time
+import base64,hashlib,html,json,re,secrets,threading,time
 from datetime import datetime,timezone,timedelta
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
@@ -10,6 +10,49 @@ def esc(value):return html.escape(str(value),quote=True)
 def stamp(value):return datetime.fromtimestamp(value,timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M') if value else '手动提供的牌谱'
 
 STYLE='''*{box-sizing:border-box}body{margin:0;background:#101821;color:#edf2f7;font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1100px;margin:auto;padding:32px 20px 60px}header,.panel,.game{background:#1d2b38;border:1px solid #2c4050;border-radius:20px;padding:24px;margin-bottom:20px}small,.muted{color:#a1b3c5}h1{margin:5px 0 12px;font-size:30px}h2{font-size:21px;margin:0 0 12px}h3{font-size:18px;margin:0}a{color:#53d6cb;text-decoration:none}a:hover{text-decoration:underline}.badge{display:inline-block;padding:4px 12px;border-radius:20px;background:#263e4b;color:#53d6cb}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}.metric{padding:14px 18px;background:#14212c;border-radius:12px}.metric b{display:block;color:#53d6cb;font-size:30px}.chart{width:100%;height:auto}.game-top{display:flex;justify-content:space-between;gap:20px;align-items:start}.rate{font-size:32px;color:#ffcc7a;white-space:nowrap}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:15px}.button{display:inline-block;padding:9px 16px;background:#294453;border-radius:10px}.button.primary{background:#53d6cb;color:#101821;font-weight:700}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;border-bottom:1px solid #344755;padding:9px 7px}details{margin-top:20px}summary{cursor:pointer;color:#53d6cb}.scroll{overflow:auto}.decision{padding:12px 0;border-bottom:1px solid #344755}footer{font-size:13px;color:#a1b3c5}@media(max-width:600px){main{padding:16px 12px 35px}header,.panel,.game{padding:18px;border-radius:15px}.stats{gap:8px}.metric{padding:10px}.metric b{font-size:23px}h1{font-size:25px}.game-top{gap:8px}.rate{font-size:26px}}'''
+
+STYLE+='''button.button{font:inherit;border:0;color:#53d6cb;cursor:pointer}button.button:focus-visible{outline:2px solid #ffcc7a;outline-offset:3px}textarea.copy-value{width:100%;min-height:100px;resize:vertical;background:#14212c;color:#edf2f7;border:1px solid #53d6cb;border-radius:8px;padding:12px;font:inherit;word-break:break-all}#copy-status{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);padding:10px 18px;background:#294453;border-radius:10px;max-width:90%;z-index:10}#copy-status:empty{display:none}[hidden]{display:none!important}'''
+
+COPY_SCRIPT=r'''
+(() => {
+  const status = document.getElementById('copy-status');
+  const fallback = document.getElementById('copy-fallback');
+  const value = document.getElementById('copy-value');
+  let timer;
+  document.getElementById('copy-close').addEventListener('click', () => { fallback.hidden = true; });
+  document.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-copy-replay]');
+    if (!button) return;
+    const url = button.dataset.copyReplay;
+    let copied = false;
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(url); copied = true; } catch (_) {}
+    }
+    if (!copied) {
+      const helper = document.createElement('textarea');
+      helper.value = url;
+      helper.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+      document.body.appendChild(helper);
+      helper.focus(); helper.select(); helper.setSelectionRange(0, url.length);
+      try { copied = document.execCommand('copy'); } catch (_) {}
+      helper.remove();
+    }
+    clearTimeout(timer);
+    if (copied) {
+      fallback.hidden = true;
+      status.textContent = '牌谱链接已复制';
+      button.textContent = '已复制';
+      timer = setTimeout(() => { status.textContent = ''; button.textContent = '复制牌谱'; }, 2200);
+    } else {
+      fallback.hidden = false;
+      value.value = url; value.focus(); value.select(); value.setSelectionRange(0, url.length);
+      fallback.scrollIntoView({block: 'center'});
+      status.textContent = '浏览器限制了自动复制，请在文本框中长按或手动复制。';
+    }
+  });
+})();
+'''
+COPY_SCRIPT_HASH=base64.b64encode(hashlib.sha256(COPY_SCRIPT.encode('utf-8')).digest()).decode('ascii')
 
 def render_page(batch,data,reports):
     games=data['games'];title=data.get('label') or '多牌谱复盘'
@@ -37,7 +80,8 @@ def render_page(batch,data,reports):
         chunks.append('<div class="actions">')
         link=report_url(g)
         if link and g['status']=='done':chunks.append(f'<a class="button primary" href="{esc(link)}" target="_blank" rel="noopener noreferrer">打开本场逐巡复盘 ↗</a>')
-        chunks.append(f'<a class="button" href="{esc(g["url"])}" target="_blank" rel="noopener noreferrer">原始牌谱 ↗</a><a class="button" href="#game{number}">第 {number} 场定位</a></div>')
+        chunks.append(f'<button type="button" class="button" data-copy-replay="{esc(g["url"])}">复制牌谱</button><a class="button" href="#game{number}">第 {number} 场定位</a></div>')
+        chunks.append(f'<noscript><details><summary>手动复制牌谱</summary><textarea class="copy-value" readonly aria-label="完整牌谱链接">{esc(g["url"])}</textarea></details></noscript>')
         report=reports.get(g['job_id'])
         if report:
             chunks.append('<details><summary>展开分局数据与重点决策</summary><div class="scroll"><table><thead><tr><th>局数</th><th>一致 / 评估</th><th>一致率</th></tr></thead><tbody>')
@@ -51,7 +95,9 @@ def render_page(batch,data,reports):
             chunks.append('</details>')
         elif g.get('error'):chunks.append(f'<p class="muted">{esc(g["error"])}</p>')
         chunks.append('</article>')
-    chunks.append('<footer>一致率只表示与 Mortal 4.1b 的决策吻合程度，不等于实战胜率；分歧不等于失误。<br>本页面保存于机器人服务器，外部 Mortal 报告可能过期；请保管好这条分享链接。</footer></main></body></html>')
+    chunks.append('<section class="panel" id="copy-fallback" hidden><h2>手动复制牌谱</h2><p>长按或全选下方完整链接进行复制：</p><textarea class="copy-value" id="copy-value" readonly aria-label="完整牌谱链接"></textarea><button type="button" class="button" id="copy-close">关闭</button></section><div id="copy-status" role="status" aria-live="polite"></div>')
+    chunks.append('<footer>一致率只表示与 Mortal 4.1b 的决策吻合程度，不等于实战胜率；分歧不等于失误。<br>本页面保存于机器人服务器，外部 Mortal 报告可能过期；请保管好这条分享链接。</footer></main>')
+    chunks.append('<script id="replay-copy">'+COPY_SCRIPT+'</script></body></html>')
     return ''.join(chunks)
 
 class ReplayPages:
@@ -72,7 +118,7 @@ class ReplayPages:
                 except KeyError:self.reply(404,b'Not found','text/plain')
                 except Exception:self.reply(503,'报告暂时无法加载，请稍后刷新。'.encode('utf-8'),'text/plain; charset=utf-8')
             def reply(self,status,content,kind):
-                self.send_response(status);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'");self.end_headers()
+                self.send_response(status);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','no-store');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Content-Type-Options','nosniff');self.send_header('X-Frame-Options','DENY');self.send_header('Content-Security-Policy',"default-src 'none'; script-src 'sha256-"+COPY_SCRIPT_HASH+"'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'");self.end_headers()
                 try:self.wfile.write(content)
                 except OSError:pass
         self.server=ThreadingHTTPServer((host,int(port)),Handler);self.server.daemon_threads=True
