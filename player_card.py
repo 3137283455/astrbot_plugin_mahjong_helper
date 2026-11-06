@@ -87,8 +87,7 @@ def render_player_card(path, uid, section, modes, room='', period=''):
             text(right-30, y, value, 29, right-left-340, color, True, 'rm')
         if section in ('基本', '立直', '更多', '血统') and not data.get('extended'):
             text(left+30, bottom-40, '扩展指标暂缺，基础战绩仍可查看', 22, right-left-60, GOLD)
-    text(64, height-115, '来源：牌谱屋公开数据；三麻 / 四麻分别统计，仅收录金之间及以上对局。', 24, 1312, MUTED)
-    text(64, height-72, '筛选参数可换序：三 / 四、金 / 玉 / 王、30天、文。未填模式时并列展示。', 23, 1312, MUTED)
+    im=im.crop((0,0,1440,height-115))
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
     im.save(path, 'PNG')
     return path

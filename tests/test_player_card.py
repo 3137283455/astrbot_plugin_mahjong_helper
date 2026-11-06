@@ -24,5 +24,5 @@ class PlayerCardTests(unittest.TestCase):
                 path=render_player_card(Path(directory)/(section+'.png'),'12105509',section,data,'玉','近30天')
                 with Image.open(path) as im:
                     self.assertEqual(im.size[0],1440)
-                    self.assertGreaterEqual(im.size[1],1000)
+                    self.assertGreaterEqual(im.size[1],900)
                     self.assertEqual(im.getpixel((0,im.height-1)),(16,23,32))

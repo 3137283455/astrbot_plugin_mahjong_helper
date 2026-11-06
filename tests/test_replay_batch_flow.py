@@ -29,7 +29,7 @@ class BatchFlowTests(unittest.IsolatedAsyncioTestCase):
                 await until(lambda:len(c.sent)==2)
                 chain=c.sent[0][1];self.assertFalse(any(isinstance(p,Comp.At) for p in chain.chain));self.assertTrue(any(isinstance(p,Comp.Image) for p in chain.chain))
                 self.assertTrue(all(scope=='napcat:FriendMessage:'+e.actor for scope,_ in c.sent))
-                self.assertIn('完整链接可查看每一手',c.sent[1][1].get_plain_text());await asyncio.sleep(.1);self.assertEqual(len(c.sent),2)
+                self.assertIn('https://',c.sent[1][1].get_plain_text());await asyncio.sleep(.1);self.assertEqual(len(c.sent),2)
                 await s.handle(e,'汇总');self.assertTrue(any(isinstance(p,Comp.Image) for p in c.sent[-2][1].chain))
                 self.assertEqual(c.sent[-2][0],'napcat:FriendMessage:'+e.actor)
                 await s.handle(e,'状态');self.assertIn('成功2',e.sent[-1].get_plain_text())

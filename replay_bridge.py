@@ -158,7 +158,7 @@ class ReplayService:
         if job.get('kind')=='recent' and job['status']=='running' and job.get('phase')!='verification':result+='\n电脑正在查找玩家、加载网页对局列表；取得后自动加入复盘批次。'
         if job['status'] in ('queued','running'):
             if queue_info is not None:result+=f"\n前方还有 {queue_info['ahead']} 个任务（含正在分析），按提交顺序处理。"
-            return result+'\n进度和结果会私聊发送。等待期间其他命令照常使用。\n/复盘 状态 查进度；/复盘 取消 取消。'
+            return result+'\n结果将私聊发送。'
         if job['status']=='done':return result+'\n/复盘 结果 可重新查看。'
         if job['error']:
             error=job['error']
@@ -175,11 +175,10 @@ class ReplayService:
         card=render_replay_card(data,self.store.folder/'cards'/f"{job['id']}-{view}-{hand}.png",job['id'],view,hand)
         message=f"🀄 单牌谱复盘 #{job['id']}\nMortal {data['model']} · 一致率 {data['accordance']:.2%}（{data['matches']}/{data['total']}）"
         if self.pages:
-            message+='\n\n查看完整报告：\n'+self.pages.single_link(job)+'\n\n网页包含分局数据、重点决策与逐巡复盘入口，可直接复制牌谱。'
+            message+='\n\n'+self.pages.single_link(job)
         else:
             url=report_url(job)
             message+='\n\n'+('完整逐巡复盘：\n'+url if url else '总览网页暂不可用，分析结果已保存。')
-        message+='\n重新发送：/复盘 重发'
         nodes=[Comp.Node(content=[Comp.Plain(message)],uin=self.bot_uin,name='慧慧 · 单牌谱复盘'),
                Comp.Node(content=MessageChain().file_image(str(card)).chain,uin=self.bot_uin,name='慧慧 · 复盘结果')]
         return MessageChain(chain=[Comp.Nodes(nodes)])
@@ -189,7 +188,7 @@ class ReplayService:
         if self.pages:
             url=self.pages.link(batch)
             rate=f"{data['accordance']:.2%}" if data['accordance'] is not None else '等待报告'
-            message=f"{data.get('label') or '多牌谱复盘'}\nMortal 4.1b · 完成 {data['done']}/{len(data['games'])}\n汇总一致率 {rate}（{data['matches']}/{data['total']}）\n\n逐场数据与复盘入口：\n{url}\n\n网页内逐场标注时间、顺位和点数，可查看原始牌谱、分局及具体决策。\n批次 {batch['id']}\n重新发送：/复盘 重发"
+            message=f"{data.get('label') or '多牌谱复盘'} #{batch['id']}\nMortal 4.1b · 完成 {data['done']}/{len(data['games'])}\n汇总一致率 {rate}（{data['matches']}/{data['total']}）\n\n{url}"
             nodes=[Comp.Node(content=[Comp.Plain(message)],uin=self.bot_uin,name='慧慧 · 复盘汇总'),Comp.Node(content=MessageChain().file_image(str(path)).chain,uin=self.bot_uin,name='慧慧 · 一致率趋势')]
             return MessageChain(chain=[Comp.Nodes(nodes)])
         chain=MessageChain().message('🀄 多牌谱复盘 '+batch['id']+'\n').file_image(str(path))
@@ -201,14 +200,13 @@ class ReplayService:
                 stamp=datetime.fromtimestamp(game['start_time'],timezone(timedelta(hours=8))).strftime('%m-%d %H:%M')
                 detail=f"{stamp} · 第{game['rank']}位 · {game['score']:,}点 · 开局{'东南西北'[game['seat']]}家\n"
             chain.message(f"\n{game['position']}. {detail}{status} · 单场 #{game['job_id']}\n"+link)
-        chain.message('\n单场详情：/复盘 分歧 单场编号；完整链接可查看每一手。\n原始牌谱：/复盘 原谱 单场编号。')
         return chain
 
     async def handle_batches(self,event,text):
         scope=event.unified_msg_origin;actor=str(event.get_sender_id());tokens=text.strip().split();first=tokens[0] if tokens else ''
         if first=='最近':
             if not self.recent_loader:raise ReplayError('最近对局入口尚未就绪，请先用 /复盘 批量 提供完整链接。')
-            if self.config.get('replay_backend')!='pc':await self.reply(event,event.plain_result('正在查询最近四麻东南对局；其他命令照常使用。'))
+            if self.config.get('replay_backend')!='pc':await self.reply(event,event.plain_result('正在查询最近四麻东南对局。'))
             try:sources=await self.recent_loader(event,' '.join(tokens[1:]))
             except Exception as exc:raise ReplayError(str(exc)+'\n暂未提交复盘任务；可先用 /复盘 批量 提供链接。') from exc
             if isinstance(sources,dict) and sources.get('kind')=='recent':
@@ -221,7 +219,7 @@ class ReplayService:
         if first=='批量' or len(URL_RE.findall(text))>1:
             sources=parse_sources(text);batch=await asyncio.to_thread(self.batches.create,scope,actor,sources,self.delivery(event));self.wake.set()
             if not batch['pending']:await self.deliver_result(event,batch,await asyncio.to_thread(self.batch_chain,batch))
-            else:await self.reply(event,event.plain_result(f"批次 {batch['id']} 已加入后台队列，共{len(batch['items'])}份（重复链接已合并）。\n进度和结果会私聊发送；/复盘 状态 看进度，/复盘 取消 取消此批。其他功能照常使用。"))
+            else:await self.reply(event,event.plain_result(f"批次 {batch['id']} 已排队，共{len(batch['items'])}份。\n结果将私聊发送。"))
             return True
         match=re.search(r'\b[Bb][0-9a-fA-F]{12}\b',text);batch_id='B'+match[0][1:].lower() if match else ''
         actions={'汇总':'结果','进度':'状态','批量状态':'状态','批量结果':'结果','批量取消':'取消'};action=actions.get(first,first)

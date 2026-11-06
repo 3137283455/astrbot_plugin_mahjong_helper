@@ -108,7 +108,7 @@ def render_page(batch,data,reports):
         elif g.get('error'):chunks.append(f'<p class="muted">{esc(g["error"])}</p>')
         chunks.append('</article>')
     chunks.append('<section class="panel" id="copy-fallback" hidden><h2>手动复制牌谱</h2><p>长按或全选下方完整链接进行复制：</p><textarea class="copy-value" id="copy-value" readonly aria-label="完整牌谱链接"></textarea><button type="button" class="button" id="copy-close">关闭</button></section><div id="copy-status" role="status" aria-live="polite"></div>')
-    chunks.append('<footer>一致率只表示与 Mortal 4.1b 的决策吻合程度，不等于实战胜率；分歧不等于失误。<br>本页面保存于机器人服务器，外部 Mortal 报告可能过期；请保管好这条分享链接。</footer></main>')
+    chunks.append('</main>')
     chunks.append('<script id="replay-copy">'+COPY_SCRIPT+'</script></body></html>')
     return ''.join(chunks)
 
