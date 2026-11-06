@@ -14,6 +14,35 @@ def font(size,bold=False):
     for p,idx in [('/usr/share/fonts/opentype/noto/NotoSansCJK-'+('Bold' if bold else 'Regular')+'.ttc',2),('C:/Windows/Fonts/'+('msyhbd' if bold else 'msyh')+'.ttc',0)]:
         if Path(p).exists():return ImageFont.truetype(p,size,index=idx)
     raise RuntimeError('需要安装中文字体 NotoSansCJK 或微软雅黑')
+
+@lru_cache(maxsize=16)
+def rank_font(size,face):
+    filename='KaushanScript-Regular.ttf' if face=='overall' else 'LiberationSans-BoldItalic.ttf'
+    return ImageFont.truetype(str(Path(__file__).parent/'assets'/'fonts'/filename),size)
+
+@lru_cache(maxsize=16)
+def rank_glyph(label,size,face):
+    f=rank_font(size,face);box=f.getbbox(label);w=box[2]-box[0];h=box[3]-box[1]
+    mask=Image.new('L',(w,h));ImageDraw.Draw(mask).text((-box[0],-box[1]),label,font=f,fill=255)
+    gradient=Image.new('RGB',(w,h));draw=ImageDraw.Draw(gradient)
+    colors=((84,227,211),(166,162,255),(255,155,210))
+    for x in range(w):
+        t=x/max(1,w-1)*2;i=min(1,int(t));ratio=t-i
+        color=tuple(round(colors[i][c]*(1-ratio)+colors[i+1][c]*ratio) for c in range(3))
+        draw.line((x,0,x,h),fill=color)
+    return gradient,mask
+
+def gradient_rank(image,x,y,label,size,face):
+    glyph,mask=rank_glyph(label,size,face)
+    image.paste(glyph,(round(x-glyph.width),round(y-glyph.height/2)),mask)
+
+def crown(draw,x,y):
+    draw.polygon([(x-25,y-10),(x-13,y-1),(x,y-21),(x+13,y-1),
+                  (x+25,y-10),(x+19,y+12),(x-19,y+12)],fill=GOLD)
+    draw.rounded_rectangle((x-19,y+16,x+19,y+21),radius=3,fill=GOLD)
+
+def unique_first(row):
+    return row is not None and row.get('position')==1 and not row.get('tied',False)
 def fit(d,text,size,width,bold=False):
     text=str(text)
     while text and d.textlength(text,font=font(size,bold))>width:
@@ -117,23 +146,29 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum
     stats=[s for s in stats if s['games']>=minimum]
     im=Image.new('RGB',(W,1064),BG);d=ImageDraw.Draw(im)
     d.rectangle((0,0,W,282),fill=PANEL)
-    d.text((72,40),'群数据  /  个人档案',font=font(25,True),fill=MUTED)
+    d.text((72,32),'群数据  /  个人档案',font=font(25,True),fill=MUTED)
     def line(x,y,text,size,width,bold=False,color=TEAL,anchor=None):
         text=str(text)
         while size>20 and d.textlength(text,font=font(size,bold))>width:size-=1
         text=fit(d,text,size,width,bold)
         d.text((x,y),text,font=font(size,bold),fill=color,anchor=anchor)
         return d.textlength(text,font=font(size,bold))
-    name_width=line(72,106,name,65,580 if score_data is not None else 1090,True,INK)
+    name_width=line(72,116,name,65,580 if score_data is not None else 1090,True,INK)
     score_row=next((r for r in score_data['rows'] if r['name']==name),None) if score_data is not None else None
+    champion=unique_first(score_row) and score_row.get('qualified',False)
+    if champion:crown(d,72+name_width/2,92 if name_width>480 else 100)
     if score_data is not None:
         x=max(360,int(72+name_width+28))
-        d.rounded_rectangle((x,116,x+220,182),radius=14,fill='#233442')
-        d.rounded_rectangle((x+236,116,x+476,182),radius=14,fill='#233442')
-        line(x+110,149,'综合 '+score_display(score_row['score']) if score_row else '暂无评分',29,200,True,TEAL,'mm')
-        line(x+356,149,rank_label(score_row,score_data) if score_row else '0有效场',25,220,True,GOLD,'mm')
+        d.rounded_rectangle((x,126,x+220,192),radius=14,fill='#233442')
+        line(x+110,159,'综合 '+score_display(score_row['score']) if score_row else '暂无评分',29,200,True,TEAL,'mm')
+        if champion:gradient_rank(im,x+430,158,'#1',108,'overall')
+        else:
+            d.rounded_rectangle((x+236,126,x+476,192),radius=14,fill='#233442')
+            label=(('并列第' if score_row['tied'] else '第')+str(score_row['position'])+'名'
+                   if score_row and score_row['position'] is not None else rank_label(score_row,score_data) if score_row else '0有效场')
+            line(x+356,159,label,25,220,True,GOLD,'mm')
     scope=period_name+'   /   '+('三麻' if mode==3 else '四麻')+'   /   '+(f'近{days}天' if days else '全部已确认对局')
-    line(75,204,scope,29,1080,color=MUTED)
+    line(75,214,scope,29,1080,color=MUTED)
     line(1368,139,len(stats),58,240,True,GOLD,'ra')
     d.text((1368,210),'本次参排人数',font=font(25),fill=MUTED,anchor='ra')
     p=next((s for s in stats if s['name']==name),None)
@@ -166,7 +201,8 @@ def profile(path,group,mode,stats,name,days=0,period_name='当前周期',minimum
                 d.line((left+25,y-10,right-25,y-10),fill='#304050',width=1)
                 line(left+30,y+19,label,25,160,color='#B5C1CF',anchor='lm')
                 line(left+332,y+19,value,29,132,True,TEAL,'rm')
-                line(right-28,y+19,rank(metric),24,220,True,GOLD,'rm')
+                if unique_first(positions[metric]):gradient_rank(im,right-28,y+19,'1st',42,'metric')
+                else:line(right-28,y+19,rank(metric),24,220,True,GOLD,'rm')
             if len(items)<row_count:
                 y=top+151+(row_count-1)*step
                 d.rounded_rectangle((left+23,y-5,right-23,y+49),radius=10,fill='#233442')
