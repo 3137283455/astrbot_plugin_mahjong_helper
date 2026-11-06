@@ -8,6 +8,30 @@ from astrbot_plugin_group_data.recognizer import Recognizer
 from astrbot_plugin_group_data.store import Store
 from test_core import result
 class RecognizerTests(unittest.IsolatedAsyncioTestCase):
+ async def test_new_glyphs_recheck_retained_reads_without_model_requests(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d)
+   originals=[result(names=[name,'乙','丙']) for name in ('错字一','错字二','错字三')]
+   store.save('h','review',raw=originals,reason='三次识别仍存在无法确认的字段')
+   rec._match_verified=lambda r,ocr:[{'mode':3,'place':1,'points':65000,'name':'慪龢','score':1,'sources':[1]}]
+   rec.read=AsyncMock()
+   accepted=await rec.recheck_reviews()
+   self.assertEqual(accepted,[row['id']]);rec.read.assert_not_awaited()
+   saved=store.image('h');self.assertEqual(saved['status'],'accepted')
+   self.assertEqual(json.loads(saved['result'])['players'][0]['name'],'慪龢')
+   self.assertEqual(json.loads(saved['raw'])[:3],originals)
+   self.assertEqual(await rec.recheck_reviews(),[])
+
+ async def test_dictionary_does_not_override_points_or_uncertain_unmatched_name(self):
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d)
+   readings=[result(names=[name,'乙','丙']) for name in ('错字一','错字二','错字三')]
+   store.save('h','review',raw=readings)
+   rec._match_verified=lambda r,ocr:[{'mode':3,'place':1,'points':64000,'name':'慪龢'}]
+   self.assertEqual(await rec.recheck_reviews(),[])
+   self.assertEqual(store.image('h')['status'],'review');self.assertFalse(store.matches('b:g'))
+
  def setup_recognizer(self,folder,provider=None):
   store=Store(Path(folder)/'data.db');self.addCleanup(store.close)
   ctx=SimpleNamespace(get_using_provider_async=AsyncMock(return_value=provider))

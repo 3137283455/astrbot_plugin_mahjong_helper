@@ -3,13 +3,50 @@ import tempfile
 import unittest
 from pathlib import Path
 from PIL import Image,ImageDraw,ImageFont
-from astrbot_plugin_group_data.verified_names import VerifiedNames,apply_verified,fingerprint,similarity,name_regions
+from astrbot_plugin_group_data.verified_names import VerifiedNames,apply_verified,fingerprint,similarity,name_regions,guard_historical_labels
+from astrbot_plugin_group_data.store import Store
 
 class FakeStore:
     def __init__(self,rows):self.records=rows
     def rows(self,scope):return [r for r in self.records if r['scope']==scope]
 
 class VerifiedNameTests(unittest.TestCase):
+    def test_old_wrong_label_cannot_rewrite_agreeing_model_names(self):
+        reading={'is_result':True,'mode':3,'confidence':.99,'players':[{'place':1,'points':60000,'name':'天爻杳药'}]}
+        old={'mode':3,'place':1,'points':60000,'name':'天爻杏药','method':'historical-pair'}
+        self.assertEqual(guard_historical_labels([reading,reading],[old]),[])
+
+    def test_user_registered_correction_has_explicit_provenance(self):
+        reading={'is_result':True,'mode':3,'confidence':.99,'players':[{'place':1,'points':60000,'name':'天爻杏药'}]}
+        registered={'mode':3,'place':1,'points':60000,'name':'天爻杳药','method':'registered-region'}
+        self.assertEqual(guard_historical_labels([reading,reading],[registered]),[registered])
+
+    def test_enrolled_sample_persists_across_restart_and_is_group_local(self):
+        with tempfile.TemporaryDirectory() as d:
+            s=Store(Path(d)/'test.db')
+            try:
+                a,_=self.screen(d,1,manual=False);target,ocr=self.screen(d,2,manual=False,offset=100)
+                bank=VerifiedNames(s);bank.enroll('b:g',a,1,'慪龢')
+                other=VerifiedNames(s)
+                self.assertEqual(other.match(target,ocr)[0]['name'],'慪龢')
+                self.assertEqual(other.match(a,ocr)[0]['method'],'registered-region')
+                self.assertEqual(other.match({**target,'scope':'b:other'},ocr),[])
+                self.assertEqual(other.summary('b:g'),{'慪龢':1})
+                other.remove('b:g','慪龢')
+                self.assertEqual(VerifiedNames(s).match(target,ocr),[])
+            finally:s.close()
+
+    def test_enrollment_checks_source_scope_and_full_nickname_region(self):
+        with tempfile.TemporaryDirectory() as d:
+            s=Store(Path(d)/'test.db')
+            try:
+                row,_=self.screen(d,1,manual=False);bank=VerifiedNames(s)
+                with self.assertRaises(ValueError):bank.enroll('b:other',row,1,'慪龢')
+                with self.assertRaises(ValueError):bank.enroll('b:g',row,4,'慪龢')
+                with self.assertRaises(ValueError):bank.enroll('b:g',row,1,'?')
+                self.assertEqual(bank.summary('b:g'),{})
+            finally:s.close()
+
     def screen(self,folder,id,names=('ALPHA','BETA','GAMMA'),scope='b:g',manual=True,offset=0):
         path=Path(folder)/f'{id}.png';im=Image.new('RGB',(1500,1000),'#14233b');d=ImageDraw.Draw(im);f=ImageFont.load_default(size=27);rows=[];players=[]
         for i,name in enumerate(names):

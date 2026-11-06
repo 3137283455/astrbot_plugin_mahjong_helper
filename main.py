@@ -65,10 +65,11 @@ HELP=[
  '新增/取消精华会立即唤醒同步，并每约2分钟兜底检查；识别异步进行。',
  '管理员 /群数据 时间：查看数据截至日期、各模式最新被飞和程序检查时间。',
  '管理员 /群数据 同步：查看在线同步状态；/群数据 同步更新 立即同步。',
+ '管理员 /群数据 字库：查看已确认昵称；字库 录入 编号 顺位 完整昵称；字库 删除 完整昵称。',
  '正常终局、被飞终局都录入；S0赛季已封存，与S1赛季独立统计。',
  '群聊也可@慧慧说“看看本群三麻被飞榜”；管理操作仅接受明确命令。',
 ]
-WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并','同步更新'}
+WRITES={'开启','关闭','更新','确认','忽略','修正','重识','合并','取消合并','同步更新','字库'}
 ADMIN_READS={'待确认','核对','时间','同步'}
 
 def parse_query(arguments):
@@ -462,6 +463,33 @@ class GroupDataPlugin(Star):
                 raise ValueError('封存周期只读；修改当前数据请去掉“历史”参数')
             if action=='评分规则':
                 await self.send_result(event,event.plain_result(rules_text()));return
+            if action=='字库':
+                bank=self.recognizer.verified_names
+                if not rest or rest==['列表']:
+                    names=bank.summary(scope)
+                    lines=[f'本群昵称字形库：{len(names)} 个昵称，{sum(names.values())} 份字形样本。']
+                    lines.extend(f'{name}：{count}份' for name,count in sorted(names.items()))
+                    lines.extend(['录入：/群数据 字库 录入 图片编号 顺位 完整昵称',
+                                  '溯源：/群数据 字库 查看 完整昵称',
+                                  '删除：/群数据 字库 删除 完整昵称',
+                                  '按原图登记；只匹配本群字形，不全局合并玩家。新样本会自动复核待确认图片。'])
+                    await self.send_result(event,event.plain_result('\n'.join(lines)));return
+                if rest[0]=='查看' and len(rest)==2:
+                    items=[r for r in bank.templates(scope) if r['name']==rest[1]]
+                    lines=[f'字形标签：{rest[1]}；{len(items)}份样本。']
+                    lines.extend(f'原图 #{r["source"]} · '+('明确登记' if r.get('explicit') else '历史人工确认') for r in items)
+                    await self.send_result(event,event.plain_result('\n'.join(lines)));return
+                if rest[0]=='录入' and len(rest)==4:
+                    row=self.store.original_source(scope,int(rest[1]))
+                    if not row:raise ValueError('未找到本群原始图片记录')
+                    entry=bank.enroll(scope,row,int(rest[2]),rest[3])
+                    self.store.audit(scope,event.get_sender_id(),'字库录入',entry)
+                    self.spawn(self.recognizer.recheck_reviews())
+                    await self.send_result(event,event.plain_result(f'已登记“{entry["name"]}”的字形样本 #{entry["source"]}；后台将自动复核待确认图片。'));return
+                if rest[0]=='删除' and len(rest)==2:
+                    bank.remove(scope,rest[1]);self.store.audit(scope,event.get_sender_id(),'字库删除',{'name':rest[1]})
+                    await self.send_result(event,event.plain_result('已停用该昵称的字形匹配；已有对局与原始昵称保留。'));return
+                raise ValueError('用法：/群数据 字库；字库 录入 图片编号 顺位 "完整昵称"；字库 删除 "完整昵称"')
             if action=='周期':
                 items=periods.all_periods(self.store,scope)
                 await self.card(event,'群数据 · 赛季列表',[

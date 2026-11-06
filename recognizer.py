@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from .core import PROMPT,parse_json,validate,same_reading,consensus
 from .local_ocr import run_ocr,interpret,trusted_names
-from .verified_names import VerifiedNames,apply_verified
+from .verified_names import VerifiedNames,apply_verified,guard_historical_labels
 
 class Recognizer:
     def __init__(self,context,config,store):
@@ -15,6 +15,7 @@ class Recognizer:
         self.local_python=Path(config.get('ocr_python') or store.path.parent/'ocr-venv'/'bin'/'python')
         self.worker=Path(__file__).with_name('ocr_worker.py')
         self.verified_names=VerifiedNames(store)
+        self.review_at=0
     async def provider(self):
         getter=getattr(self.context,'get_using_provider_async',None)
         provider=await getter() if getter else self.context.get_using_provider()
@@ -80,17 +81,15 @@ class Recognizer:
                 if any(any(mark in word for mark in ('终局','終局','对局终结','對局終結')) for word in words):
                     raise ValueError('模型判断与可见终局标记不一致，请核对')
                 self.store.save(digest,'ignored',raw=raw+local_meta+[pipeline_meta],reason=str(first.get('reason','非结算画面'))[:240],model=model);return
-            result=self.checked(first,ocr,evidence)
-            previous=json.loads(row.get('raw') or '[]')
-            ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
-            for place,name in self._trusted(ocr,evidence,result).items():
-                if place>len(result['players']) or result['players'][place-1]['name']!=name:
-                    raise ValueError('模型昵称与本地清晰文字不一致，请人工核对')
             second=await self.read(provider,row['path'],PROMPT+'\n请独立仔细复核每个昵称、最终顺位和持点的正负号，不要猜测。');raw.append(second)
+            evidence=guard_historical_labels(raw,evidence)
+            pipeline_meta['verified_names']=evidence
+            result=self.checked(first,ocr,evidence)
             checked=self.checked(second,ocr,evidence)
             if not same_reading(result,checked):
                 third=await self.read(provider,row['path'],PROMPT+'\n请重新独立读取每个昵称和持点，不猜测模糊字符。');raw.append(third)
-                result=consensus([result,checked,self.checked(third,ocr,evidence)])
+                evidence=guard_historical_labels(raw,evidence);pipeline_meta['verified_names']=evidence
+                result=consensus([self.checked(x,ocr,evidence) for x in raw])
             previous=json.loads(row.get('raw') or '[]')
             ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
             for place,name in self._trusted(ocr,evidence,result).items():
@@ -145,6 +144,32 @@ class Recognizer:
                 if row['status'] in statuses and (row['retry'] or 0)<=time.time():
                     hashes.add(row['hash']);rows.append(row)
         return rows
+
+    async def recheck_reviews(self):
+        """Re-evaluate retained reads against new verified glyphs without model calls."""
+        accepted=[]
+        for row in self.pending(('review',)):
+            if row['hash'] in self.running:continue
+            saved=json.loads(row.get('raw') or '[]')
+            reads=[x for x in saved if x.get('is_result') is True]
+            if len(reads)<2:continue
+            ocr=next((x['local_ocr'] for x in saved if 'local_ocr' in x),None)
+            evidence=guard_historical_labels(reads,self._match_verified(row,ocr))
+            if not evidence:continue
+            try:
+                readings=[self.checked(x,ocr,evidence) for x in reads[:3]]
+                if same_reading(readings[0],readings[1]):result=readings[0]
+                elif len(readings)==3:result=consensus(readings)
+                else:continue
+                for place,name in self._trusted(ocr,evidence,result).items():
+                    if result['players'][place-1]['name']!=name:raise ValueError('本地文字冲突')
+            except (ValueError,KeyError,IndexError,TypeError):continue
+            self.store.save(row['hash'],'accepted',result=result,raw=saved+[{'verified_names':evidence,'auto_recheck':'glyph-memory-v1'}],
+                            reason='已用本群确认字形自动复核；保留原始模型读数',model='glyph-memory-v1')
+            self.store.audit(row['scope'],'system','字库自动复核',{'id':row['id'],'evidence':evidence})
+            accepted.append(row['id'])
+            await asyncio.sleep(0)
+        return accepted
     async def loop(self):
         while True:
             # CPU OCR runs sequentially to avoid starving the existing bot on a 4GB host.
@@ -153,6 +178,12 @@ class Recognizer:
             else:await asyncio.sleep(2)
     async def llm_loop(self):
         while True:
+            if time.time()>=self.review_at:
+                self.review_at=time.time()+60
+                try:await self.recheck_reviews()
+                except Exception:
+                    from astrbot.api import logger
+                    logger.exception('群数据字库后台复核暂时失败，保留原始待确认记录')
             if not self.config.get('llm_fallback',True) or time.time()<self.paused_until:
                 await asyncio.sleep(3);continue
             jobs=self.pending(('llm_pending',))

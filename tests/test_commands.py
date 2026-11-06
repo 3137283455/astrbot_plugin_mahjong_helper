@@ -83,6 +83,13 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             p=self.setup_plugin(d);e=Event(admin=True)
             await p.handle(e,'关闭',allow_write=False);self.assertIn('明确发送',e.sent[-1])
             self.assertTrue(p.store.group('12345:987654321')['enabled'])
+    async def test_dictionary_requires_admin_and_explicit_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=self.setup_plugin(d);e=Event()
+            await p.handle(e,'字库');self.assertIn('管理员',e.sent[-1])
+            e=Event(admin=True)
+            await p.handle(e,'字库 录入 1 1 慪龢',allow_write=False)
+            self.assertIn('明确发送',e.sent[-1])
     async def test_admin_can_pause_and_crossgroup_isolation(self):
         with tempfile.TemporaryDirectory() as d:
             p=self.setup_plugin(d);e=Event(admin=True)
