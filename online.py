@@ -5,8 +5,10 @@ Three-way comparisons preserve concurrent edits for explicit conflict resolution
 """
 from __future__ import annotations
 import asyncio
+import copy
 import hashlib
 import json
+import sqlite3
 import time
 from decimal import Decimal,InvalidOperation
 from pathlib import Path
@@ -53,10 +55,13 @@ class OnlineSync:
         if not self.allowed:raise ValueError('飞书管理员名单不能为空')
         self.interval=max(120,int(target.get('poll_seconds',600)))
         self.wake=asyncio.Event()
+        self._projection_revision=0;self._projection_cache=None
         self.store.subscribe(self._changed)
 
     def _changed(self,scope):
-        if scope==self.scope:self.wake.set()
+        if scope==self.scope:
+            self._projection_revision+=1;self._projection_cache=None
+            self.wake.set()
 
     def get(self,key,default=None):
         row=self.store.db.execute('SELECT value FROM online_state WHERE key=?',(key,)).fetchone()
@@ -64,6 +69,29 @@ class OnlineSync:
 
     def put(self,key,value):
         self.store.db.execute('INSERT OR REPLACE INTO online_state VALUES(?,?)',(key,periods.packed(value)));self.store.db.commit()
+        if key.startswith(('attachment:','annotations:')):
+            self._projection_revision+=1;self._projection_cache=None
+
+    def _read_projection(self):
+        """Compute from a worker-owned read-only snapshot, never the live connection."""
+        reader=copy.copy(self);reader.store=copy.copy(self.store)
+        connection=sqlite3.connect(self.store.path.resolve().as_uri()+'?mode=ro',uri=True)
+        try:
+            connection.row_factory=sqlite3.Row;connection.execute('BEGIN')
+            reader.store.db=connection
+            return reader.projection()
+        finally:connection.close()
+
+    async def projected(self):
+        while True:
+            revision=self._projection_revision
+            cached=self._projection_cache
+            if cached is not None and cached[0]==revision:return cached[1]
+            result=await asyncio.to_thread(self._read_projection)
+            # A native correction during computation must not publish an old snapshot.
+            if revision!=self._projection_revision:continue
+            self._projection_cache=(revision,result)
+            return result
 
     def links(self,table='matches'):
         return {r['key']:dict(r) for r in self.store.db.execute('SELECT * FROM online_links WHERE table_key=?',(table,))}
@@ -214,7 +242,7 @@ class OnlineSync:
         key=self.scope+':'+current['id']+':'+str(source['id'])
         self.put('attachment:'+image,attachments[0]['file_token'])
         self.put('annotations:'+key,{k:fields[k] for k in ('备注','对局时间（可空）') if k in fields})
-        desired=self.projection()[0][key]
+        desired=(await self.projected())[0][key]
         await self.client.update(self.tables['matches'],rid,desired)
         self.remember(key,rid,desired)
         row['fields']=desired
@@ -263,6 +291,8 @@ class OnlineSync:
 
     async def once(self):
         async with self.lock:
+            # Refresh once per pass even if another process edited the database.
+            self._projection_revision+=1;self._projection_cache=None
             if not periods.select(self.store,self.scope):raise ValueError('未切换周期，不执行在线导入')
             if not getattr(self,'_score_schema_ready',False):
                 await self.client.ensure_fields(self.tables['players'],SCORE_FIELDS)
@@ -280,9 +310,9 @@ class OnlineSync:
                 if not key:continue
                 if key in index:raise ValueError('对局明细出现重复对局ID；本轮暂停，防止覆盖')
                 index[key]=row
-            desired,meta,players,sources=self.projection()
+            desired,meta,players,sources=await self.projected()
             errors.extend(await self.attachments(sources))
-            desired,meta,players,sources=self.projection()
+            desired,meta,players,sources=await self.projected()
             links=self.links()
             # Initial history imports can contain hundreds of games. Batched creates
             # avoid one network round trip per row; stable IDs recover uncertain POSTs.
@@ -301,7 +331,7 @@ class OnlineSync:
                 # Re-read local state after earlier network awaits. Native corrections
                 # made during a long image upload must participate in the comparison.
                 if sources.get(key,({},None))[0].get('state')=='current':
-                    fields=self.projection()[0].get(key,fields)
+                    fields=(await self.projected())[0].get(key,fields)
                 fields=normalize(fields)
                 row=index.get(key);link=links.get(key)
                 if row and link and row['record_id']!=link['record_id']:
@@ -330,14 +360,14 @@ class OnlineSync:
                     elif resolution!='采用机器人':
                         try:
                             await self.apply(key,actual)
-                            fields=self.projection()[0][key]
+                            fields=(await self.projected())[0][key]
                         except ValueError as exc:
                             errors.append(str(exc));await self.error(key,row,str(exc));continue
                 payload={**{k:None for k in actual if k not in fields},**fields}
                 if actual!=normalize(fields):await self.client.update(table,row['record_id'],payload)
                 self.remember(key,row['record_id'],fields)
             # Refresh after accepted online edits so the same cycle updates player stats.
-            _,meta,players,_=self.projection()
+            _,meta,players,_=await self.projected()
             await self.mirror('periods',meta,'周期ID');await self.mirror('players',players,'统计ID')
             self.put('last_sync',{'stamp':time.time(),'errors':errors,'games':len(self.store.matches(self.scope))})
             status={'任务ID':self.scope,'群标识':self.scope,'周期ID':periods.select(self.store,self.scope)['id'],
