@@ -11,7 +11,7 @@ from .replay_core import ReplayError,ReplayStore,parse_request,summarize,FORM_UR
 from .replay_card import render_replay_card,render_batch_card
 from .replay_batch import ReplayBatches,parse_sources
 from .replay_recent import create_recent
-from .replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot
+from .replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot,private_history_receipt
 
 REPLAY_INSTRUCTIONS='''电脑自动取谱V3。单牌谱复盘工具 mahjong_replay：用户提供雀魂牌谱链接、要求分析某一场或查看AI一致率时使用。
 query使用“完整链接 开局南家”等参数；缺少分析席位时不要猜测，由工具询问。
@@ -67,7 +67,7 @@ class ReplayService:
         async def send(part):
             if self.is_group_job(job):await self.send_private(job,part)
             else:await event.send(part)
-        ok=await self.delivery_store.deliver(owner,split_result(chain),send,fallback=forward_text)
+        ok=await self.deliver_with_receipts(owner,job,chain,send)
         if not ok:await self.reply(event,event.plain_result('分析结果已保存，部分发送未确认。可用 /复盘 重发 再发一次，无需重新分析。'))
 
     @staticmethod
@@ -98,6 +98,23 @@ class ReplayService:
             return
         found=await self.context.send_message(self.private_scope(job),chain)
         if found is False:raise ConnectionError('复盘私聊发送平台不可用')
+
+    async def verify_private(self,job,chain,since):
+        if not chain.chain or not all(isinstance(p,Comp.Plain) for p in chain.chain):return None
+        getter=getattr(self.context,'get_platform_inst',None)
+        platform=getter(str(job['scope']).split(':',1)[0]) if getter else None
+        if platform is None or platform.meta().name!='aiocqhttp':return None
+        for delay in (2,4):
+            await asyncio.sleep(delay)
+            try:
+                receipt=await asyncio.wait_for(private_history_receipt(platform.get_client(),job,chain,since,self.bot_uin),8)
+                if receipt:return receipt
+            except Exception:continue
+        return None
+
+    async def deliver_with_receipts(self,owner,job,chain,send):
+        async def verify(part,since):return await self.verify_private(job,part,since)
+        return await self.delivery_store.deliver(owner,split_result(chain),send,fallback=forward_text,verify=verify,text_retries=2)
 
     async def describe(self,job):
         info=await self.db_call('queue_info',job['id']) if job['status']=='queued' else None
@@ -269,7 +286,7 @@ class ReplayService:
             try:
                 chain=await asyncio.to_thread(self.batch_chain,batch)
                 async def send(part):await self.send_private(batch,part)
-                ok=await self.delivery_store.deliver(batch['id'],split_result(chain),send,fallback=forward_text)
+                ok=await self.deliver_with_receipts(batch['id'],batch,chain,send)
                 with self.store.db() as db:db.execute('UPDATE replay_batches SET notified=? WHERE id=?',(1 if ok else 2,batch['id']))
                 if not ok:logger.warning('批次 %s 的分析已完成，部分发送未确认；结果保留，可 /复盘 重发',batch['id'])
             except Exception:
@@ -345,7 +362,7 @@ class ReplayService:
                 chain=MessageChain().message(message)
             else:chain=await asyncio.to_thread(self.result_chain,job) if job['status']=='done' else MessageChain().message(await self.describe(job))
             async def send(part):await self.send_private(job,part)
-            ok=await self.delivery_store.deliver(job['id'],split_result(chain),send,fallback=forward_text)
+            ok=await self.deliver_with_receipts(job['id'],job,chain,send)
             await self.db_call('update',job['id'],notified=1 if ok else 2)
             if not ok:logger.warning('复盘 %s 已保存，发送回执未确认，可 /复盘 重发',job['id'])
         except Exception:

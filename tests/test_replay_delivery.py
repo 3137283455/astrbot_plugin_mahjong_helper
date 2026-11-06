@@ -6,7 +6,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api.event import MessageChain
 from astrbot_plugin_mahjong_helper.replay_core import parse_request,ReplayError,normalize_control_text,URL_RE
 from astrbot_plugin_mahjong_helper.replay_bridge import ReplayService
-from astrbot_plugin_mahjong_helper.replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot
+from astrbot_plugin_mahjong_helper.replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot,private_history_receipt
 from astrbot_plugin_mahjong_helper.replay_pages import ReplayPages
 from test_replay import fixture
 from test_replay_queue import Request,Context
@@ -22,6 +22,40 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         b=s.batches.create('napcat:FriendMessage:10001','10001',sources,'private','最近对局 · 测试玩家','time')
         for _ in range(2):j=s.store.next();s.store.complete(j,fixture(2))
         return s.batches.get(b['scope'],b['actor'],b['id'])
+    async def test_late_history_receipt_prevents_duplicate_retry(self):
+        with tempfile.TemporaryDirectory() as f:
+            s=self.service(f);send=AsyncMock(side_effect=timeout());verify=AsyncMock(return_value={'message_id':42,'real_seq':2})
+            chain=MessageChain().message('已保存的结果 #example')
+            self.assertTrue(await s.delivery_store.deliver('late',[chain],send,verify=verify,text_retries=2))
+            self.assertEqual(send.await_count,1);self.assertEqual(verify.await_count,1)
+            self.assertEqual(s.delivery_store.states('late')[0]['status'],'history_acknowledged')
+    async def test_missing_history_retries_text_and_stops_after_success(self):
+        with tempfile.TemporaryDirectory() as f:
+            s=self.service(f);send=AsyncMock(side_effect=[timeout(),None]);verify=AsyncMock(return_value=None)
+            with patch('astrbot_plugin_mahjong_helper.replay_delivery.asyncio.sleep',new_callable=AsyncMock):
+                ok=await s.delivery_store.deliver('retry',[MessageChain().message('结果')],send,verify=verify,text_retries=2)
+            self.assertTrue(ok);self.assertEqual(send.await_count,2);self.assertEqual(verify.await_count,1)
+            self.assertEqual(s.delivery_store.states('retry')[0]['status'],'acknowledged')
+    async def test_retries_are_bounded_and_terminal_state_survives_restart(self):
+        with tempfile.TemporaryDirectory() as f:
+            s=self.service(f);send=AsyncMock(side_effect=timeout());verify=AsyncMock(return_value=None);parts=[MessageChain().message('结果')]
+            with patch('astrbot_plugin_mahjong_helper.replay_delivery.asyncio.sleep',new_callable=AsyncMock):
+                self.assertFalse(await s.delivery_store.deliver('bounded',parts,send,verify=verify,text_retries=2))
+                recovered=ReplayService(Context(),f)
+                self.assertFalse(await recovered.delivery_store.deliver('bounded',parts,send,verify=verify,text_retries=2))
+            self.assertEqual(send.await_count,3);self.assertEqual(verify.await_count,3)
+    async def test_history_requires_recipient_scope_sender_content_time_and_real_sequence(self):
+        from types import SimpleNamespace
+        chain=MessageChain().message('复盘 #example\n75.15%');base={'user_id':3113357165,'time':105,'real_seq':'2','message_id':861620715,'message':[{'type':'text','data':{'text':'复盘 #example\n75.15%'}}]}
+        rows=[{**base,'user_id':3439740900},{**base,'time':90},{**base,'real_seq':'0'},
+              {**base,'message':[{'type':'text','data':{'text':'另一份报告'}}]}]
+        bot=SimpleNamespace(call_action=AsyncMock(return_value={'messages':rows}))
+        job={'actor':'3439740900','scope':'napcat:GroupMessage:1036516712'}
+        self.assertIsNone(await private_history_receipt(bot,job,chain,100,'3113357165'))
+        rows.append(base)
+        receipt=await private_history_receipt(bot,job,chain,100,'3113357165')
+        self.assertEqual(receipt['real_seq'],2);self.assertEqual(receipt['message_id'],861620715)
+        self.assertEqual(bot.call_action.call_args.kwargs,{'user_id':3439740900,'group_id':1036516712,'count':40})
     async def test_rejected_forward_sends_text_link_once_without_reanalysis(self):
         with tempfile.TemporaryDirectory() as f:
             s=self.service(f);sent=[]
