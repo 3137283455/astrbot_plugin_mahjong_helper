@@ -11,7 +11,7 @@ from .replay_core import ReplayError,ReplayStore,parse_request,summarize,FORM_UR
 from .replay_card import render_replay_card,render_batch_card
 from .replay_batch import ReplayBatches,parse_sources
 from .replay_recent import create_recent
-from .replay_delivery import DeliveryStore,split_result
+from .replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot
 
 REPLAY_INSTRUCTIONS='''电脑自动取谱V3。单牌谱复盘工具 mahjong_replay：用户提供雀魂牌谱链接、要求分析某一场或查看AI一致率时使用。
 query使用“完整链接 开局南家”等参数；缺少分析席位时不要猜测，由工具询问。
@@ -65,9 +65,9 @@ class ReplayService:
     async def deliver_result(self,event,job,chain):
         owner=f"query:{job['id']}:{time.time_ns()}"
         async def send(part):
-            if self.is_group_job(job):await self.context.send_message(self.private_scope(job),part)
+            if self.is_group_job(job):await self.send_private(job,part)
             else:await event.send(part)
-        ok=await self.delivery_store.deliver(owner,split_result(chain),send)
+        ok=await self.delivery_store.deliver(owner,split_result(chain),send,fallback=forward_text)
         if not ok:await self.reply(event,event.plain_result('分析结果已保存，部分发送未确认。可用 /复盘 重发 再发一次，无需重新分析。'))
 
     @staticmethod
@@ -84,6 +84,20 @@ class ReplayService:
         if not cls.is_group_job(job):return job['scope']
         platform=str(job['scope']).split(':',1)[0] or 'napcat'
         return f"{platform}:FriendMessage:{job['actor']}"
+
+    async def send_private(self,job,chain):
+        platform_id=str(job['scope']).split(':',1)[0]
+        getter=getattr(self.context,'get_platform_inst',None)
+        platform=getter(platform_id) if getter else None
+        if self.is_group_job(job) and platform is not None and platform.meta().name=='aiocqhttp':
+            group_id=str(job['scope']).rsplit(':',1)[-1].split('_')[-1]
+            if not group_id.isdigit():raise ReplayError('复盘来源群号无效，结果已保存。')
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            await AiocqhttpMessageEvent.send_message(bot=GroupPrivateBot(platform.get_client(),group_id),
+                message_chain=chain,is_group=False,session_id=str(job['actor']))
+            return
+        found=await self.context.send_message(self.private_scope(job),chain)
+        if found is False:raise ConnectionError('复盘私聊发送平台不可用')
 
     async def describe(self,job):
         info=await self.db_call('queue_info',job['id']) if job['status']=='queued' else None
@@ -254,8 +268,8 @@ class ReplayService:
         for batch in await asyncio.to_thread(self.batches.ready):
             try:
                 chain=await asyncio.to_thread(self.batch_chain,batch)
-                async def send(part):await self.context.send_message(self.private_scope(batch),part)
-                ok=await self.delivery_store.deliver(batch['id'],split_result(chain),send)
+                async def send(part):await self.send_private(batch,part)
+                ok=await self.delivery_store.deliver(batch['id'],split_result(chain),send,fallback=forward_text)
                 with self.store.db() as db:db.execute('UPDATE replay_batches SET notified=? WHERE id=?',(1 if ok else 2,batch['id']))
                 if not ok:logger.warning('批次 %s 的分析已完成，部分发送未确认；结果保留，可 /复盘 重发',batch['id'])
             except Exception:
@@ -330,8 +344,8 @@ class ReplayService:
                 message=f"已取得 {result['nickname']} 最近{result['count']}场四麻东南对局"+(f"（请求{requested}场，网页仅返回{result['count']}场）" if requested>result['count'] else '')+f"，已加入批次 {batch['id']}。\n按实际席位、时间从早到晚复盘，完成后发送对局列表和趋势图。\n/复盘 状态 查看进度；/复盘 取消 取消本批。"
                 chain=MessageChain().message(message)
             else:chain=await asyncio.to_thread(self.result_chain,job) if job['status']=='done' else MessageChain().message(await self.describe(job))
-            async def send(part):await self.context.send_message(self.private_scope(job),part)
-            ok=await self.delivery_store.deliver(job['id'],split_result(chain),send)
+            async def send(part):await self.send_private(job,part)
+            ok=await self.delivery_store.deliver(job['id'],split_result(chain),send,fallback=forward_text)
             await self.db_call('update',job['id'],notified=1 if ok else 2)
             if not ok:logger.warning('复盘 %s 已保存，发送回执未确认，可 /复盘 重发',job['id'])
         except Exception:

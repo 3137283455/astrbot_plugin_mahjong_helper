@@ -6,7 +6,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api.event import MessageChain
 from astrbot_plugin_mahjong_helper.replay_core import parse_request,ReplayError,normalize_control_text,URL_RE
 from astrbot_plugin_mahjong_helper.replay_bridge import ReplayService
-from astrbot_plugin_mahjong_helper.replay_delivery import DeliveryStore,split_result
+from astrbot_plugin_mahjong_helper.replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot
 from astrbot_plugin_mahjong_helper.replay_pages import ReplayPages
 from test_replay import fixture
 from test_replay_queue import Request,Context
@@ -22,6 +22,46 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         b=s.batches.create('napcat:FriendMessage:10001','10001',sources,'private','最近对局 · 测试玩家','time')
         for _ in range(2):j=s.store.next();s.store.complete(j,fixture(2))
         return s.batches.get(b['scope'],b['actor'],b['id'])
+    async def test_rejected_forward_sends_text_link_once_without_reanalysis(self):
+        with tempfile.TemporaryDirectory() as f:
+            s=self.service(f);sent=[]
+            chain=MessageChain(chain=[Comp.Nodes([Comp.Node(content=[Comp.Plain('复盘结果\nhttp://127.0.0.1:6192/r/example')],uin='1',name='慧慧')])])
+            async def send(part):
+                sent.append(part)
+                if isinstance(part.chain[0],Comp.Nodes):raise timeout()
+            self.assertTrue(await s.delivery_store.deliver('test-forward',split_result(chain),send,fallback=forward_text))
+            self.assertEqual(len(sent),2);self.assertIn('/r/example',sent[1].get_plain_text())
+            self.assertEqual(s.delivery_store.states('test-forward')[0]['status'],'fallback_acknowledged')
+            self.assertIn('文字',s.delivery_store.description('test-forward'))
+            await s.delivery_store.deliver('test-forward',split_result(chain),send,fallback=forward_text)
+            recovered=ReplayService(Context(),f)
+            await recovered.delivery_store.deliver('test-forward',split_result(chain),send,fallback=forward_text)
+            self.assertEqual(len(sent),2)
+    async def test_failed_text_fallback_retains_unconfirmed_receipts(self):
+        with tempfile.TemporaryDirectory() as f:
+            s=self.service(f);send=AsyncMock(side_effect=timeout())
+            chain=MessageChain(chain=[Comp.Nodes([Comp.Node(content=[Comp.Plain('复盘结果')],uin='1',name='慧慧')])])
+            self.assertFalse(await s.delivery_store.deliver('both-failed',[chain],send,fallback=forward_text))
+            self.assertEqual(send.await_count,2)
+            self.assertEqual(s.delivery_store.states('both-failed')[0]['status'],'unknown')
+            self.assertEqual(s.delivery_store.states('both-failed:fallback:0')[0]['status'],'unknown')
+    async def test_private_route_retains_source_group_for_plain_and_forward(self):
+        from types import SimpleNamespace
+        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+        with tempfile.TemporaryDirectory() as f:
+            s=self.service(f);client=SimpleNamespace(call_action=AsyncMock())
+            platform=SimpleNamespace(meta=lambda:SimpleNamespace(name='aiocqhttp'),get_client=lambda:client)
+            s.context.get_platform_inst=lambda platform_id:platform
+            async def serialize(bot,message_chain,is_group,session_id):
+                self.assertFalse(is_group);self.assertEqual(session_id,'10001')
+                await bot.send_private_msg(user_id=int(session_id),message='result')
+                await bot.call_action('send_private_forward_msg',user_id=session_id,messages=[])
+            with patch.object(AiocqhttpMessageEvent,'send_message',side_effect=serialize):
+                await s.send_private({'scope':'napcat:GroupMessage:12345','actor':'10001','delivery':'group'},MessageChain().message('result'))
+            self.assertEqual([c.args[0] for c in client.call_action.await_args_list],['send_private_msg','send_private_forward_msg'])
+            self.assertTrue(all(c.kwargs['group_id']==12345 and str(c.kwargs['user_id'])=='10001' for c in client.call_action.await_args_list))
+            await s.send_private({'scope':'napcat:FriendMessage:10001','actor':'10001','delivery':'private'},MessageChain().message('result'))
+            self.assertEqual(len(s.context.sent),1)
     async def test_copied_status_description_and_batch_id(self):
         for text in ('状态 查看进度','状态 查进度','进度 查看进度','查看进度'):
             self.assertEqual(parse_request(text)['action'],'status')

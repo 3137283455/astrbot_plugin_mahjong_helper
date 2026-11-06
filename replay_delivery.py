@@ -5,6 +5,30 @@ from astrbot.api.event import MessageChain
 import astrbot.api.message_components as Comp
 from .replay_core import URL_RE
 
+def forward_text(chain):
+    """A compact, different payload when QQ rejects a merged forward."""
+    if not any(isinstance(p,(Comp.Node,Comp.Nodes)) for p in chain.chain):return []
+    texts=[]
+    def collect(parts):
+        for part in parts:
+            if isinstance(part,Comp.Plain):texts.append(part.text)
+            elif isinstance(part,Comp.Nodes):
+                for node in part.nodes:collect(node.content)
+            elif isinstance(part,Comp.Node):collect(part.content)
+    collect(chain.chain)
+    return split_result(MessageChain().message('\n\n'.join(texts))) if texts else []
+
+class GroupPrivateBot:
+    """Keep the source group while AstrBot serializes private message segments."""
+    def __init__(self,bot,group_id):self.bot=bot;self.group_id=int(group_id)
+    def __getattr__(self,name):return getattr(self.bot,name)
+    async def call_action(self,action,**params):
+        if action not in ('send_private_msg','send_private_forward_msg'):
+            raise ValueError('复盘临时会话只允许发送私聊结果')
+        params['group_id']=self.group_id
+        return await self.bot.call_action(action,**params)
+    async def send_private_msg(self,**params):return await self.call_action('send_private_msg',**params)
+
 def split_result(chain):
     """Send images separately, merge text segments, limit each message to two URLs."""
     if any(isinstance(p,(Comp.Node,Comp.Nodes)) for p in chain.chain):return [chain]
@@ -47,20 +71,27 @@ class DeliveryStore:
     def finish(self,owner,part,status,error=''):
         with self.store.db() as db:db.execute('UPDATE replay_delivery SET status=?,error=?,updated=? WHERE owner=? AND part=?',(status,error[:350],time.time(),owner,part))
 
-    async def deliver(self,owner,parts,send):
+    async def deliver(self,owner,parts,send,fallback=None):
         for index,chain in enumerate(parts):
             if not await asyncio.to_thread(self.claim,owner,index):continue
             try:await send(chain)
-            except Exception as exc:await asyncio.to_thread(self.finish,owner,index,error_status(exc),type(exc).__name__+': '+str(exc)[:300])
+            except Exception as exc:
+                error=type(exc).__name__+': '+str(exc)[:300]
+                await asyncio.to_thread(self.finish,owner,index,error_status(exc),error)
+                alternate=fallback(chain) if fallback else []
+                if alternate and await self.deliver(f'{owner}:fallback:{index}',alternate,send):
+                    await asyncio.to_thread(self.finish,owner,index,'fallback_acknowledged',error)
             else:await asyncio.to_thread(self.finish,owner,index,'acknowledged')
             if index+1<len(parts):await asyncio.sleep(.6)
         rows=await asyncio.to_thread(self.states,owner)
-        return all(r['status']=='acknowledged' for r in rows) and len(rows)>=len(parts)
+        return all(r['status'] in ('acknowledged','fallback_acknowledged') for r in rows) and len(rows)>=len(parts)
 
     def description(self,owner):
         with self.store.db() as db:
             latest=db.execute('SELECT owner FROM replay_delivery WHERE owner=? OR owner LIKE ? ORDER BY updated DESC LIMIT 1',(owner,'query:'+owner+':%')).fetchone()
         rows=self.states(latest['owner']) if latest else []
         if not rows:return ''
-        if all(r['status']=='acknowledged' for r in rows):return '结果发送：平台已确认接收；若客户端未显示，可 /复盘 重发。'
+        if all(r['status'] in ('acknowledged','fallback_acknowledged') for r in rows):
+            if any(r['status']=='fallback_acknowledged' for r in rows):return '结果已改用文字和总览网址发送；若未显示，可 /复盘 重发。'
+            return '结果发送：平台已确认接收；若客户端未显示，可 /复盘 重发。'
         return '结果已保存，部分发送失败或回执未确认；可 /复盘 重发，无需重新分析。'
