@@ -11,6 +11,23 @@ class FakeStore:
     def rows(self,scope):return [r for r in self.records if r['scope']==scope]
 
 class VerifiedNameTests(unittest.TestCase):
+    def test_dictionary_correction_can_supersede_frozen_label_without_editing_archive(self):
+        with tempfile.TemporaryDirectory() as d:
+            store=Store(Path(d)/'state.db')
+            try:
+                row,ocr=self.screen(d,1,manual=False)
+                payload=json.loads(row['result']);payload['players'][0]['name']='天爻沓药'
+                row.update(result=json.dumps(payload),status='accepted',_glyph_archived=True)
+                original=row['result'];store.training_rows=lambda scope:[row]
+                bank=VerifiedNames(store);bank.remove('b:g','天爻沓药')
+                bank.enroll('b:g',row,1,'天爻杳药')
+                restored=VerifiedNames(store)
+                match=next(x for x in restored.match(row,ocr) if x['place']==1)
+                self.assertEqual(match['name'],'天爻杳药')
+                self.assertNotIn('天爻沓药',restored.summary('b:g'))
+                self.assertEqual(row['result'],original)
+            finally:store.close()
+
     def test_confirmed_archive_names_are_read_only_training_evidence(self):
         with tempfile.TemporaryDirectory() as d:
             a,_=self.screen(d,1,manual=False);b,_=self.screen(d,2,manual=False,offset=100)

@@ -127,7 +127,10 @@ class VerifiedNames:
         if self.cache.get(scope,{}).get('key')==key:return self.cache[scope]['items']
         items=[];counts={};writes=[]
         persisted={(r['hash'],r['place'],r['name']):r for r in saved}
-        corrected={(r['hash'],p['place']):p['name'] for r in rows for p in json.loads(r['glyph_label'])['players']}
+        # A newer explicit dictionary correction may override a frozen label
+        # without changing that archived game's stored nickname.
+        corrected={(r['hash'],p['place']):p['name'] for r in rows if not r.get('_glyph_archived')
+                   for p in json.loads(r['glyph_label'])['players']}
         for row in saved:
             if row['explicit'] and row['name'] not in blocked:
                 if corrected.get((row['hash'],row['place']),row['name'])!=row['name']:continue
