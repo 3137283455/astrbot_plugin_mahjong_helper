@@ -11,7 +11,7 @@ from .replay_core import ReplayError,ReplayStore,parse_request,summarize,FORM_UR
 from .replay_card import render_replay_card,render_batch_card
 from .replay_batch import ReplayBatches,parse_sources
 from .replay_recent import create_recent
-from .replay_delivery import DeliveryStore,split_result,forward_text,GroupPrivateBot,private_history_receipt
+from .replay_delivery import DeliveryStore,split_result,GroupPrivateBot,private_history_receipt
 
 REPLAY_INSTRUCTIONS='''电脑自动取谱V3。单牌谱复盘工具 mahjong_replay：用户提供雀魂牌谱链接、要求分析某一场或查看AI一致率时使用。
 query使用“完整链接 开局南家”等参数；缺少分析席位时不要猜测，由工具询问。
@@ -45,6 +45,7 @@ class ReplayService:
         self.context=context;self.store=ReplayStore(Path(folder)/'replays');self.config=config or {}
         self.batches=ReplayBatches(self.store);self.delivery_store=DeliveryStore(self.store);self.recent_loader=None
         self.process=None;self.current_id='';self.wake=asyncio.Event();self.pc_gateway=None;self.pc_error='';self.pages=None
+        self.notice_tasks={}
         identity=self.store.folder/'bot_identity.json'
         self.bot_uin=json.loads(identity.read_text()).get('uin','0') if identity.is_file() else '0'
         if self.config.get('replay_backend','server')!='pc':self.store.recover()
@@ -68,7 +69,6 @@ class ReplayService:
             if self.is_group_job(job):await self.send_private(job,part)
             else:await event.send(part)
         ok=await self.deliver_with_receipts(owner,job,chain,send)
-        if not ok:await self.reply(event,event.plain_result('分析结果已保存，部分发送未确认。可用 /复盘 重发 再发一次，无需重新分析。'))
 
     @staticmethod
     def delivery(event):
@@ -100,7 +100,7 @@ class ReplayService:
         if found is False:raise ConnectionError('复盘私聊发送平台不可用')
 
     async def verify_private(self,job,chain,since):
-        if not chain.chain or not all(isinstance(p,Comp.Plain) for p in chain.chain):return None
+        if not chain.chain:return None
         getter=getattr(self.context,'get_platform_inst',None)
         platform=getter(str(job['scope']).split(':',1)[0]) if getter else None
         if platform is None or platform.meta().name!='aiocqhttp':return None
@@ -114,7 +114,7 @@ class ReplayService:
 
     async def deliver_with_receipts(self,owner,job,chain,send):
         async def verify(part,since):return await self.verify_private(job,part,since)
-        return await self.delivery_store.deliver(owner,split_result(chain),send,fallback=forward_text,verify=verify,text_retries=2)
+        return await self.delivery_store.deliver(owner,split_result(chain),send,verify=verify,text_retries=2)
 
     async def describe(self,job):
         info=await self.db_call('queue_info',job['id']) if job['status']=='queued' else None
@@ -283,15 +283,19 @@ class ReplayService:
 
     async def notify_batches(self):
         for batch in await asyncio.to_thread(self.batches.ready):
-            try:
-                chain=await asyncio.to_thread(self.batch_chain,batch)
-                async def send(part):await self.send_private(batch,part)
-                ok=await self.deliver_with_receipts(batch['id'],batch,chain,send)
-                with self.store.db() as db:db.execute('UPDATE replay_batches SET notified=? WHERE id=?',(1 if ok else 2,batch['id']))
-                if not ok:logger.warning('批次 %s 的分析已完成，部分发送未确认；结果保留，可 /复盘 重发',batch['id'])
-            except Exception:
-                with self.store.db() as db:db.execute('UPDATE replay_batches SET notified=2 WHERE id=?',(batch['id'],))
-                logger.exception('批量结果发送未确认，结果保留，可通过 /复盘 重发 读取')
+            await self.notify_batch(batch)
+
+    async def notify_batch(self,batch):
+        try:
+            chain=await asyncio.to_thread(self.batch_chain,batch)
+            async def send(part):await self.send_private(batch,part)
+            ok=await self.deliver_with_receipts(batch['id'],batch,chain,send)
+            with self.store.db() as db:db.execute('UPDATE replay_batches SET notified=? WHERE id=?',(1 if ok else 2,batch['id']))
+            if not ok:logger.warning('批次 %s 的分析已完成，部分发送未确认；结果保留，可 /复盘 重发',batch['id'])
+        except Exception:
+            with self.store.db() as db:db.execute('UPDATE replay_batches SET notified=2 WHERE id=?',(batch['id'],))
+            logger.exception('批量结果发送未确认，结果保留，可通过 /复盘 重发 读取')
+
 
     async def send_result(self,event,job,view='result',hand=None):
         chain=await asyncio.to_thread(self.result_chain,job,view,hand)
@@ -383,19 +387,41 @@ class ReplayService:
         if self.pages:
             await asyncio.to_thread(self.pages.close);self.pages=None
 
+    async def notification_loop(self):
+        def schedule(key,factory):
+            if key in self.notice_tasks or len(self.notice_tasks)>=2:return
+            task=asyncio.create_task(factory());self.notice_tasks[key]=task
+            def finished(done):
+                self.notice_tasks.pop(key,None)
+                if not done.cancelled() and done.exception():logger.error('复盘独立通知任务异常：%s',type(done.exception()).__name__)
+            task.add_done_callback(finished)
+        while True:
+            for batch in await asyncio.to_thread(self.batches.ready):
+                schedule(batch['id'],lambda b=batch:self.notify_batch(b))
+            for job in await self.db_call('unnotified'):
+                schedule(job['id'],lambda j=job:self.notify(j))
+            await asyncio.sleep(1)
+
     async def run(self):
         await self.start_pages()
+        notifier=asyncio.create_task(self.notification_loop())
+        try:await self.analysis_loop()
+        finally:
+            notifier.cancel()
+            with suppress(asyncio.CancelledError):await notifier
+            pending=list(self.notice_tasks.values())
+            for task in pending:task.cancel()
+            await asyncio.gather(*pending,return_exceptions=True)
+            await self.close_pages()
+
+    async def analysis_loop(self):
         if self.config.get('replay_backend','server')=='pc':
-            try:await self.run_pc()
-            finally:await self.close_pages()
+            await self.run_pc()
             return
         try:
             while True:
-                await self.notify_batches()
                 job=await self.db_call('next')
                 if not job:
-                    pending=await self.db_call('unnotified')
-                    for item in pending:await self.notify(item)
                     self.wake.clear()
                     try:await asyncio.wait_for(self.wake.wait(),3)
                     except asyncio.TimeoutError:pass
@@ -410,15 +436,14 @@ class ReplayService:
                 finally:self.current_id=''
                 completed=await self.db_call('get',job['scope'],job['actor'],job['id'])
                 if completed['status'] in ('done','failed','manual') and not completed['notified']:
-                    await self.notify(completed)
+                    self.wake.set()
         finally:
-            self.stop_process();await self.close_pages()
+            self.stop_process()
 
     async def run_pc(self):
         from .replay_pc import PCGateway
         try:
             while True:
-                await self.notify_batches()
                 if self.pc_gateway is None:
                     try:
                         gateway=await asyncio.to_thread(PCGateway,self.store,self.store.folder/'pc_worker.json')
@@ -428,7 +453,6 @@ class ReplayService:
                         if not self.pc_error:logger.exception('Mortal电脑工作端网关暂不可用')
                         self.pc_error='电脑工作端网关暂不可用'
                         await asyncio.sleep(5);continue
-                for job in await self.db_call('unnotified'):await self.notify(job)
                 await asyncio.sleep(1)
         finally:
             if self.pc_gateway is not None:
