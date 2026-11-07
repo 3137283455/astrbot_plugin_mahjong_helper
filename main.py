@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import shlex
 import re
@@ -192,21 +193,34 @@ class GroupDataPlugin(Star):
         await asyncio.to_thread(cards.text_card,path,title,lines)
         await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),title+'\n'+'\n'.join(str(line) for line in lines))
     async def send_result(self,event,result,fallback=None):
+        parts=getattr(result,'chain',result)
+        image=next((p for p in parts if isinstance(p,Comp.Image)),None) if isinstance(parts,(tuple,list)) else None
+        since=time.time()
+        for attempt in range(3 if image else 1):
+            try:
+                await event.send(result)
+                return True
+            except (ActionFailed,TimeoutError) as exc:
+                logger.warning('群数据QQ发送未确认 group=%s attempt=%s error=%s',event.get_group_id(),attempt+1,type(exc).__name__)
+                if image:
+                    await asyncio.sleep((2,4,2)[attempt])
+                    if await self.image_in_history(event,image,since):return True
+        if hasattr(event,'set_extra'):event.set_extra('group_data_delivery_error',True)
+        return False
+
+    async def image_in_history(self,event,image,since):
         try:
-            await event.send(result)
-            return True
-        except (ActionFailed,TimeoutError) as exc:
-            if hasattr(event,'set_extra'):event.set_extra('group_data_delivery_error',True)
-            logger.warning('群数据QQ发送异常 group=%s user=%s error=%s detail=%s',event.get_group_id(),event.get_sender_id(),type(exc).__name__,str(exc)[:350])
-            # A timed-out send may already have reached QQ. Never retry the
-            # image blindly; keep the selection and offer one text response.
-            if fallback:
-                try:
-                    await event.send(event.plain_result('QQ图片发送回执异常，先提供文字结果：\n'+fallback[:3500]))
-                    return True
-                except (ActionFailed,TimeoutError) as text_exc:
-                    logger.warning('群数据文字结果发送也失败 group=%s error=%s；未重发图片，候选保留',event.get_group_id(),type(text_exc).__name__)
-            return False
+            path=Path(str(image.path or image.file).removeprefix('file://'))
+            digest=await asyncio.to_thread(lambda:hashlib.md5(path.read_bytes()).hexdigest())
+            history=unwrap(await asyncio.wait_for(event.bot.call_action(action='get_group_msg_history',group_id=int(event.get_group_id()),count=40),6))
+            for msg in history.get('messages',[]):
+                if str(msg.get('user_id'))!=str(event.get_self_id()) or int(msg.get('real_seq') or 0)<=0 or float(msg.get('time') or 0)<since-1:continue
+                for part in msg.get('message',[]):
+                    if isinstance(part,dict) and part.get('type')=='image' and digest in re.findall(r'(?<![a-f0-9])[a-f0-9]{32}(?![a-f0-9])',str(part.get('data',{}).get('file','')).lower()):return True
+        except Exception:
+            pass
+        return False
+
     def selection_key(self,event):
         return (str(event.get_self_id()),str(event.get_group_id()),str(event.get_sender_id()))
     def selection_cache(self):

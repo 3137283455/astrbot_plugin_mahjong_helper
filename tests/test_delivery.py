@@ -30,11 +30,11 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
    p=self.seed(folder);e=Event(failures=2);await p.handle(e,'个人 离歌 四麻')
    self.assertEqual(len(e.attempts),1);self.assertEqual(e.sent,[])
    self.assertIsNotNone(p.selection_cache().get(p.selection_key(e)));self.assertTrue(e.get_extra('group_data_delivery_error'))
- async def test_profile_image_timeout_returns_ranked_text_without_reexecuting_query(self):
+ async def test_profile_image_timeout_retries_original_card_without_reexecuting_query(self):
   with tempfile.TemporaryDirectory() as folder:
    p=self.seed(folder);e=Event();changes=p.store.db.total_changes
    await p.handle(e,'个人 音弦离歌 四麻')
    self.assertEqual(len(e.attempts),2);self.assertEqual(len(e.sent),1)
-   self.assertIn('平均顺位',e.sent[0]);self.assertIn('原图 #1',e.sent[0]);self.assertIn('第',e.sent[0])
+   self.assertIs(e.attempts[0],e.attempts[1]);self.assertFalse(isinstance(e.sent[0],str))
    self.assertEqual(p.store.db.total_changes,changes)
 if __name__=='__main__':unittest.main()
