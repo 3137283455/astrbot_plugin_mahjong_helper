@@ -30,6 +30,7 @@ from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
 from .replay_bridge import ReplayService, REPLAY_INSTRUCTIONS
 from .player_card import CARD_REVISION as PLAYER_CARD_REVISION, render_player_card
+from .query_delivery import send_query_result
 from .formatters import (
     format_record,
     format_records,
@@ -412,6 +413,9 @@ class MahjongHelperPlugin(Star):
                 or not event.get_extra("mahjong_ai_request") or event.get_extra("mahjong_ai_action_used")):
             return False
         event.set_extra("mahjong_ai_action_used", True)
+        # Tool execution may fail before on_llm_tool_respond is dispatched.
+        # It still owns the reply; the model must not append invented recovery text.
+        event.set_extra("mahjong_ai_tool_used", True)
         return True
 
     def _entertainment_plugin(self):
@@ -983,12 +987,13 @@ class MahjongHelperPlugin(Star):
                 parsed = PlayerQuery(SECTIONS[section], player.strip(), mode or 4, room, days, page, text, mode != 0)
                 results = self._query_player_view(event, parsed)
             async for result in results:
-                await event.send(result)
+                if not await send_query_result(event, result):
+                    return
         except ValueError as exc:
-            await event.send(event.plain_result(str(exc)))
+            await send_query_result(event, event.plain_result(str(exc)))
         except Exception:
             logger.exception("雀魂查询 AI 入口执行失败")
-            await event.send(event.plain_result("雀魂查询失败，请使用 /雀 重试。"))
+            await send_query_result(event, event.plain_result("雀魂查询失败，请使用 /雀 重试。"))
 
     @filter.command("何切重置")
     async def nanikiru_reset(self, event: AstrMessageEvent):
@@ -1205,7 +1210,7 @@ class MahjongHelperPlugin(Star):
             try:
                 member = await bot.call_action(
                     action="get_group_member_info", group_id=group_id,
-                    user_id=int(self_id), no_cache=True,
+                    user_id=int(self_id), no_cache=False,
                 )
                 if not isinstance(member, dict) or member.get("role") not in {"admin", "owner"}:
                     return "机器人还不是本群管理员，无法可靠地 @全体；请先给机器人管理员权限。"
@@ -1255,7 +1260,7 @@ class MahjongHelperPlugin(Star):
             db.record_room_broadcast(actor)
         return None
 
-    @filter.command("友")
+    @filter.command("友", alias={"友人间", "友人房"})
     async def friend_room(self, event: AstrMessageEvent, room: GreedyStr):
         """在 QQ 群广播友人房号或链接。"""
         event.stop_event()

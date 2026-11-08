@@ -23,6 +23,7 @@ class _Bot:
 
     async def call_action(self, action, **params):
         if action == "get_group_member_info":
+            assert params['no_cache'] is False
             return {"role": self.role}
         if action == "get_group_at_all_remain":
             return {
