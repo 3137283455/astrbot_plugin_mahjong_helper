@@ -33,12 +33,17 @@ def name_regions(path,ocr):
     out=[]
     for place,(b,point,value) in enumerate(points,1):
         nearby=[]
-        for row in rows:
-            text=str(row.get('text',''))
-            if row is point or not row.get('box') or re.fullmatch(r'[+\-\d., ]+',text) or text in ('自家','PT','位','终局','終局'):continue
-            z=_box(row)
-            if b[0]-w*.025<=z[0]<=b[0]+w*.045 and b[1]-h*.10<=z[1] and z[3]<=b[1]+h*.014 and z[3]-z[1]<=h*.07:
-                nearby.append((abs(z[0]-b[0])*.5+abs(b[1]-z[3]),row))
+        # Focused OCR retains original-image coordinates. A rare nickname can
+        # be absent from full OCR but present in the independent focused pass.
+        # Fall back only for this seat; never mix or infer the points list.
+        for candidates in (rows,ocr.get('focused',[])):
+            for row in candidates:
+                text=str(row.get('text',''))
+                if row is point or not row.get('box') or re.fullmatch(r'[+\-\d., ]+',text) or text in ('自家','PT','位','终局','終局'):continue
+                z=_box(row)
+                if b[0]-w*.025<=z[0]<=b[0]+w*.045 and b[1]-h*.10<=z[1] and z[3]<=b[1]+h*.014 and 13<=z[3]-z[1]<=h*.07:
+                    nearby.append((abs(z[0]-b[0])*.5+abs(b[1]-z[3]),row))
+            if nearby:break
         if not nearby:continue
         row=min(nearby,key=lambda item:item[0])[1];z=_box(row);pad=max(2,(z[3]-z[1])*.18)
         area=(max(0,int(z[0]-pad)),max(0,int(z[1]-pad)),min(w,int(z[2]+pad)),min(h,int(z[3]+pad)))

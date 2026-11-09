@@ -11,6 +11,26 @@ class FakeStore:
     def rows(self,scope):return [r for r in self.records if r['scope']==scope]
 
 class VerifiedNameTests(unittest.TestCase):
+    def test_missing_full_ocr_nickname_can_use_focused_region(self):
+        import copy
+        with tempfile.TemporaryDirectory() as d:
+            row,ocr=self.screen(d,1,manual=False)
+            ocr['focused']=copy.deepcopy(ocr['full'])
+            ocr['full']=[r for i,r in enumerate(ocr['full']) if i!=4]
+            regions=name_regions(row['path'],ocr)
+            self.assertEqual([r['place'] for r in regions],[1,2,3])
+            self.assertEqual(regions[-1]['points'],10000)
+            s=Store(Path(d)/'test.db')
+            try:
+                row['raw']=json.dumps([{'local_ocr':ocr}])
+                bank=VerifiedNames(s)
+                bank.enroll('b:g',row,3,'I咲仡')
+                result=bank.match(row,ocr)
+                self.assertEqual([(m['place'],m['name']) for m in result],[(3,'I咲仡')])
+                ocr.pop('focused')
+                self.assertEqual([r['place'] for r in name_regions(row['path'],ocr)],[1,2])
+            finally:s.close()
+
     def test_dictionary_correction_can_supersede_frozen_label_without_editing_archive(self):
         with tempfile.TemporaryDirectory() as d:
             store=Store(Path(d)/'state.db')
