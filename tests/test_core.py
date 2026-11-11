@@ -85,6 +85,14 @@ class StoreTests(unittest.TestCase):
         self.s.merge(self.scope,'旧名','新名')
         with self.assertRaises(ValueError):self.s.merge(self.scope,'新名','旧名')
         self.s.unmerge(self.scope,'旧名');self.assertEqual(self.s.aliases(self.scope),{})
+    def test_confirmed_alias_is_applied_to_returned_detail_without_rewriting_raw(self):
+        row=self.seed(1);raw=self.s.get_source(self.scope,row['id'])['result']
+        self.s.merge(self.scope,'甲','确认昵称')
+        detail=self.s.matches(self.scope)[0]['result']
+        self.assertEqual(detail['players'][0]['name'],'确认昵称')
+        self.assertEqual(self.s.get_source(self.scope,row['id'])['result'],raw)
+        self.s.unmerge(self.scope,'甲')
+        self.assertEqual(self.s.matches(self.scope)[0]['result']['players'][0]['name'],'甲')
     def test_model_error_does_not_drop_previous_data(self):
         self.seed(1);self.s.scan_error(self.scope,'API失败')
         self.assertEqual(len(self.s.matches(self.scope)),1)

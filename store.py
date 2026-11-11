@@ -148,7 +148,10 @@ class Store:
                 canonical.append({**player,'name':name})
             sig=signature({**result,'players':canonical})
             if sig in seen:continue
-            seen.add(sig);out.append({**r,'result':result})
+            # Every current-season consumer, including online detail rows,
+            # receives the explicitly confirmed name. Raw image readings stay
+            # in images/overrides; archived snapshots return above unchanged.
+            seen.add(sig);out.append({**r,'result':{**result,'players':canonical}})
         return out
     def aliases(self,scope,period=None):
         selected=periods.select(self,scope,period)
