@@ -8,6 +8,59 @@ from astrbot_plugin_group_data.recognizer import Recognizer
 from astrbot_plugin_group_data.store import Store
 from test_core import result
 class RecognizerTests(unittest.IsolatedAsyncioTestCase):
+ async def test_confirmed_aliases_resolve_model_and_local_spellings_without_third_request(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   provider=SimpleNamespace(provider_config={'model':'deepseek-v4','api_base':'http://127.0.0.1:8788/v1'})
+   rec,store,row=self.setup_recognizer(d,provider)
+   store.merge('b:g','旧写法一','确认昵称');store.merge('b:g','旧写法二','确认昵称')
+   originals=[result(names=[name,'乙','丙']) for name in ('旧写法一','旧写法二')]
+   rec.read=AsyncMock(side_effect=originals)
+   with patch('astrbot_plugin_group_data.recognizer.trusted_names',return_value={1:'旧写法二'}):await rec.llm(row)
+   saved=store.image('h');self.assertEqual(saved['status'],'accepted')
+   self.assertEqual(json.loads(saved['result'])['players'][0]['name'],'确认昵称')
+   self.assertEqual(json.loads(saved['raw'])[:2],originals);self.assertEqual(rec.read.await_count,2)
+
+ async def test_retained_readings_use_confirmed_aliases_without_glyph_or_model(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d);store.merge('b:g','旧写法','确认昵称')
+   originals=[result(names=[name,'乙','丙']) for name in ('旧写法','确认昵称')]
+   store.save('h','review',raw=originals);rec._match_verified=lambda *args:[];rec.read=AsyncMock()
+   with patch('astrbot_plugin_group_data.recognizer.trusted_names',return_value={1:'旧写法'}):
+    self.assertEqual(await rec.recheck_reviews(),[row['id']])
+   self.assertEqual(json.loads(store.image('h')['result'])['players'][0]['name'],'确认昵称')
+   self.assertEqual(json.loads(store.image('h')['raw'])[:2],originals);rec.read.assert_not_awaited()
+
+ async def test_aliases_do_not_settle_disagreeing_points(self):
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d);store.merge('b:g','旧写法','确认昵称')
+   originals=[result(names=['旧写法','乙','丙']),result(names=['确认昵称','乙','丙'],points=[64000,43000,-2000])]
+   store.save('h','review',raw=originals);rec._match_verified=lambda *args:[]
+   self.assertEqual(await rec.recheck_reviews(),[]);self.assertEqual(store.image('h')['status'],'review')
+
+ async def test_alias_cannot_collapse_two_seats_into_one_player(self):
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d);store.merge('b:g','甲','乙')
+   store.save('h','review',raw=[result(),result()]);rec._match_verified=lambda *args:[]
+   self.assertEqual(await rec.recheck_reviews(),[]);self.assertFalse(store.matches('b:g'))
+
+ async def test_aliases_from_other_group_do_not_relabel_this_group(self):
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d);store.merge('other:group','甲','其他人')
+   store.save('h','review',raw=[result(),result()]);rec._match_verified=lambda *args:[]
+   self.assertEqual(await rec.recheck_reviews(),[])
+
+ async def test_local_admission_resolves_confirmed_alias_without_model(self):
+  import json
+  with tempfile.TemporaryDirectory() as d:
+   rec,store,row=self.setup_recognizer(d);store.merge('b:g','甲','确认昵称')
+   with patch('astrbot_plugin_group_data.recognizer.run_ocr',AsyncMock(return_value={})),patch('astrbot_plugin_group_data.recognizer.interpret',return_value={'decision':'accepted','result':result(),'raw':[result()],'reason':'local'}):
+    await rec.local(row)
+   self.assertEqual(json.loads(store.image('h')['result'])['players'][0]['name'],'确认昵称')
+   self.assertEqual(json.loads(store.image('h')['raw'])[0]['players'][0]['name'],'甲')
+   rec.context.get_using_provider_async.assert_not_awaited()
+
  async def test_new_glyphs_recheck_retained_reads_without_model_requests(self):
   import json
   with tempfile.TemporaryDirectory() as d:

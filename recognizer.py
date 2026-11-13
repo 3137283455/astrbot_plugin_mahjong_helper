@@ -1,6 +1,7 @@
 """Local OCR first; optional fallback to AstrBot's current default DeepSeek only."""
 from __future__ import annotations
 import asyncio
+import copy
 import json
 import time
 from pathlib import Path
@@ -8,6 +9,16 @@ from urllib.parse import urlparse
 from .core import PROMPT,parse_json,validate,same_reading,consensus
 from .local_ocr import run_ocr,interpret,trusted_names
 from .verified_names import VerifiedNames,apply_verified,guard_historical_labels
+from .nicknames import resolve
+
+
+def canonical_reading(reading,aliases):
+    """Resolve only confirmed group aliases, retaining the original OCR payload."""
+    reading=copy.deepcopy(reading)
+    if reading.get('is_result') is True:
+        for player in reading.get('players',[]):
+            if isinstance(player.get('name'),str):player['name']=resolve(player['name'],aliases)
+    return reading
 
 class Recognizer:
     def __init__(self,context,config,store):
@@ -58,7 +69,7 @@ class Recognizer:
             ocr=await run_ocr(self.local_python,self.worker,row['path']);answer=interpret(ocr)
             evidence=self._match_verified(row,ocr)
             if answer.get('result'):
-                answer['result']=validate(apply_verified({'is_result':True,'confidence':1,**answer['result']},evidence))
+                answer['result']=self.checked({'is_result':True,'confidence':1,**answer['result']},ocr,evidence,self.store.aliases(row['scope']))
             raw=answer['raw'];raw.append({'local_ocr':ocr});raw.append({'verified_names':evidence})
             self.store.save(digest,answer['decision'],answer.get('result'),raw,answer['reason'],'local-ocr')
         except Exception as exc:
@@ -82,17 +93,19 @@ class Recognizer:
                     raise ValueError('模型判断与可见终局标记不一致，请核对')
                 self.store.save(digest,'ignored',raw=raw+local_meta+[pipeline_meta],reason=str(first.get('reason','非结算画面'))[:240],model=model);return
             second=await self.read(provider,row['path'],PROMPT+'\n请独立仔细复核每个昵称、最终顺位和持点的正负号，不要猜测。');raw.append(second)
-            evidence=guard_historical_labels(raw,evidence)
+            aliases=self.store.aliases(row['scope'])
+            evidence=guard_historical_labels(raw,evidence,aliases)
             pipeline_meta['verified_names']=evidence
-            result=self.checked(first,ocr,evidence)
-            checked=self.checked(second,ocr,evidence)
+            result=self.checked(first,ocr,evidence,aliases)
+            checked=self.checked(second,ocr,evidence,aliases)
             if not same_reading(result,checked):
                 third=await self.read(provider,row['path'],PROMPT+'\n请重新独立读取每个昵称和持点，不猜测模糊字符。');raw.append(third)
-                evidence=guard_historical_labels(raw,evidence);pipeline_meta['verified_names']=evidence
-                result=consensus([self.checked(x,ocr,evidence) for x in raw])
+                aliases=self.store.aliases(row['scope'])
+                evidence=guard_historical_labels(raw,evidence,aliases);pipeline_meta['verified_names']=evidence
+                result=consensus([self.checked(x,ocr,evidence,aliases) for x in raw])
             previous=json.loads(row.get('raw') or '[]')
             ocr=next((item.get('local_ocr') for item in previous if item.get('local_ocr')),None)
-            for place,name in self._trusted(ocr,evidence,result).items():
+            for place,name in self._trusted(ocr,evidence,result,aliases).items():
                 if place>len(result['players']) or result['players'][place-1]['name']!=name:
                     raise ValueError('模型昵称与本地清晰文字不一致，请人工核对')
             self.store.save(digest,'accepted',result=result,raw=raw+local_meta+[pipeline_meta],model=model);self.model_error=''
@@ -116,13 +129,14 @@ class Recognizer:
     def _match_verified(self,row,ocr):
         return self.verified_names.match(row,ocr)
     @staticmethod
-    def checked(reading,ocr,evidence):
-        result=validate(apply_verified(reading,evidence))
+    def checked(reading,ocr,evidence,aliases=None):
+        aliases=aliases or {}
+        result=validate(canonical_reading(apply_verified(reading,evidence),aliases))
         if result is None:return None
         # Model OCR can invent a space inside Latin names. Only two independent
         # local readings with crop agreement may settle that whitespace; never
         # substitute a different character or globally merge player names.
-        trusted=trusted_names(ocr)
+        trusted={place:resolve(name,aliases) for place,name in trusted_names(ocr).items()}
         players=[]
         for player in result['players']:
             local=trusted.get(player['place'])
@@ -131,10 +145,11 @@ class Recognizer:
             players.append({**player,'name':name})
         return validate({'is_result':True,'confidence':1,**result,'players':players})
     @staticmethod
-    def _trusted(ocr,evidence,result):
-        trusted=trusted_names(ocr)
+    def _trusted(ocr,evidence,result,aliases=None):
+        aliases=aliases or {}
+        trusted={place:resolve(name,aliases) for place,name in trusted_names(ocr).items()}
         for m in evidence:
-            if result['mode']==m['mode'] and any(p['place']==m['place'] and p['points']==m['points'] for p in result['players']):trusted[m['place']]=m['name']
+            if result['mode']==m['mode'] and any(p['place']==m['place'] and p['points']==m['points'] for p in result['players']):trusted[m['place']]=resolve(m['name'],aliases)
         return trusted
     def pending(self,statuses):
         hashes=set();rows=[]
@@ -154,18 +169,21 @@ class Recognizer:
             reads=[x for x in saved if x.get('is_result') is True]
             if len(reads)<2:continue
             ocr=next((x['local_ocr'] for x in saved if 'local_ocr' in x),None)
-            evidence=guard_historical_labels(reads,self._match_verified(row,ocr))
-            if not evidence:continue
+            aliases=self.store.aliases(row['scope'])
+            evidence=guard_historical_labels(reads,self._match_verified(row,ocr),aliases)
+            # An explicitly confirmed alias can settle retained readings even
+            # when the target screenshot has no matching registered crop yet.
+            if not evidence and not any(canonical_reading(r,aliases)!=r for r in reads):continue
             try:
-                readings=[self.checked(x,ocr,evidence) for x in reads[:3]]
+                readings=[self.checked(x,ocr,evidence,aliases) for x in reads[:3]]
                 if same_reading(readings[0],readings[1]):result=readings[0]
                 elif len(readings)==3:result=consensus(readings)
                 else:continue
-                for place,name in self._trusted(ocr,evidence,result).items():
+                for place,name in self._trusted(ocr,evidence,result,aliases).items():
                     if result['players'][place-1]['name']!=name:raise ValueError('本地文字冲突')
             except (ValueError,KeyError,IndexError,TypeError):continue
-            self.store.save(row['hash'],'accepted',result=result,raw=saved+[{'verified_names':evidence,'auto_recheck':'glyph-memory-v1'}],
-                            reason='已用本群确认字形自动复核；保留原始模型读数',model='glyph-memory-v1')
+            self.store.save(row['hash'],'accepted',result=result,raw=saved+[{'verified_names':evidence,'confirmed_aliases':aliases,'auto_recheck':'glyph-memory-v2'}],
+                            reason='已用本群确认字形及别名自动复核；保留原始模型读数',model='glyph-memory-v2')
             self.store.audit(row['scope'],'system','字库自动复核',{'id':row['id'],'evidence':evidence})
             accepted.append(row['id'])
             await asyncio.sleep(0)

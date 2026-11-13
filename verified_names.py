@@ -195,26 +195,34 @@ class VerifiedNames:
             # same screenshot nor a close competing name can certify itself.
             enrolled=any(v[2] and v[0]>=.985 for v in values) and score-runner>=.08
             if not enrolled and (len(values)<2 or values[1][0]<.945 or score<.96 or score-runner<.055):continue
-            out.append({'place':region['place'],'points':region['points'],'mode':region['mode'],'name':name,'score':round(score,5),'sources':[v[1] for v in values[:2]],'box':region['box'],
-                        'method':'registered-match' if enrolled else 'historical-pair'})
+            explicit_values=[v for v in values if v[2]]
+            # Preserve the existing two-original similarity/margin thresholds,
+            # but distinguish two explicitly checked crops from inferred labels.
+            registered_pair=len(explicit_values)>=2 and explicit_values[0][0]>=.96 and explicit_values[1][0]>=.945 and score-runner>=.055
+            sources=explicit_values if registered_pair and not enrolled else values
+            out.append({'place':region['place'],'points':region['points'],'mode':region['mode'],'name':name,'score':round(score,5),'sources':[v[1] for v in sources[:2]],'box':region['box'],
+                        'method':'registered-match' if enrolled else 'registered-pair' if registered_pair else 'historical-pair'})
         return out
 
 
-def guard_historical_labels(readings,evidence):
+def guard_historical_labels(readings,evidence,aliases=None):
     """Old inferred labels may not silently rewrite two agreeing model reads.
 
     Explicit registered corrections remain authoritative and fully traceable.
     """
     from collections import Counter
+    from .nicknames import resolve
+    aliases=aliases or {}
     kept=[]
     for match in evidence:
+        match={**match,'name':resolve(match['name'],aliases)}
         if str(match.get('method','')).startswith('registered-'):
             kept.append(match);continue
         votes=[]
         for reading in readings:
             confidence=reading.get('confidence',0)
             if reading.get('is_result') is not True or reading.get('mode')!=match['mode'] or type(confidence) not in (int,float) or confidence<.94:continue
-            votes.extend(p.get('name') for p in reading.get('players',[])
+            votes.extend(resolve(p['name'],aliases) for p in reading.get('players',[])
                          if p.get('place')==match['place'] and p.get('points')==match['points'] and isinstance(p.get('name'),str))
         name,count=Counter(votes).most_common(1)[0] if votes else ('',0)
         if count>=2 and name!=match['name']:continue

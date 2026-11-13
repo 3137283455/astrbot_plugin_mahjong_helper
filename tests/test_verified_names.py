@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from PIL import Image,ImageDraw,ImageFont
 from astrbot_plugin_group_data.verified_names import VerifiedNames,apply_verified,fingerprint,similarity,name_regions,guard_historical_labels
 from astrbot_plugin_group_data.store import Store
@@ -11,6 +12,37 @@ class FakeStore:
     def rows(self,scope):return [r for r in self.records if r['scope']==scope]
 
 class VerifiedNameTests(unittest.TestCase):
+    def test_two_explicit_originals_keep_authority_at_pair_similarity_threshold(self):
+        with tempfile.TemporaryDirectory() as d:
+            row,ocr=self.screen(d,3,manual=False)
+            bank=VerifiedNames(FakeStore([]))
+            bank.templates=lambda scope:[{'name':'确认昵称','hash':str(i),'source':i,'fp':None,'explicit':True} for i in (1,2)]
+            with patch('astrbot_plugin_group_data.verified_names.similarity',side_effect=[.975,.958,0,0,0,0]):
+                match=bank.match(row,ocr)[0]
+            self.assertEqual(match['method'],'registered-pair');self.assertEqual(match['sources'],[1,2])
+            reading={'is_result':True,'mode':3,'confidence':.99,'players':[{'place':1,'points':60000,'name':'重复错字'}]}
+            self.assertEqual(guard_historical_labels([reading,reading],[match]),[match])
+
+    def test_one_explicit_and_one_inferred_original_remain_historical_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            row,ocr=self.screen(d,3,manual=False)
+            bank=VerifiedNames(FakeStore([]))
+            bank.templates=lambda scope:[{'name':'确认昵称','hash':str(i),'source':i,'fp':None,'explicit':i==1} for i in (1,2)]
+            with patch('astrbot_plugin_group_data.verified_names.similarity',side_effect=[.975,.958,0,0,0,0]):
+                match=bank.match(row,ocr)[0]
+            self.assertEqual(match['method'],'historical-pair')
+            reading={'is_result':True,'mode':3,'confidence':.99,'players':[{'place':1,'points':60000,'name':'不同昵称'}]}
+            self.assertEqual(guard_historical_labels([reading,reading],[match]),[])
+
+    def test_confirmed_alias_does_not_veto_correct_historical_glyph(self):
+        import copy
+        reads=[{'is_result':True,'mode':3,'confidence':.99,'players':[{'place':1,'points':60000,'name':'旧写法'}]}]*2
+        evidence=[{'mode':3,'place':1,'points':60000,'name':'确认昵称','method':'historical-pair'}]
+        originals=copy.deepcopy((reads,evidence))
+        self.assertEqual(guard_historical_labels(reads,evidence,{'旧写法':'确认昵称'}),evidence)
+        self.assertEqual((reads,evidence),originals)
+        self.assertEqual(guard_historical_labels(reads,evidence),[])
+
     def test_missing_full_ocr_nickname_can_use_focused_region(self):
         import copy
         with tempfile.TemporaryDirectory() as d:
