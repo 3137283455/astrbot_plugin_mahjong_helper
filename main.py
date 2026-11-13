@@ -26,6 +26,7 @@ from .ai_entry import (
 
 from .bilibili_bridge import BILIBILI_INSTRUCTIONS, BILIBILI_HELP, bilibili_instance, run_bilibili_action
 from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data,quick_group_query
+from .friend_rooms import room_request,current_room,ROOM_INSTRUCTIONS
 from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
 from .replay_bridge import ReplayService, REPLAY_INSTRUCTIONS
@@ -184,6 +185,13 @@ class MahjongHelperPlugin(Star):
         parts=event.get_messages()
         if event.get_group_id() and all(isinstance(p,(Comp.Plain,Comp.At,Comp.Reply)) for p in parts):
             text=''.join(p.text for p in parts if isinstance(p,Comp.Plain))
+            requested_room=room_request(text)
+            if requested_room is not None:
+                event.set_extra('mahjong_ai_action_used',True)
+                event.should_call_llm(True);event.stop_event()
+                await self._room_request_result(event,requested_room)
+                logger.info('友人房自然语言请求已处理 group=%s user=%s has_room=%s',event.get_group_id(),event.get_sender_id(),bool(requested_room))
+                return
             query=quick_group_query(text)
             meta=getattr(self.context,'get_registered_star',lambda _:None)('astrbot_plugin_group_data') if query else None
             instance=meta.star_cls if meta is not None and meta.activated else None
@@ -228,6 +236,7 @@ class MahjongHelperPlugin(Star):
             f"直接回复：雀魂官网：{MAJSOUL_OFFICIAL_URL}。"
             "保留完整网址，不把中文说明拼入网址路径；无需调用战绩或娱乐工具。"
         )
+        req.system_prompt += '\n'+ROOM_INSTRUCTIONS
         music_plugin = self._music_plugin()
         if music_plugin is not None:
             req.system_prompt += "\n" + music_plugin.music_context_text(event)
@@ -1185,6 +1194,25 @@ class MahjongHelperPlugin(Star):
     @staticmethod
     def _player_page_text(uid: str, mode: int, room: str, section: str) -> str:
         return f"牌谱屋要求在浏览器验证。请打开玩家页查看「{section}」：\n{koromo_player_url(uid, mode, room)}"
+
+    async def _room_request_result(self,event,room):
+        if not event.get_group_id():
+            await event.send(event.plain_result('请在 QQ 群里提供房间号或链接。'));return
+        if not room:feedback='请提供房间号或链接。'
+        else:feedback=await self._broadcast_room(event,room)
+        if feedback:
+            await event.send(event.chain_result([Comp.At(qq=str(event.get_sender_id())),Comp.Plain(' '+feedback)]))
+
+    @filter.llm_tool(name='broadcast_friend_room')
+    async def friend_room_ai(self,event:AstrMessageEvent,room:str=''):
+        """按当前用户要求在本群广播友人房；缺少房号时只询问发起人。
+
+        Args:
+            room(string): 仅当前这条消息明确提供的房间号或完整链接；未提供则留空，不从上文或引用读取。
+        """
+        if not self._claim_ai_action(event):return
+        text=''.join(p.text for p in event.get_messages() if isinstance(p,Comp.Plain))
+        await self._room_request_result(event,current_room(room,text) or '')
 
     async def _broadcast_room(self, event: AstrMessageEvent, raw_room: str) -> str | None:
         """Broadcast only when OneBot confirms the bot can actually mention all."""
