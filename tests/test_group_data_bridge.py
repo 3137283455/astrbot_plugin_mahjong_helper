@@ -1,10 +1,34 @@
 import tempfile
 import unittest
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from test_ai_entry import Event,plugin,tools
 from astrbot_plugin_mahjong_helper.ai_entry import AI_TOOLS
 from astrbot.core.provider.entities import ProviderRequest
 class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
+ async def test_global_extremes_need_no_player_and_keep_all_filters(self):
+  import shlex
+  from astrbot_plugin_mahjong_helper.group_data_bridge import quick_group_query
+  cases={'s0最低持点':['最低','S0'],'我要s0最低持点':['最低','S0'],
+         '查一下S0最低持点':['最低','S0'],'S0三麻最低持点':['最低','S0','三麻'],
+         '四麻最高点数S0':['最高','四麻','S0'],'看看全群最低持点':['最低'],
+         '最高持点 三麻 S1':['最高','三麻','S1'],'最低持点 四麻 S0 第2页':['最低','四麻','S0','第2页']}
+  for text,wanted in cases.items():self.assertEqual(shlex.split(quick_group_query(text)),wanted,text)
+  for text in ['那最低那张呢','最高那局','看看清风难胡S0的最低持点','为什么S0最低持点这么低','/群数据 最低 S0']:
+   self.assertIsNone(quick_group_query(text),text)
+
+ async def test_observed_global_request_calls_native_query_without_model(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=plugin(d);calls=[]
+   p.context.llm_generate=AsyncMock()
+   async def handle(event,query,allow_write):
+    calls.append((query,allow_write));await event.send(event.plain_result('captured card'))
+   p.context.get_registered_star=lambda name:SimpleNamespace(activated=True,star_cls=SimpleNamespace(handle=handle)) if name=='astrbot_plugin_group_data' else None
+   event=Event(text='s0最低持点')
+   await p.ai_before_model(event)
+   self.assertEqual(calls,[('最低 S0',False)]);self.assertTrue(event.stopped)
+   p.context.llm_generate.assert_not_awaited()
+
  async def test_fast_query_parser_handles_explicit_requests_and_preserves_names(self):
   import shlex
   from astrbot_plugin_mahjong_helper.group_data_bridge import quick_group_query
