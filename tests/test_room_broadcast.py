@@ -9,17 +9,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from astrbot_plugin_mahjong_helper.database import MahjongDatabase
 from astrbot_plugin_mahjong_helper.main import MahjongHelperPlugin
+from astrbot_plugin_mahjong_helper.friend_rooms import room_quota_feedback
 
 
 class _Bot:
     def __init__(self, role="admin", can_at_all=True, echo_at_all=True,
-                 consume_quota=True, fail_send=False):
+                 consume_quota=True, fail_send=False, group_quota=15,account_quota=9):
         self.role = role
         self.can_at_all = can_at_all
         self.echo_at_all = echo_at_all
         self.consume_quota = consume_quota
         self.fail_send = fail_send
         self.sent = []
+        self.group_quota=group_quota;self.account_quota=account_quota
 
     async def call_action(self, action, **params):
         if action == "get_group_member_info":
@@ -28,8 +30,8 @@ class _Bot:
         if action == "get_group_at_all_remain":
             return {
                 "can_at_all": self.can_at_all,
-                "remain_at_all_count_for_group": 15,
-                "remain_at_all_count_for_uin": 8 if self.sent and self.consume_quota else 9,
+                "remain_at_all_count_for_group": self.group_quota,
+                "remain_at_all_count_for_uin": self.account_quota-(1 if self.sent and self.consume_quota else 0),
             }
         if action == "send_group_msg":
             if self.fail_send:
@@ -56,6 +58,9 @@ class _Event:
 
     def plain_result(self, text):
         return text
+
+    def chain_result(self,chain):
+        return chain
 
 
 class _Plugin:
@@ -84,8 +89,27 @@ class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
                 plugin, event, "https://game.maj-soul.com/1/?room=94888",
             )]
             self.assertEqual(plugin.broadcast_requests, ["https://game.maj-soul.com/1/?room=94888"])
-            self.assertEqual(results, ["已接收"])
+            self.assertEqual(len(results),1)
+            self.assertEqual(results[0][0].qq,'alice');self.assertEqual(results[0][1].text,' 已接收')
             self.assertTrue(event.stopped)
+
+    async def test_exhausted_quota_explains_exact_counter_without_send_or_cooldown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db=MahjongDatabase(Path(directory)/'state.db');plugin=_Plugin(db)
+            for i,(group,account,expected) in enumerate(((0,9,'本群的'),(15,0,'机器人账号的'),(0,0,'本群和机器人账号的'))):
+                event=_Event(bot=_Bot(can_at_all=False,group_quota=group,account_quota=account))
+                message=await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
+                self.assertIn(expected,message);self.assertIn('次数都已用完' if group==account==0 else '次数已用完',message)
+                self.assertIn('本次未广播',message);self.assertEqual(event.bot.sent,[])
+                self.assertEqual(db.room_broadcast_wait('alice'),0)
+
+    def test_quota_unknown_and_owner_permissions_are_handled_without_false_success(self):
+        self.assertIn('无法查询',room_quota_feedback(None))
+        self.assertIn('无法确认',room_quota_feedback({'can_at_all':True}))
+        self.assertIn('无法确认',room_quota_feedback({'can_at_all':True,'remain_at_all_count_for_group':-1,'remain_at_all_count_for_uin':3}))
+        self.assertIsNone(room_quota_feedback({'can_at_all':True,'remain_at_all_count_for_group':0,'remain_at_all_count_for_uin':0},True))
+        self.assertIn('本群和机器人账号',room_quota_feedback({'can_at_all':False,'remain_at_all_count_for_group':'0','remain_at_all_count_for_uin':'0'}))
+        self.assertIsNone(room_quota_feedback({'can_at_all':True,'remain_at_all_count_for_group':3,'remain_at_all_count_for_uin':2}))
 
     async def test_checks_bot_permission_and_confirms_at_all_before_cooldown(self):
         with tempfile.TemporaryDirectory() as directory:

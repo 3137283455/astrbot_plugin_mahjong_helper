@@ -1,4 +1,4 @@
-"""Current-message-only friend-room requests; never recover a room from history."""
+"""Friend-room request parsing and preflight; never recover rooms from history."""
 import re
 
 _ROOM=r'(?:友人房|友人间|房间)(?:号码|房号|号|链接)?'
@@ -41,6 +41,25 @@ def current_room(room,text):
     if not _TOKEN.fullmatch(room) or not re.search(_ROOM,text) or not re.search(_ACTION,text):return None
     if not re.search(r'(?<![A-Za-z0-9_])'+re.escape(room)+r'(?![A-Za-z0-9_])',text):return None
     return room
+
+
+def room_quota_feedback(quota,is_owner=False):
+    """Explain known exhausted counters before the generic can_at_all flag."""
+    if not isinstance(quota,dict):return '暂时无法查询 @全体 剩余次数，本次未广播。'
+    if is_owner and quota.get('can_at_all'):return None
+    def count(key):
+        value=quota.get(key)
+        if type(value) is int:return value
+        if isinstance(value,str) and re.fullmatch(r'-?\d+',value.strip()):return int(value)
+        return None
+    group=count('remain_at_all_count_for_group');account=count('remain_at_all_count_for_uin')
+    if group==0 and account==0:return '本群和机器人账号的 @全体 次数都已用完，本次未广播。'
+    if group==0:return '本群的 @全体 次数已用完，本次未广播。'
+    if account==0:return '机器人账号的 @全体 次数已用完，本次未广播。'
+    if not quota.get('can_at_all'):return '机器人当前无法在本群 @全体，本次未广播。'
+    if group is None or account is None or group<0 or account<0:
+        return '暂时无法确认 @全体 剩余次数，本次未广播。'
+    return None
 
 
 ROOM_INSTRUCTIONS='''【友人房广播】

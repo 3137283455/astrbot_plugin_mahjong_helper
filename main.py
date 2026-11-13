@@ -26,7 +26,7 @@ from .ai_entry import (
 
 from .bilibili_bridge import BILIBILI_INSTRUCTIONS, BILIBILI_HELP, bilibili_instance, run_bilibili_action
 from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data,quick_group_query
-from .friend_rooms import room_request,current_room,ROOM_INSTRUCTIONS
+from .friend_rooms import room_request,current_room,room_quota_feedback,ROOM_INSTRUCTIONS
 from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
 from .replay_bridge import ReplayService, REPLAY_INSTRUCTIONS
@@ -187,10 +187,11 @@ class MahjongHelperPlugin(Star):
             text=''.join(p.text for p in parts if isinstance(p,Comp.Plain))
             requested_room=room_request(text)
             if requested_room is not None:
+                room_started=time.perf_counter()
                 event.set_extra('mahjong_ai_action_used',True)
                 event.should_call_llm(True);event.stop_event()
                 await self._room_request_result(event,requested_room)
-                logger.info('友人房自然语言请求已处理 group=%s user=%s has_room=%s',event.get_group_id(),event.get_sender_id(),bool(requested_room))
+                logger.info('友人房自然语言请求已处理 group=%s user=%s has_room=%s elapsed_ms=%.1f',event.get_group_id(),event.get_sender_id(),bool(requested_room),(time.perf_counter()-room_started)*1000)
                 return
             query=quick_group_query(text)
             meta=getattr(self.context,'get_registered_star',lambda _:None)('astrbot_plugin_group_data') if query else None
@@ -1230,27 +1231,31 @@ class MahjongHelperPlugin(Star):
         group_id = int(event.get_group_id())
         _, _, db, _ = self._ready()
         actor = self._actor_id(event)
+        async def room_action(action,**params):
+            started=time.perf_counter()
+            try:return await bot.call_action(action=action,**params)
+            finally:logger.info('友人房接口耗时 group=%s action=%s elapsed_ms=%.1f',group_id,action,(time.perf_counter()-started)*1000)
+        queued=time.perf_counter()
         async with self._room_broadcast_lock:
+            if time.perf_counter()-queued>=1:
+                logger.warning('友人房广播排队 group=%s elapsed_ms=%.1f',group_id,(time.perf_counter()-queued)*1000)
             wait = db.room_broadcast_wait(actor)
             if wait:
                 minutes, seconds = divmod(wait, 60)
                 return f"你的房间广播还在冷却中，请在 {minutes}分{seconds:02d}秒后重试。"
             try:
-                member = await bot.call_action(
+                member = await room_action(
                     action="get_group_member_info", group_id=group_id,
                     user_id=int(self_id), no_cache=False,
                 )
                 if not isinstance(member, dict) or member.get("role") not in {"admin", "owner"}:
                     return "机器人还不是本群管理员，无法可靠地 @全体；请先给机器人管理员权限。"
-                quota = await bot.call_action(action="get_group_at_all_remain", group_id=group_id)
-                if not isinstance(quota, dict) or not quota.get("can_at_all"):
-                    return "机器人当前无法在本群 @全体，请检查群权限与剩余次数。"
-                if member["role"] != "owner" and (
-                    int(quota.get("remain_at_all_count_for_group", 0)) <= 0
-                    or int(quota.get("remain_at_all_count_for_uin", 0)) <= 0
-                ):
-                    return "本群或机器人的 @全体次数已用完，暂时无法广播。"
-                sent = await bot.call_action(
+                quota = await room_action(action="get_group_at_all_remain", group_id=group_id)
+                unavailable=room_quota_feedback(quota,member['role']=='owner')
+                if unavailable:
+                    logger.info('友人房未广播 group=%s user=%s reason=%s',group_id,actor,unavailable)
+                    return unavailable
+                sent = await room_action(
                     action="send_group_msg", group_id=group_id,
                     message=[
                         {"type": "at", "data": {"qq": "all"}},
@@ -1264,14 +1269,14 @@ class MahjongHelperPlugin(Star):
                 for attempt in range(4):
                     if attempt:
                         await asyncio.sleep(0.5)
-                    delivered = await bot.call_action(action="get_msg", message_id=message_id)
+                    delivered = await room_action(action="get_msg", message_id=message_id)
                     segments = delivered.get("message", []) if isinstance(delivered, dict) else []
                     has_mention = any(
                         segment.get("type") == "at"
                         and str(segment.get("data", {}).get("qq")) == "all"
                         for segment in segments if isinstance(segment, dict)
                     )
-                    remaining = await bot.call_action(action="get_group_at_all_remain", group_id=group_id)
+                    remaining = await room_action(action="get_group_at_all_remain", group_id=group_id)
                     quota_used = member["role"] == "owner" or (
                         isinstance(remaining, dict)
                         and int(remaining.get("remain_at_all_count_for_uin", 0))
@@ -1292,9 +1297,13 @@ class MahjongHelperPlugin(Star):
     async def friend_room(self, event: AstrMessageEvent, room: GreedyStr):
         """在 QQ 群广播友人房号或链接。"""
         event.stop_event()
+        started=time.perf_counter()
         feedback = await self._broadcast_room(event, room)
+        logger.info('友人房命令已处理 group=%s user=%s elapsed_ms=%.1f feedback=%s',event.get_group_id(),self._actor_id(event),(time.perf_counter()-started)*1000,bool(feedback))
         if feedback:
-            yield event.plain_result(feedback)
+            if event.get_group_id():
+                yield event.chain_result([Comp.At(qq=self._actor_id(event)),Comp.Plain(' '+feedback)])
+            else:yield event.plain_result(feedback)
 
     @filter.command("雀魂")
     async def koromo_menu(self, event: AstrMessageEvent, query: GreedyStr):
