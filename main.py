@@ -1231,9 +1231,11 @@ class MahjongHelperPlugin(Star):
         group_id = int(event.get_group_id())
         _, _, db, _ = self._ready()
         actor = self._actor_id(event)
-        async def room_action(action,**params):
+        async def room_action(action,timeout=None,**params):
             started=time.perf_counter()
-            try:return await bot.call_action(action=action,**params)
+            try:
+                call=bot.call_action(action=action,**params)
+                return await asyncio.wait_for(call,timeout) if timeout is not None else await call
             finally:logger.info('友人房接口耗时 group=%s action=%s elapsed_ms=%.1f',group_id,action,(time.perf_counter()-started)*1000)
         queued=time.perf_counter()
         async with self._room_broadcast_lock:
@@ -1244,15 +1246,33 @@ class MahjongHelperPlugin(Star):
                 minutes, seconds = divmod(wait, 60)
                 return f"你的房间广播还在冷却中，请在 {minutes}分{seconds:02d}秒后重试。"
             try:
-                member = await room_action(
-                    action="get_group_member_info", group_id=group_id,
-                    user_id=int(self_id), no_cache=False,
-                )
+                try:
+                    member = await room_action(
+                        action="get_group_member_info", group_id=group_id,
+                        user_id=int(self_id), no_cache=False,timeout=5,
+                    )
+                except TimeoutError:
+                    return '查询机器人群权限超时，本次未广播，请稍后重试。'
                 if not isinstance(member, dict) or member.get("role") not in {"admin", "owner"}:
                     return "机器人还不是本群管理员，无法可靠地 @全体；请先给机器人管理员权限。"
-                quota = await room_action(action="get_group_at_all_remain", group_id=group_id)
+                if not hasattr(self,'_room_empty_quotas'):self._room_empty_quotas=OrderedDict()
+                cache=self._room_empty_quotas;now=time.monotonic()
+                for key,(stamp,_) in list(cache.items()):
+                    if now-stamp>=60:cache.pop(key,None)
+                cache_key=(self_id,group_id,member['role'])
+                if cache_key in cache:
+                    quota=cache[cache_key][1]
+                    logger.info('友人房使用短期空额度缓存 group=%s',group_id)
+                else:
+                    try:quota=await room_action(action="get_group_at_all_remain",group_id=group_id,timeout=5)
+                    except TimeoutError:
+                        return '查询 @全体 剩余次数超时，本次未广播，请稍后重试。'
                 unavailable=room_quota_feedback(quota,member['role']=='owner')
                 if unavailable:
+                    if '用完' in unavailable and cache_key not in cache:
+                        cache[cache_key]=(time.monotonic(),dict(quota))
+                        cache.move_to_end(cache_key)
+                        while len(cache)>128:cache.popitem(last=False)
                     logger.info('友人房未广播 group=%s user=%s reason=%s',group_id,actor,unavailable)
                     return unavailable
                 sent = await room_action(

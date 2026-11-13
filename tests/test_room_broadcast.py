@@ -2,6 +2,8 @@ import asyncio
 import sys
 import tempfile
 import unittest
+import time
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -95,8 +97,9 @@ class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exhausted_quota_explains_exact_counter_without_send_or_cooldown(self):
         with tempfile.TemporaryDirectory() as directory:
-            db=MahjongDatabase(Path(directory)/'state.db');plugin=_Plugin(db)
+            db=MahjongDatabase(Path(directory)/'state.db')
             for i,(group,account,expected) in enumerate(((0,9,'本群的'),(15,0,'机器人账号的'),(0,0,'本群和机器人账号的'))):
+                plugin=_Plugin(db)
                 event=_Event(bot=_Bot(can_at_all=False,group_quota=group,account_quota=account))
                 message=await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
                 self.assertIn(expected,message);self.assertIn('次数都已用完' if group==account==0 else '次数已用完',message)
@@ -110,6 +113,43 @@ class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(room_quota_feedback({'can_at_all':True,'remain_at_all_count_for_group':0,'remain_at_all_count_for_uin':0},True))
         self.assertIn('本群和机器人账号',room_quota_feedback({'can_at_all':False,'remain_at_all_count_for_group':'0','remain_at_all_count_for_uin':'0'}))
         self.assertIsNone(room_quota_feedback({'can_at_all':True,'remain_at_all_count_for_group':3,'remain_at_all_count_for_uin':2}))
+
+    async def test_preflight_timeout_returns_specific_prompt_without_broadcast_or_cooldown(self):
+        class QuotaTimeoutBot(_Bot):
+            async def call_action(self,action,**params):
+                if action=='get_group_at_all_remain':raise TimeoutError('quota stalled')
+                return await super().call_action(action,**params)
+        with tempfile.TemporaryDirectory() as d:
+            plugin=_Plugin(MahjongDatabase(Path(d)/'state.db'));event=_Event(bot=QuotaTimeoutBot())
+            message=await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
+            self.assertIn('查询 @全体 剩余次数超时',message)
+            self.assertEqual(event.bot.sent,[]);self.assertEqual(plugin.db.room_broadcast_wait('alice'),0)
+
+    async def test_preflight_reads_have_short_timeout_but_send_is_not_cut_short(self):
+        with tempfile.TemporaryDirectory() as d:
+            plugin=_Plugin(MahjongDatabase(Path(d)/'state.db'));event=_Event();timeouts=[]
+            async def run(call,timeout):timeouts.append(timeout);return await call
+            with patch('astrbot_plugin_mahjong_helper.main.asyncio.wait_for',side_effect=run):
+                self.assertIsNone(await MahjongHelperPlugin._broadcast_room(plugin,event,'77182'))
+            self.assertEqual(timeouts,[5,5]);self.assertEqual(len(event.bot.sent),1)
+
+    async def test_empty_quota_is_cached_briefly_and_refetched_after_expiry(self):
+        class EmptyBot(_Bot):
+            def __init__(self):super().__init__(can_at_all=False,group_quota=0,account_quota=0);self.lookups=0
+            async def call_action(self,action,**params):
+                if action=='get_group_at_all_remain':self.lookups+=1
+                return await super().call_action(action,**params)
+        with tempfile.TemporaryDirectory() as d:
+            plugin=_Plugin(MahjongDatabase(Path(d)/'state.db'));bot=EmptyBot();event=_Event(bot=bot)
+            await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
+            fixed_stamp=time.monotonic()-30
+            for key,(_,value) in list(plugin._room_empty_quotas.items()):plugin._room_empty_quotas[key]=(fixed_stamp,value)
+            await MahjongHelperPlugin._broadcast_room(plugin,event,'99888')
+            self.assertEqual(bot.lookups,1);self.assertEqual(bot.sent,[])
+            self.assertTrue(all(stamp==fixed_stamp for stamp,_ in plugin._room_empty_quotas.values()))
+            for key,(_,value) in list(plugin._room_empty_quotas.items()):plugin._room_empty_quotas[key]=(time.monotonic()-61,value)
+            await MahjongHelperPlugin._broadcast_room(plugin,event,'11223')
+            self.assertEqual(bot.lookups,2);self.assertEqual(plugin.db.room_broadcast_wait('alice'),0)
 
     async def test_checks_bot_permission_and_confirms_at_all_before_cooldown(self):
         with tempfile.TemporaryDirectory() as directory:
