@@ -32,6 +32,7 @@ from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_heade
 from .replay_bridge import ReplayService, REPLAY_INSTRUCTIONS
 from .player_card import CARD_REVISION as PLAYER_CARD_REVISION, render_player_card
 from .query_delivery import send_query_result
+from .tool_event import ToolEvent
 from .formatters import (
     format_record,
     format_records,
@@ -447,6 +448,7 @@ class MahjongHelperPlugin(Star):
         """
         if not self._claim_ai_action(event):
             return
+        event = ToolEvent(event)
         if section in {"group_data", "群数据"}:
             await run_group_data(self.context, event, "帮助")
             return
@@ -488,6 +490,7 @@ class MahjongHelperPlugin(Star):
         """
         if not self._claim_ai_action(event):
             return
+        event = ToolEvent(event)
         if not isinstance(query, str) or not query.strip():
             await event.send(event.plain_result("请告诉我要搜索的歌名或歌手。"))
             return
@@ -515,6 +518,7 @@ class MahjongHelperPlugin(Star):
         """
         if not self._claim_ai_action(event):
             return
+        event = ToolEvent(event)
         instance = self._music_plugin()
         if instance is None:
             await event.send(event.plain_result("音乐插件尚未就绪，请稍后重试。"))
@@ -539,7 +543,7 @@ class MahjongHelperPlugin(Star):
         """
         if not self._claim_ai_action(event):
             return
-        await self._run_bilibili(event, action, uid, filters)
+        await self._run_bilibili(ToolEvent(event), action, uid, filters)
 
     @filter.llm_tool(name="group_data")
     async def group_data_ai(self, event: AstrMessageEvent, query: str = ""):
@@ -830,13 +834,13 @@ class MahjongHelperPlugin(Star):
                 raise ValueError(f"题号范围是 1～{len(questions.questions)}。")
             if action == "question":
                 for _ in range(count):
-                    async for result in self.nanikiru(event, str(question_id) if question_id else ""):
+                    async for result in self.nanikiru(ToolEvent(event), str(question_id) if question_id else ""):
                         await event.send(result)
             elif action == "answer":
-                async for result in self.nanikiru_answer(event, question_id):
+                async for result in self.nanikiru_answer(ToolEvent(event), question_id):
                     await event.send(result)
             elif action == "status":
-                async for result in self.nanikiru_status(event):
+                async for result in self.nanikiru_status(ToolEvent(event)):
                     await event.send(result)
             else:
                 card = await self._menu_image(event, "help")
@@ -990,9 +994,9 @@ class MahjongHelperPlugin(Star):
             if type(page) is not int or not 1 <= page <= 20 or type(text) is not bool:
                 raise ValueError("页码须为1～20，文字选项须为布尔值。")
             if section == "搜索":
-                results = self.majsoul_search(event, player)
+                results = self.majsoul_search(ToolEvent(event), player)
             elif section == "绑定列表":
-                results = self.majsoul_bindings(event)
+                results = self.majsoul_bindings(ToolEvent(event))
             else:
                 parsed = PlayerQuery(SECTIONS[section], player.strip(), mode or 4, room, days, page, text, mode != 0)
                 results = self._query_player_view(event, parsed)
