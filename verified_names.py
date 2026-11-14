@@ -17,6 +17,41 @@ def _box(row):
     return min(p[0] for p in points),min(p[1] for p in points),max(p[0] for p in points),max(p[1] for p in points)
 
 
+def _unread_name_box(im, point, w, h):
+    """Locate visible white name ink above known final points, without OCR text."""
+    from PIL import ImageChops
+    left=max(0,int(point[0]-w*.04));top=max(0,int(point[1]-h*.095))
+    right=min(w,int(point[0]+w*.32));bottom=max(top,int(point[1]-h*.012))
+    if right<=left or bottom<=top:return None
+    r,g,b=im.crop((left,top,right,bottom)).split()
+    mask=ImageChops.darker(ImageChops.darker(r,g),b).point(lambda v:255 if v>205 else 0)
+    pixels=mask.load();width,height=mask.size
+    bands=[];start=None;last=None
+    for y in range(height):
+        if sum(bool(pixels[x,y]) for x in range(width))>=3:
+            if start is None:start=y
+            last=y
+        elif start is not None and y-last>2:
+            bands.append((start,last+1));start=None
+    if start is not None:bands.append((start,last+1))
+    bands=[(a,z) for a,z in bands if 13<=z-a<=h*.07]
+    if len(bands)!=1:return None  # several visible text lines are ambiguous
+    a,z=bands[0];ink=mask.crop((0,a,width,z));bounds=ink.getbbox()
+    if not bounds:return None
+    # Separate the name from a distant 自家 badge; never invent its spelling.
+    cols=[x for x in range(width) if ink.crop((x,0,x+1,z-a)).getbbox()]
+    groups=[];group=[]
+    for x in cols:
+        if group and x-group[-1]>max(8,(z-a)*.9):groups.append(group);group=[]
+        group.append(x)
+    if group:groups.append(group)
+    if not groups:return None
+    x1,x2=groups[0][0],groups[0][-1]+1
+    if x2-x1<(z-a)*.55:return None
+    pad=max(2,int((z-a)*.18))
+    return (max(0,left+x1-pad),max(0,top+a-pad),min(w,left+x2+pad),min(h,top+z+pad))
+
+
 def name_regions(path,ocr):
     """Locate nickname lines above a complete vertical final-points list."""
     if not ocr or not ocr.get('width') or not ocr.get('height'):return []
@@ -44,7 +79,11 @@ def name_regions(path,ocr):
                 if b[0]-w*.025<=z[0]<=b[0]+w*.045 and b[1]-h*.10<=z[1] and z[3]<=b[1]+h*.014 and 13<=z[3]-z[1]<=h*.07:
                     nearby.append((abs(z[0]-b[0])*.5+abs(b[1]-z[3]),row))
             if nearby:break
-        if not nearby:continue
+        if not nearby:
+            area=_unread_name_box(im,b,w,h)
+            if area:
+                out.append({'place':place,'points':value,'mode':len(points),'crop':im.crop(area),'box':list(area),'unread':True})
+            continue
         row=min(nearby,key=lambda item:item[0])[1];z=_box(row);pad=max(2,(z[3]-z[1])*.18)
         area=(max(0,int(z[0]-pad)),max(0,int(z[1]-pad)),min(w,int(z[2]+pad)),min(h,int(z[3]+pad)))
         if z[3]-z[1]<13:continue
@@ -178,6 +217,7 @@ class VerifiedNames:
             fp=fingerprint(region['crop']);names={}
             for p in templates:
                 if p['hash']==row['hash']:continue
+                if region.get('unread') and not p.get('explicit'):continue
                 score=similarity(fp,p['fp'])
                 if score<.82:continue
                 names.setdefault(p['name'],[]).append((score,p['hash'],p['source'],p.get('explicit',False)))

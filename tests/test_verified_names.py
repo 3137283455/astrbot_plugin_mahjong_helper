@@ -60,8 +60,28 @@ class VerifiedNameTests(unittest.TestCase):
                 result=bank.match(row,ocr)
                 self.assertEqual([(m['place'],m['name']) for m in result],[(3,'I咲仡')])
                 ocr.pop('focused')
-                self.assertEqual([r['place'] for r in name_regions(row['path'],ocr)],[1,2])
+                recovered=name_regions(row['path'],ocr)
+                self.assertEqual([r['place'] for r in recovered],[1,2,3])
+                self.assertTrue(recovered[-1]['unread'])
             finally:s.close()
+
+    def test_unread_region_requires_registered_glyph_and_rejects_different_name(self):
+        import copy
+        with tempfile.TemporaryDirectory() as d:
+            source,ocr=self.screen(d,1,manual=False)
+            target,missing=self.screen(d,2,manual=False)
+            missing['full']=copy.deepcopy(missing['full'][1:])
+            store=Store(Path(d)/'test.db')
+            try:
+                bank=VerifiedNames(store)
+                self.assertNotIn(1,[m['place'] for m in bank.match(target,missing)])
+                bank.enroll('b:g',source,1,'确认昵称')
+                match=bank.match(target,missing)
+                self.assertEqual([(m['place'],m['name']) for m in match],[(1,'确认昵称')])
+                rival,rival_ocr=self.screen(d,3,names=('OTHER','BETA','GAMMA'),manual=False)
+                rival_ocr['full']=copy.deepcopy(rival_ocr['full'][1:])
+                self.assertNotIn(1,[m['place'] for m in bank.match(rival,rival_ocr)])
+            finally:store.close()
 
     def test_dictionary_correction_can_supersede_frozen_label_without_editing_archive(self):
         with tempfile.TemporaryDirectory() as d:
