@@ -1257,6 +1257,11 @@ class MahjongHelperPlugin(Star):
                     return "机器人还不是本群管理员，无法可靠地 @全体；请先给机器人管理员权限。"
                 if not hasattr(self,'_room_empty_quotas'):self._room_empty_quotas=OrderedDict()
                 cache=self._room_empty_quotas;now=time.monotonic()
+                # Day changes invalidate negative hints, but never invent a QQ reset
+                # or a positive allowance: only the next API response permits sending.
+                quota_day=datetime.now(ZoneInfo('Asia/Shanghai')).date()
+                if getattr(self,'_room_quota_day',None)!=quota_day:
+                    cache.clear();self._room_quota_day=quota_day
                 for key,(stamp,_) in list(cache.items()):
                     if now-stamp>=60:cache.pop(key,None)
                 cache_key=(self_id,group_id,member['role'])
@@ -1264,9 +1269,16 @@ class MahjongHelperPlugin(Star):
                     quota=cache[cache_key][1]
                     logger.info('友人房使用短期空额度缓存 group=%s',group_id)
                 else:
-                    try:quota=await room_action(action="get_group_at_all_remain",group_id=group_id,timeout=5)
-                    except TimeoutError:
-                        return '查询 @全体 剩余次数超时，本次未广播，请稍后重试。'
+                    # Retry only the read, within the original five-second budget.
+                    # A message send is never retried here, avoiding duplicate @all.
+                    for attempt in range(2):
+                        try:
+                            quota=await room_action(action="get_group_at_all_remain",group_id=group_id,timeout=2.5)
+                            break
+                        except TimeoutError:
+                            if attempt:
+                                return '查询 @全体 剩余次数超时，本次未广播，请稍后重试。'
+                            logger.warning('友人房额度查询超时，限时重查一次 group=%s',group_id)
                 unavailable=room_quota_feedback(quota,member['role']=='owner')
                 if unavailable:
                     if '用完' in unavailable and cache_key not in cache:

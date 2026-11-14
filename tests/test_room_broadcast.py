@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 import time
+from datetime import date
 from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
@@ -104,6 +105,8 @@ class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
                 message=await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
                 self.assertIn(expected,message);self.assertIn('次数都已用完' if group==account==0 else '次数已用完',message)
                 self.assertIn('本次未广播',message);self.assertEqual(event.bot.sent,[])
+                self.assertIn(f'群剩余 {group} 次',message)
+                self.assertIn(f'账号剩余 {account} 次',message)
                 self.assertEqual(db.room_broadcast_wait('alice'),0)
 
     def test_quota_unknown_and_owner_permissions_are_handled_without_false_success(self):
@@ -116,13 +119,17 @@ class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preflight_timeout_returns_specific_prompt_without_broadcast_or_cooldown(self):
         class QuotaTimeoutBot(_Bot):
+            lookups=0
             async def call_action(self,action,**params):
-                if action=='get_group_at_all_remain':raise TimeoutError('quota stalled')
+                if action=='get_group_at_all_remain':
+                    self.lookups+=1
+                    raise TimeoutError('quota stalled')
                 return await super().call_action(action,**params)
         with tempfile.TemporaryDirectory() as d:
             plugin=_Plugin(MahjongDatabase(Path(d)/'state.db'));event=_Event(bot=QuotaTimeoutBot())
             message=await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
             self.assertIn('查询 @全体 剩余次数超时',message)
+            self.assertEqual(event.bot.lookups,2)
             self.assertEqual(event.bot.sent,[]);self.assertEqual(plugin.db.room_broadcast_wait('alice'),0)
 
     async def test_preflight_reads_have_short_timeout_but_send_is_not_cut_short(self):
@@ -131,7 +138,37 @@ class RoomBroadcastTests(unittest.IsolatedAsyncioTestCase):
             async def run(call,timeout):timeouts.append(timeout);return await call
             with patch('astrbot_plugin_mahjong_helper.main.asyncio.wait_for',side_effect=run):
                 self.assertIsNone(await MahjongHelperPlugin._broadcast_room(plugin,event,'77182'))
-            self.assertEqual(timeouts,[5,5]);self.assertEqual(len(event.bot.sent),1)
+            self.assertEqual(timeouts,[5,2.5]);self.assertEqual(len(event.bot.sent),1)
+
+    async def test_quota_read_timeout_retries_without_duplicate_broadcast(self):
+        class RetryBot(_Bot):
+            def __init__(self):super().__init__();self.lookups=0
+            async def call_action(self,action,**params):
+                if action=='get_group_at_all_remain':
+                    self.lookups+=1
+                    if self.lookups==1:raise TimeoutError('one stalled read')
+                return await super().call_action(action,**params)
+        with tempfile.TemporaryDirectory() as d:
+            plugin=_Plugin(MahjongDatabase(Path(d)/'state.db'));bot=RetryBot();event=_Event(bot=bot)
+            self.assertIsNone(await MahjongHelperPlugin._broadcast_room(plugin,event,'77182'))
+            self.assertEqual(bot.lookups,3)  # two preflight reads, one confirmation
+            self.assertEqual(len(bot.sent),1)
+            self.assertGreater(plugin.db.room_broadcast_wait('alice'),0)
+
+    async def test_previous_days_zero_quota_is_discarded_without_sending_old_rooms(self):
+        with tempfile.TemporaryDirectory() as d:
+            plugin=_Plugin(MahjongDatabase(Path(d)/'state.db'))
+            event=_Event(bot=_Bot(can_at_all=False,group_quota=0,account_quota=0))
+            await MahjongHelperPlugin._broadcast_room(plugin,event,'77182')
+            plugin._room_quota_day=date(2026,11,13)
+            event.bot=_Bot(group_quota=18,account_quota=9)
+            with patch('astrbot_plugin_mahjong_helper.main.datetime') as clock:
+                clock.now.return_value.date.return_value=date(2026,11,14)
+                self.assertIsNone(await MahjongHelperPlugin._broadcast_room(plugin,event,'99888'))
+            self.assertEqual(plugin._room_empty_quotas,{})
+            self.assertEqual(len(event.bot.sent),1)
+            self.assertIn('99888',event.bot.sent[0]['message'][1]['data']['text'])
+            self.assertNotIn('77182',event.bot.sent[0]['message'][1]['data']['text'])
 
     async def test_empty_quota_is_cached_briefly_and_refetched_after_expiry(self):
         class EmptyBot(_Bot):

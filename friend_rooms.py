@@ -53,9 +53,15 @@ def room_quota_feedback(quota,is_owner=False):
         if isinstance(value,str) and re.fullmatch(r'-?\d+',value.strip()):return int(value)
         return None
     group=count('remain_at_all_count_for_group');account=count('remain_at_all_count_for_uin')
-    if group==0 and account==0:return '本群和机器人账号的 @全体 次数都已用完，本次未广播。'
-    if group==0:return '本群的 @全体 次数已用完，本次未广播。'
-    if account==0:return '机器人账号的 @全体 次数已用完，本次未广播。'
+    exhausted=None
+    if group==0 and account==0:exhausted='本群和机器人账号的 @全体 次数都已用完'
+    elif group==0:exhausted='本群的 @全体 次数已用完'
+    elif account==0:exhausted='机器人账号的 @全体 次数已用完'
+    if exhausted:
+        counts=[]
+        if group is not None and group>=0:counts.append(f'群剩余 {group} 次')
+        if account is not None and account>=0:counts.append(f'账号剩余 {account} 次')
+        return exhausted+'（'+'，'.join(counts)+'），本次未广播。'
     if not quota.get('can_at_all'):return '机器人当前无法在本群 @全体，本次未广播。'
     if group is None or account is None or group<0 or account<0:
         return '暂时无法确认 @全体 剩余次数，本次未广播。'
