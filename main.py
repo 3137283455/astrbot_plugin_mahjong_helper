@@ -33,12 +33,12 @@ HELP=[
  '/群数据 一位 三麻             一位次数榜',
  '/群数据 二位率 四麻 30天 5场   近30天，至少5场',
  '/群数据 个人 "游戏昵称" 三麻   玩家档案',
- '/群数据 综合榜 四麻 S0         综合表现榜；默认S1，满10场正式入榜',
+ '/群数据 综合榜 四麻 S0         综合表现榜；S1满30场，S0沿用封存旧规则',
  '/群数据 综合榜 四麻 S0 第2页   每页10人；各榜单页码与筛选顺序可换',
- '/群数据 暂定榜 四麻             不足10场的综合暂定分，单独分页',
+ '/群数据 暂定榜 四麻             S1不足30场的综合暂定分，单独分页',
  '/群数据 下一页 / 上一页 / 第3页  沿用本人最近榜单；群聊也可@慧慧翻页',
  '/群数据 评分 "游戏昵称" 三麻 S1  综合评分分解；个人卡片也显示总分和排名',
- '/群数据 评分规则               查看成绩90%＋场次10%的计算规则',
+ '/群数据 评分规则               查看S1成绩80%＋场次20%的计算规则',
  '昵称可只填一部分，或省略特殊字符；完整匹配直接查，否则发送文字候选。',
  '候选3分钟有效：本人回复序号 / 第2个，或 /群数据 选 2；/群数据 取消。',
  '/群数据 最高 四麻             最高持点榜 + 第一条记录原图',
@@ -674,7 +674,7 @@ class GroupDataPlugin(Star):
                 await self.card(event,'群数据 · '+action,lines);return
             if action=='总览':
                 path=self.card_dir/(uuid.uuid4().hex+'.png')
-                await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope,period_id),days,opt['mode'],period_name=period_name)
+                await asyncio.to_thread(cards.overview,path,gid,matches,aliases,self.store.summary(scope,period_id),days,opt['mode'],period_name=period_name,scoring_legacy=bool(selected and selected['state']=='archived'))
                 await self.send_result(event,event.chain_result([Comp.Image.fromFileSystem(str(path))]),f'{period_name} · 群数据总览\n当前筛选已确认 {len(matches)} 场。\n可发送 /群数据 最近 5 查看结算，或 /群数据 个人 昵称 查询玩家。');return
             modes=[opt['mode']] if opt['mode'] else [3,4]
             if action in ('综合榜','暂定榜','评分'):
@@ -682,7 +682,7 @@ class GroupDataPlugin(Star):
                 if action!='评分' and rest:raise ValueError('榜单格式：/群数据 综合榜 [三麻/四麻] [S0/S1] [第2页]')
                 views={};prepared=[]
                 for mode in modes:
-                    data=score_matches(matches,mode,aliases,minimum)
+                    data=score_matches(matches,mode,aliases,minimum,legacy=bool(selected and selected['state']=='archived'))
                     provisional=action=='暂定榜' or (action=='综合榜' and not data['formal_count'])
                     info=page_rows([r for r in data['rows'] if r['qualified']!=provisional],opt.get('page',1))
                     prepared.append((mode,data,provisional,info))
@@ -718,7 +718,7 @@ class GroupDataPlugin(Star):
                 if action=='个人':
                     name=player_name(' '.join(rest),aliases)
                     stats=[s for s in stats if s['games']>=minimum]
-                    score_data=score_matches(matches,mode,aliases,minimum)
+                    score_data=score_matches(matches,mode,aliases,minimum,legacy=bool(selected and selected['state']=='archived'))
                     await asyncio.to_thread(cards.profile,path,gid,mode,stats,name,days,period_name=period_name,minimum=minimum,score_data=score_data)
                 else:
                     info=page_rows(ranking(stats,action,minimum),opt.get('page',1))

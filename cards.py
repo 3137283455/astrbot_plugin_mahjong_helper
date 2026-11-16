@@ -60,7 +60,7 @@ def base(title,subtitle,height):
 def page_caption(info):
     return f'第{info["page"]}/{info["pages"]}页' if info['pages']>1 else ''
 
-def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period_name='当前周期'):
+def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period_name='当前周期',scoring_legacy=False):
     modes=(selected_mode,) if selected_mode in (3,4) else (3,4)
     matches=[m for m in matches if m['result']['mode'] in modes]
     title='群数据 · '+period_name+(' · 三麻总览' if selected_mode==3 else ' · 四麻总览' if selected_mode==4 else ' · 对局总览')
@@ -78,7 +78,7 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
         y=440
         last_place='三位' if mode==3 else '四位'
         for metric,label,suffix in [('场次','出场最多','场'),('综合分','综合分最高','分'),('一位','一位最多','次'),(last_place,last_place+'最多','次'),('平均顺位','平均顺位最佳',''),('最高','最高持点','点'),('最低','最低持点','点'),('被飞','被飞最多','次')]:
-            rows=([{**r,'value':r['score'],'kind':'score'} for r in score_matches(matches,mode,aliases)['rows'] if r['qualified']]
+            rows=([{**r,'value':r['score'],'kind':'score'} for r in score_matches(matches,mode,aliases,legacy=scoring_legacy)['rows'] if r['qualified']]
                   if metric=='综合分' else ranking(stats,metric))
             if rows and (metric not in ('被飞',) or rows[0]['value']>0):
                 r=rows[0]
@@ -94,7 +94,7 @@ def overview(path,group,matches,aliases,summary,days=0,selected_mode=None,period
                 d.text((x+panel_width-254,y+42),v,font=font(28,True),fill=RED if metric in ('被飞','最低') else GOLD)
             else:
                 d.text((x+30,y),label,font=font(25),fill=MUTED)
-                d.text((x+30,y+42),'无人被飞' if metric=='被飞' else '暂无满10场玩家' if metric=='综合分' else '暂无记录',font=font(30),fill=INK)
+                d.text((x+30,y+42),'无人被飞' if metric=='被飞' else ('暂无满10场玩家' if scoring_legacy else '暂无满30场玩家') if metric=='综合分' else '暂无记录',font=font(30),fill=INK)
             y+=104
     d.text((58,1324),'最近录入的已确认结算',font=font(30,True),fill=TEAL)
     latest=sorted(matches,key=lambda m:(m.get('stamp',0),m['id']),reverse=True)[:2]

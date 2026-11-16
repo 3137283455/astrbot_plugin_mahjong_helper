@@ -21,8 +21,8 @@ class OverviewMetricTests(unittest.TestCase):
         return path,drawn
 
     def test_modes_show_score_win_count_and_their_own_last_place(self):
-        matches=[match(i,4,names=['四甲','四乙','四丙','四丁'],points=[40000+i*100,30000,20000,10000-i*100]) for i in range(12)]
-        matches += [match(i+30,3,names=['三甲','三乙','三丙'],points=[50000+i*100,35000,20000-i*100]) for i in range(12)]
+        matches=[match(i,4,names=['四甲','四乙','四丙','四丁'],points=[40000+i*100,30000,20000,10000-i*100]) for i in range(30)]
+        matches += [match(i+100,3,names=['三甲','三乙','三丙'],points=[50000+i*100,35000,20000-i*100]) for i in range(30)]
         with tempfile.TemporaryDirectory() as folder:
             path,drawn=self.render(folder,matches)
             text=[value for _,value in drawn]
@@ -42,11 +42,11 @@ class OverviewMetricTests(unittest.TestCase):
                 values=[value for _,value in one]
                 self.assertIn(label,values);self.assertNotIn(other,values)
 
-    def test_score_does_not_promote_an_under_ten_game_player(self):
-        matches=[match(i,4,points=[40000+i*100,30000,20000,10000-i*100]) for i in range(9)]
+    def test_score_does_not_promote_an_under_thirty_game_player(self):
+        matches=[match(i,4,points=[40000+i*100,30000,20000,10000-i*100]) for i in range(29)]
         with tempfile.TemporaryDirectory() as folder:
             _,drawn=self.render(folder,matches,4)
-            self.assertIn('暂无满10场玩家',[value for _,value in drawn])
+            self.assertIn('暂无满30场玩家',[value for _,value in drawn])
 
     def test_empty_mode_keeps_a_valid_card(self):
         with tempfile.TemporaryDirectory() as folder:

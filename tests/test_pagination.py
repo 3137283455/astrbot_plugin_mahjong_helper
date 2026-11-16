@@ -73,6 +73,13 @@ class PagingFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_pending_score_pages_and_formal_board_stay_separate(self):
         with tempfile.TemporaryDirectory() as folder:
             p=self.seed(folder)
+            for i in range(5):
+                row=p.store.source('12345:987654321',str(i),0)
+                p.store.db.execute('INSERT INTO sources(scope,msg,idx,hash,stamp,origin) VALUES(?,?,?,?,?,?)',('12345:987654321','extra'+str(i),0,'extra'+str(i),time.time(),'qq'))
+                p.store.db.commit()
+                new=p.store.source('12345:987654321','extra'+str(i),0)
+                p.store.attach(new['id'],'extra'+str(i),'fake.png')
+                p.store.save('extra'+str(i),'accepted',{'mode':4,'game_id':'extra'+str(i),'players':[{'name':n,'place':j+1,'points':v} for j,(n,v) in enumerate([('甲',40000),('乙',30000),('丙',20000),('额外玩家',10000)])]})
             with patch.object(cards,'score_board') as render:
                 await p.handle(Event(),'综合榜 四麻')
                 self.assertFalse(render.call_args.kwargs['provisional'])

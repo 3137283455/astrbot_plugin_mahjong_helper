@@ -3,8 +3,12 @@ from __future__ import annotations
 from fractions import Fraction as F
 from .core import signature,validate
 
-VERSION='result90-attendance10-v1'
-OFFICIAL_MINIMUM=10
+VERSION='result80-attendance20-min30-k30-v2'
+LEGACY_VERSION='result90-attendance10-v1'
+OFFICIAL_MINIMUM=30
+ATTENDANCE_CAP=20
+ATTENDANCE_OFFSET=30
+PERFORMANCE_WEIGHT=80
 SCORE_NUMBERS={'评分有效场次','顺位评分','持点评分','成绩评分','场次评分项','综合评分','综合评分排名'}
 SCORE_FIELDS=[*sorted(SCORE_NUMBERS),'综合评分状态','综合评分版本']
 
@@ -15,8 +19,10 @@ def cents(value):
 
 def display(value):return f'{cents(value)/100:.2f}'
 
-def score_matches(matches,mode,aliases=None,minimum=1):
+def score_matches(matches,mode,aliases=None,minimum=1,*,legacy=False):
     if mode not in (3,4):raise ValueError('评分模式只能为三麻或四麻')
+    version=LEGACY_VERSION if legacy else VERSION
+    threshold,cap,offset,weight=(10,10,20,90) if legacy else (OFFICIAL_MINIMUM,ATTENDANCE_CAP,ATTENDANCE_OFFSET,PERFORMANCE_WEIGHT)
     aliases=aliases or {};players={};excluded=[];seen=set();games=0
     utility=(100,50,0) if mode==3 else (100,65,35,0)
     for match in matches:
@@ -47,9 +53,9 @@ def score_matches(matches,mode,aliases=None,minimum=1):
         if n<minimum:continue
         s['R']=s.pop('rank_sum')/n;s['P']=s.pop('point_sum')/n
         s['performance']=F(65,100)*s['R']+F(35,100)*s['P']
-        s['attendance']=F(10*n,n+20)
-        s['score']=F(90,100)*s['performance']+s['attendance']
-        s['qualified']=n>=OFFICIAL_MINIMUM;s['position']=None;s['tied']=False
+        s['attendance']=F(cap*n,n+offset)
+        s['score']=F(weight,100)*s['performance']+s['attendance']
+        s['qualified']=n>=threshold;s['position']=None;s['tied']=False;s['version']=version
         rows.append(s)
     rows.sort(key=lambda r:(not r['qualified'],-cents(r['score']),r['name']))
     official=[r for r in rows if r['qualified']];last=None;position=0
@@ -59,11 +65,11 @@ def score_matches(matches,mode,aliases=None,minimum=1):
         value=cents(r['score'])
         if value!=last:position=i;last=value
         r['position']=position;r['tied']=counts[value]>1
-    return {'version':VERSION,'mode':mode,'games':games,'excluded':excluded,'rows':rows,
+    return {'version':version,'official_minimum':threshold,'attendance_cap':cap,'performance_weight':weight,'attendance_offset':offset,'mode':mode,'games':games,'excluded':excluded,'rows':rows,
             'formal_count':len(official),'provisional_count':len(rows)-len(official),'minimum':minimum}
 
 def rank_label(row,data):
-    if row['position'] is None:return f'暂定 · {row["games"]}/10场'
+    if row['position'] is None:return f'暂定 · {row["games"]}/{data.get("official_minimum",OFFICIAL_MINIMUM)}场'
     return ('并列' if row['tied'] else '')+f'第{row["position"]}/{data["formal_count"]}名'
 
 def personal_lines(data,name):
@@ -73,24 +79,24 @@ def personal_lines(data,name):
             f'综合评分：{display(row["score"])} / 100 · {rank_label(row,data)}',f'评分有效对局：{row["games"]}场',
             f'顺位评分：{display(row["R"])} · 持点评分：{display(row["P"])}',
             f'成绩分：{display(row["performance"])}',
-            f'成绩贡献：{display(F(90,100)*row["performance"])} · 场次项：{display(row["attendance"])} / 10']
+            f'成绩贡献：{display(F(data.get("performance_weight",PERFORMANCE_WEIGHT),100)*row["performance"])} · 场次项：{display(row["attendance"])} / {data.get("attendance_cap",ATTENDANCE_CAP)}']
 
 def rules_text():
     return '\n'.join(['群数据 · 综合评分规则',
-        '满10场正式入榜，1～9场显示暂定分，不占正式名次；无有效对局不生成分数。',
+        'S1满30场正式入榜，1～29场显示暂定分，不占正式名次；无有效对局不生成分数。',
         '四麻顺位分：一位100、二位65、三位35、四位0；三麻：100、50、0。取逐场平均。',
         '每场持点分 = 50 × 最终持点 ÷ 本桌平均持点，先限制为0～100，再取平均。',
         '成绩分 = 顺位分 × 65% + 持点分 × 35%。',
-        '综合分 = 成绩分 × 90% + 10 × 场次 ÷（场次 + 20）。',
-        '场次项上限10分且增长递减；总分两位小数同分并列，不再以场次破同分。',
+        '综合分 = 成绩分 × 80% + 20 × 场次 ÷（场次 + 30）。',
+        '场次项上限20分且增长递减；30场加10分、60场加13.33分、90场加15分。总分两位小数同分并列，不再以场次破同分。',
         '评分仅纳入标准总持点的完整已确认结算，重复、取消精华和忽略的记录不计入当前赛季。',
-        'S0为封存快照，只读查询；默认S1。模式、赛季及天数可放后面，顺序不限。',
+        'S0保持封存旧口径（成绩90%＋场次10%，满10场入榜），只读查询；默认S1。模式、赛季及天数可放后面，顺序不限。',
         '仅反映本群精华样本的结算表现，不是雀魂官方评级；没有和牌率、放铳率等攻防评分。'])
 
 def online_fields(row):
     if row is None:return {'评分有效场次':0,'综合评分状态':'无有效评分','综合评分版本':VERSION}
     fields={'评分有效场次':row['games'],'顺位评分':cents(row['R'])/100,'持点评分':cents(row['P'])/100,
             '成绩评分':cents(row['performance'])/100,'场次评分项':cents(row['attendance'])/100,
-            '综合评分':cents(row['score'])/100,'综合评分状态':'正式' if row['qualified'] else '暂定','综合评分版本':VERSION}
+            '综合评分':cents(row['score'])/100,'综合评分状态':'正式' if row['qualified'] else '暂定','综合评分版本':row.get('version',VERSION)}
     if row['position'] is not None:fields['综合评分排名']=row['position']
     return fields
