@@ -32,6 +32,9 @@ class ConsoleActions:
             self.jobs.pop(key)
         tmp=self.path.with_suffix('.tmp');tmp.write_text(json.dumps(list(self.jobs.values()),ensure_ascii=False));tmp.replace(self.path)
     def register(self):
+        from .console_review import ManualReview
+        self.review=ManualReview(self)
+        self.plugin.context.register_web_api(PREFIX+'/review',self.review.api,['POST'],'Current-season manual image review')
         self.plugin.context.register_web_api(PREFIX+'/status',self.status_api,['GET'],'Group data live synchronization status')
         self.plugin.context.register_web_api(PREFIX+'/run',self.run_api,['POST'],'Start current-season group synchronization')
     def close(self):
