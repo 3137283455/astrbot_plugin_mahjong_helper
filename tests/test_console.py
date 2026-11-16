@@ -10,7 +10,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from aiohttp.test_utils import AioHTTPTestCase
+from aiohttp import web
+from aiohttp.test_utils import AioHTTPTestCase,TestServer
 from server import Console,Problem,create_app,digest,masked,merged_config,schema_fields
 from data_views import records,view
 
@@ -100,6 +101,37 @@ class DataTests(unittest.TestCase):
             out=records(tmp,'bilibili');self.assertNotIn('private',json.dumps(out));self.assertEqual(len(out),1)
     def test_dataset_allowlist(self):
         with self.assertRaises(ValueError):view('/not-used','../../private')
+
+
+class LoginTests(AioHTTPTestCase):
+    async def get_application(self):
+        self.tmp=tempfile.TemporaryDirectory();self.console=Console(self.tmp.name,Path(self.tmp.name)/'state')
+        upstream=web.Application()
+        async def auth(request):
+            body=await request.json()
+            if body.get('password')!='test-only-password':return web.json_response({'status':'error','message':'用户名或密码错误'},status=401)
+            if body.get('username')=='totp' and body.get('code')!='123456':return web.json_response({'status':'error','message':'需要 TOTP 验证'},status=401)
+            return web.json_response({'status':'ok','data':{'token':'upstream-private-token'}})
+        upstream.router.add_post('/api/v1/auth/login',auth);self.upstream=TestServer(upstream);await self.upstream.start_server()
+        self.console.upstream=str(self.upstream.make_url('')).rstrip('/')
+        return create_app(self.console)
+    async def tearDownAsync(self):
+        await super().tearDownAsync();await self.upstream.close();self.tmp.cleanup()
+    async def test_login_cookie_session_and_no_plain_password_persisted(self):
+        r=await self.client.post('/admin/api/login',json={'username':'admin','password':'test-only-password'})
+        self.assertEqual(r.status,200);body=await r.json();self.assertTrue(body['csrf'])
+        cookie=r.headers.get('Set-Cookie','');self.assertIn('HttpOnly',cookie);self.assertIn('SameSite=Strict',cookie);self.assertIn('Path=/admin',cookie)
+        self.assertNotIn('upstream-private-token',json.dumps(body))
+        stored=dict(self.console.db.execute('SELECT * FROM sessions').fetchone());self.assertNotIn('test-only-password',json.dumps(stored))
+        r=await self.client.get('/admin/api/session');self.assertEqual(r.status,200)
+    async def test_wrong_password_is_rejected_and_limited(self):
+        for _ in range(5):
+            r=await self.client.post('/admin/api/login',json={'username':'admin','password':'wrong'});self.assertEqual(r.status,401)
+        r=await self.client.post('/admin/api/login',json={'username':'admin','password':'wrong'});self.assertEqual(r.status,429)
+        self.assertEqual(self.console.db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0],0)
+    async def test_totp_respected(self):
+        r=await self.client.post('/admin/api/login',json={'username':'totp','password':'test-only-password'});self.assertEqual(r.status,401);self.assertIn('TOTP',(await r.json())['error'])
+        r=await self.client.post('/admin/api/login',json={'username':'totp','password':'test-only-password','code':'123456'});self.assertEqual(r.status,200)
 
 
 if __name__=='__main__':unittest.main()
