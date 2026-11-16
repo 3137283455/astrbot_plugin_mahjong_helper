@@ -1,0 +1,7 @@
+name: astrbot_plugin_perkradar
+display_name: 慧慧优惠雷达
+desc: PerkRadar本机优惠查询、图片卡片、分类订阅与AI入口。
+version: 0.1.0
+astrbot_version: ">=4.28.1,<5"
+author: "3137283455"
+repo: https://github.com/3137283455/astrbot_plugin_mahjong_helper/tree/perkradar

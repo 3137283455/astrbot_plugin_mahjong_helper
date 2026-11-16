@@ -1,0 +1,5 @@
+{
+  "credentials_file": {"type":"string","description":"PerkRadar本机凭据文件；内容不要发到聊天","default":"/bot/perkradar/deploy/client.json"},
+  "poll_seconds": {"type":"int","description":"只读检查本机优惠列表的间隔（秒）","default":60},
+  "enabled": {"type":"bool","description":"启用优惠查询和已明确订阅的推送；默认没有订阅","default":true}
+}
