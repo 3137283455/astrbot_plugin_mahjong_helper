@@ -13,7 +13,7 @@ from astrbot.core.star.filter.command_group import CommandGroupFilter
 
 AI_TOOLS = frozenset({
     "mahjong_quiz", "mahjong_query", "mahjong_review", "bot_menu", "music_search", "music_action", "find_in_bilibili", "deliver_media",
-    "query_available_apis", "call_api_by_name", "bilibili_subscription", "group_data", "mahjong_replay",
+    "query_available_apis", "call_api_by_name", "bilibili_subscription", "group_data", "group_data_review", "mahjong_replay",
     "broadcast_friend_room",
     "perkradar_query", "perkradar_manage",
 })

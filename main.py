@@ -26,6 +26,7 @@ from .ai_entry import (
 
 from .bilibili_bridge import BILIBILI_INSTRUCTIONS, BILIBILI_HELP, bilibili_instance, run_bilibili_action
 from .group_data_bridge import GROUP_DATA_INSTRUCTIONS, run_group_data,quick_group_query
+from .group_review import GROUP_REVIEW_INSTRUCTIONS,build_group_review,group_review_header
 from .friend_rooms import room_request,current_room,room_quota_feedback,ROOM_INSTRUCTIONS
 from .database import MahjongDatabase
 from .mahjong_review import REVIEW_INSTRUCTIONS, build_review_data, review_header, attach_review_header
@@ -91,7 +92,7 @@ class MahjongHelperPlugin(Star):
         self.db = MahjongDatabase(database_path)
         self.koromo = KoromoClient(self._koromo_token)
         manager = self.context.get_llm_tool_manager()
-        for name in ("mahjong_quiz", "mahjong_query", "mahjong_review", "mahjong_replay", "bot_menu", "music_search", "music_action", "bilibili_subscription", "group_data"):
+        for name in ("mahjong_quiz", "mahjong_query", "mahjong_review", "mahjong_replay", "bot_menu", "music_search", "music_action", "bilibili_subscription", "group_data", "group_data_review"):
             tool = manager.get_func(name)
             if tool is not None:
                 tool.active = bool(self.config.get("ai_enabled", False))
@@ -124,6 +125,8 @@ class MahjongHelperPlugin(Star):
                         tool_names.append("bilibili_subscription")
                     if tool_names is not None and "group_data" not in tool_names:
                         tool_names.append("group_data")
+                    if tool_names is not None and "group_data_review" not in tool_names:
+                        tool_names.append("group_data_review")
                     if "电脑自动取谱V3" not in persona.system_prompt:
                         update["system_prompt"] = update.get("system_prompt", persona.system_prompt) + "\n\n" + REPLAY_INSTRUCTIONS
                     if tool_names is not None and "mahjong_replay" not in tool_names:
@@ -260,6 +263,7 @@ class MahjongHelperPlugin(Star):
             req.system_prompt += "\n" + BILIBILI_INSTRUCTIONS
         if getattr(self.context, "get_registered_star", lambda _: None)("astrbot_plugin_group_data") is not None:
             req.system_prompt += "\n" + GROUP_DATA_INSTRUCTIONS
+            req.system_prompt += "\n" + GROUP_REVIEW_INSTRUCTIONS
         req.model = None
         # Keep a bounded chat history per sender and framework conversation;
         # never inherit another group member's chat or old tool executions.
@@ -330,17 +334,18 @@ class MahjongHelperPlugin(Star):
             return
         text = "\n".join(getattr(part, "text", "") for part in tool_result.content
                          if getattr(part, "text", ""))
-        if tool.name == "mahjong_review":
+        if tool.name in ("mahjong_review", "group_data_review"):
             tools.tools.clear()
             try:
                 data = json.loads(text)
             except (ValueError, TypeError):
                 data = {}
-            if (isinstance(data, dict) and data.get("status") == "review_data"
+            expected_status="group_review_data" if tool.name=="group_data_review" else "review_data"
+            if (isinstance(data, dict) and data.get("status") == expected_status
                     and isinstance(data.get("metrics"), dict) and data["metrics"]
                     and isinstance(data.get("player"), dict) and isinstance(data.get("scope"), dict)):
                 event.set_extra("mahjong_ai_review_ready", True)
-                event.set_extra("mahjong_ai_review_header", review_header(data))
+                event.set_extra("mahjong_ai_review_header", group_review_header(data) if tool.name=="group_data_review" else review_header(data))
                 run_context = event.get_extra("mahjong_ai_run_context")
                 if run_context is not None:
                     messages = run_context.messages
@@ -559,6 +564,22 @@ class MahjongHelperPlugin(Star):
         if not self._claim_ai_action(event):
             return
         await run_group_data(self.context, event, query)
+
+    @filter.llm_tool(name="group_data_review")
+    async def group_data_review_ai(self,event:AstrMessageEvent,query:str=""):
+        """读取本群精华结算的真实统计供慧慧锐评；不会发卡片，不查询牌谱屋或牌谱。
+
+        Args:
+            query(string): 原生群数据只读参数，例如个人 高贵名门 四麻 S1、对比 甲 乙 四麻、综合榜 四麻、被飞榜 四麻；留空点评本群总览。默认当前赛季，三四麻分开；旧赛季须明确S0。个人必须提供游戏昵称，不猜QQ昵称或绑定；榜单最多返回前5人。
+        """
+        if not self._claim_ai_action(event):return
+        try:
+            return json.dumps(build_group_review(self.context,event,query),ensure_ascii=False,allow_nan=False)
+        except ValueError as exc:
+            return json.dumps({'status':'error','message':str(exc)},ensure_ascii=False)
+        except Exception:
+            logger.exception('群数据锐评读取失败')
+            return json.dumps({'status':'error','message':'群数据暂时无法读取，这次先不锐评，请稍后再试。'},ensure_ascii=False)
 
     @filter.command("B站", alias={"b站"})
     async def bilibili_command(self, event: AstrMessageEvent, arguments: GreedyStr):

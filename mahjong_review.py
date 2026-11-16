@@ -96,9 +96,9 @@ def review_header(data):
 def attach_review_header(header, text):
     # Some models repeat the supplied title despite being asked for body only.
     lines = text.strip().splitlines()
-    if lines and re.match(r"^(?:🀄\s*)?慧慧锐评[｜|]", lines[0].strip()):
+    if lines and re.match(r"^(?:🀄\s*)?慧慧(?:群数据)?锐评[｜|]", lines[0].strip()):
         lines.pop(0)
-        while lines and (not lines[0].strip() or re.match(r"^(?:三麻|四麻)\s*[·｜|]", lines[0].lstrip())
+        while lines and (not lines[0].strip() or re.match(r"^(?:三麻|四麻|S\d+赛季)\s*[·｜|]", lines[0].lstrip())
                          or lines[0].lstrip().startswith("仅收录金之间及以上公开对局")):
             lines.pop(0)
     return header + "\n".join(lines).strip()
