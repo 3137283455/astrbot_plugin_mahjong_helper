@@ -53,9 +53,14 @@
     "default": ""
   },
   "replay_web_port": {
-    "description": "复盘总览只读网页端口；需与公开地址一致并在安全组开放TCP。",
+    "description": "复盘总览服务内部端口；经统一网页入口转发时可与公开地址端口不同。",
     "type": "int",
     "default": 6192
+  },
+  "replay_web_host": {
+    "description": "复盘网页监听地址；经管理界面统一转发时使用127.0.0.1。",
+    "type": "string",
+    "default": "0.0.0.0"
   },
   "records_limit": {
     "description": "最近对局命令返回的条数（1-20）",

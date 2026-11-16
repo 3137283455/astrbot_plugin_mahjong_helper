@@ -378,7 +378,7 @@ class ReplayService:
         if not url:return
         try:
             from .replay_pages import ReplayPages
-            self.pages=await asyncio.to_thread(ReplayPages,self.store,self.batches,url,int(self.config.get('replay_web_port',6192)))
+            self.pages=await asyncio.to_thread(ReplayPages,self.store,self.batches,url,int(self.config.get('replay_web_port',6192)),self.config.get('replay_web_host','0.0.0.0'))
             self.pages.start();logger.info('复盘总览网页已启动，端口 %s',self.config.get('replay_web_port',6192))
         except Exception:
             self.pages=None;logger.exception('复盘总览网页启动失败，复盘队列继续运行')
