@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+ecosystem.json
+candidate.json
+deployment.json
