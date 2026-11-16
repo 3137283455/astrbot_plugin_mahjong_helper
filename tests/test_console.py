@@ -112,7 +112,12 @@ class LoginTests(AioHTTPTestCase):
             if body.get('password')!='test-only-password':return web.json_response({'status':'error','message':'用户名或密码错误'},status=401)
             if body.get('username')=='totp' and body.get('code')!='123456':return web.json_response({'status':'error','message':'需要 TOTP 验证'},status=401)
             return web.json_response({'status':'ok','data':{'token':'upstream-private-token'}})
-        upstream.router.add_post('/api/v1/auth/login',auth);self.upstream=TestServer(upstream);await self.upstream.start_server()
+        upstream.router.add_post('/api/v1/auth/login',auth)
+        async def extension(request):return web.json_response({'groups':[],'jobs':[]})
+        async def extension_error(request):return web.json_response({'status':'error','message':'任务已存在','data':None},status=400)
+        upstream.router.add_get('/api/v1/plugins/extensions/example/status',extension)
+        upstream.router.add_get('/api/v1/plugins/extensions/example/error',extension_error)
+        self.upstream=TestServer(upstream);await self.upstream.start_server()
         self.console.upstream=str(self.upstream.make_url('')).rstrip('/')
         return create_app(self.console)
     async def tearDownAsync(self):
@@ -132,6 +137,10 @@ class LoginTests(AioHTTPTestCase):
     async def test_totp_respected(self):
         r=await self.client.post('/admin/api/login',json={'username':'totp','password':'test-only-password'});self.assertEqual(r.status,401);self.assertIn('TOTP',(await r.json())['error'])
         r=await self.client.post('/admin/api/login',json={'username':'totp','password':'test-only-password','code':'123456'});self.assertEqual(r.status,200)
+    async def test_native_plugin_response_contract_and_errors(self):
+        response=await self.console.call({'upstream':'test'},'GET','/api/v1/plugins/extensions/example/status')
+        self.assertEqual(response,{'groups':[],'jobs':[]})
+        with self.assertRaises(Problem):await self.console.call({'upstream':'test'},'GET','/api/v1/plugins/extensions/example/error')
 
 
 if __name__=='__main__':unittest.main()

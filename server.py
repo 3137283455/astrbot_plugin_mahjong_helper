@@ -18,12 +18,14 @@ from urllib.parse import quote, urlsplit
 import aiohttp
 from aiohttp import web
 from data_views import DATASETS, records, view
+from operations import Operations
 
 ROOT=Path(__file__).resolve().parent
 SECRET=re.compile(r'password|passwd|secret|token|api_key|apikey|sessdata|cookie|credential|authorization|buvid|bili_jct',re.I)
 PROTECTED={'replay_web_port','replay_web_host','replay_public_url','replay_backend','replay_runtime','state_dir','credentials_file','ocr_python'}
 EXCLUDED={'astrbot_plugin_inventory'}
 COOKIE='huihui_admin'
+VERSION='0.2.0'
 
 
 class Problem(Exception):
@@ -92,12 +94,15 @@ class Console:
         self.db.executescript('''CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,user TEXT,upstream TEXT,csrf TEXT,created REAL,expires REAL,agent TEXT);
         CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,stamp REAL,user TEXT,action TEXT,target TEXT,status TEXT);
         ''');self.db.commit();(self.data/'console.db').chmod(0o600)
-        self.rate=defaultdict(deque);self.locks=defaultdict(asyncio.Lock);self.cache={};self.http=None
+        self.rate=defaultdict(deque);self.locks=defaultdict(asyncio.Lock);self.cache={};self.http=None;self.background=set()
+        self.operations=Operations(self,Problem)
         self.upstream=os.environ.get('ASTRBOT_URL','http://127.0.0.1:6185')
         self.reports=os.environ.get('REPORT_URL','http://127.0.0.1:6193')
     async def start(self,app):
         self.http=aiohttp.ClientSession(trust_env=False,cookie_jar=aiohttp.DummyCookieJar(),timeout=aiohttp.ClientTimeout(total=15))
     async def close(self,app):
+        for task in list(self.background):task.cancel()
+        if self.background:await asyncio.gather(*list(self.background),return_exceptions=True)
         if self.http:await self.http.close()
         self.db.close()
     def audit(self,user,action,target,status='成功'):
@@ -113,6 +118,9 @@ class Console:
             async with self.http.request(method,self.upstream+path,json=payload,headers={'Authorization':'Bearer '+session['upstream']}) as r:
                 obj=await r.json()
                 if r.status==401:raise Problem('登录已过期，请重新登录',401)
+                # Plugin web extensions return their JSON body directly; standard
+                # dashboard APIs wrap it in {status, data}. Error envelopes remain errors.
+                if path.startswith('/api/v1/plugins/extensions/') and r.status<400 and 'status' not in obj:return obj
                 if r.status>=400 or obj.get('status') not in ('ok','success'):raise Problem(str(obj.get('message') or '机器人接口暂时不可用')[:180],502)
                 return obj.get('data')
         except (aiohttp.ClientError,asyncio.TimeoutError):raise Problem('机器人暂时无法连接，请稍后重试',503) from None
@@ -122,9 +130,9 @@ class Console:
         raw=await self.call(session,'GET','/api/plugin/get')
         out=[{k:p.get(k) for k in ('name','display_name','desc','version','activated','repo','updates_enabled','root_dir_name')} for p in raw if not p.get('reserved') and p.get('name') not in EXCLUDED]
         self.cache['plugins']=(time.monotonic(),out);return out
-    async def plugin(self,session,name):
+    async def plugin(self,session,name,force=False):
         if not re.fullmatch(r'astrbot_plugin_[a-zA-Z0-9_]+',name):raise Problem('没有这个插件',404)
-        p=next((p for p in await self.plugins(session) if p['name']==name),None)
+        p=next((p for p in await self.plugins(session,force=force) if p['name']==name),None)
         if not p:raise Problem('没有这个插件',404)
         return p
     async def configuration(self,session,name):
@@ -236,7 +244,7 @@ def create_app(console=None):
             with connect(c.base/'data/plugin_data/astrbot_plugin_group_data/group_data.db') as db:
                 groups=[dict(r) for r in db.execute("SELECT g.gid,g.last_scan,g.last_import,p.name FROM groups g LEFT JOIN periods p ON p.scope=g.scope AND p.state='current'")]
         except (OSError,sqlite3.Error):pass
-        return web.json_response({'qq_online':qq,'enabled':sum(bool(p['activated']) for p in plugins),'plugins':len(plugins),'groups':groups,'updated':time.time(),'console_version':'0.1.0'})
+        return web.json_response({'qq_online':qq,'enabled':sum(bool(p['activated']) for p in plugins),'plugins':len(plugins),'groups':groups,'updated':time.time(),'console_version':VERSION})
     async def datasets(request):return web.json_response({'datasets':[{'id':k,'name':v[0]} for k,v in DATASETS.items()]})
     async def dataset(request):
         kind=request.match_info['kind'];q=request.query.get('q','')[:100]
@@ -303,7 +311,13 @@ def create_app(console=None):
     async def revoke(request):
         s=request['session'];ident=request.match_info['ident']
         c.db.execute('DELETE FROM sessions WHERE id=? AND user=?',(ident,s['user']));c.db.commit();return web.json_response({'ok':True})
-    async def health(request):return web.json_response({'ok':True,'version':'0.1.0'})
+    async def health(request):return web.json_response({'ok':True,'version':VERSION})
+    async def operation_status(request):
+        return web.json_response(await c.operations.status(request['session'],request.match_info['name']))
+    async def operation_run(request):
+        body=await request.json()
+        if not isinstance(body,dict):raise Problem('请求格式不正确')
+        return web.json_response(await c.operations.run(request['session'],request.match_info['name'],body))
     async def report(request):
         token=request.match_info['token']
         if not re.fullmatch('[0-9a-f]{40}',token):raise web.HTTPNotFound()
@@ -315,12 +329,13 @@ def create_app(console=None):
     async def index(request):return web.FileResponse(ROOT/'static/index.html')
     async def asset(request):
         name=request.match_info['name']
-        if name not in ('app.js','style.css'):raise web.HTTPNotFound()
+        if name not in ('app.js','style.css','operations.js','operations.css'):raise web.HTTPNotFound()
         return web.FileResponse(ROOT/'static'/name)
     async def redirect(request):raise web.HTTPFound('/admin/')
     app.add_routes([web.get('/',redirect),web.get('/admin',redirect),web.get('/admin/',index),web.get('/admin/assets/{name}',asset),web.get('/health',health),web.get('/r/{token}',report),web.get('/r/{token}/',report),
         web.post('/admin/api/login',login),web.get('/admin/api/session',session),web.post('/admin/api/logout',logout),web.get('/admin/api/overview',overview),web.get('/admin/api/plugins',plugins),
         web.get('/admin/api/plugins/{name}/config',config),web.put('/admin/api/plugins/{name}/config',save),web.patch('/admin/api/plugins/{name}/enabled',enabled),web.post('/admin/api/plugins/{name}/reload',reload_plugin),
+        web.get('/admin/api/plugins/{name}/operations',operation_status),web.post('/admin/api/plugins/{name}/operations',operation_run),
         web.get('/admin/api/datasets',datasets),web.get('/admin/api/data/{kind}',dataset),web.get('/admin/api/export/{kind}',export),web.get('/admin/api/audit',audit),web.get('/admin/api/backups',backups),web.post('/admin/api/backups',backup),web.post('/admin/api/backups/{ident}/restore',restore),
         web.get('/admin/api/personas',personas),web.put('/admin/api/personas/{ident}',persona_save),web.get('/admin/api/providers',providers),web.get('/admin/api/sessions',sessions),web.delete('/admin/api/sessions/{ident}',revoke)])
     return app
