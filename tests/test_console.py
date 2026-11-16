@@ -46,9 +46,19 @@ class SecurityTests(AioHTTPTestCase):
         self.console.db.execute('INSERT OR REPLACE INTO sessions VALUES(?,?,?,?,?,?,?)',(hashlib.sha256(token.encode()).hexdigest(),'admin','upstream',csrf,time.time(),time.time()+60,'test'));self.console.db.commit()
         return {'Cookie':'huihui_admin='+token,'X-CSRF-Token':csrf}
     async def test_no_auth_no_data_and_no_write(self):
-        for method,path in [('GET','/admin/api/plugins'),('GET','/admin/api/data/matches'),('POST','/admin/api/plugins/unknown/reload')]:
+        for method,path in [('GET','/admin/api/plugins'),('GET','/admin/api/data/matches'),('POST','/admin/api/plugins/unknown/reload'),('GET','/admin/api/group-review?scope=1:2'),('GET','/admin/api/group-review/1/image?scope=1:2'),('POST','/admin/api/group-review')]:
             r=await self.client.request(method,path,json={});self.assertEqual(r.status,401)
         self.console.call.assert_not_awaited()
+    async def test_review_image_is_private_and_writes_require_csrf(self):
+        import base64
+        self.console.plugin=AsyncMock(return_value={'activated':True})
+        image=b'\x89PNG\r\n\x1a\nfixture'
+        self.console.call.return_value={'review':{'mime':'image/png','image':base64.b64encode(image).decode()}}
+        h=self.session_headers()
+        r=await self.client.get('/admin/api/group-review/1/image?scope=1:2',headers=h)
+        self.assertEqual(r.status,200);self.assertEqual(await r.read(),image);self.assertEqual(r.headers['Cache-Control'],'no-store')
+        r=await self.client.post('/admin/api/group-review',headers={'Cookie':h['Cookie']},json={'action':'ignore'})
+        self.assertEqual(r.status,403);self.assertEqual(self.console.call.await_count,1)
     async def test_csrf_and_cross_origin_rejected(self):
         h=self.session_headers();r=await self.client.post('/admin/api/logout',headers={'Cookie':h['Cookie']});self.assertEqual(r.status,403)
         h['Origin']='https://attacker.invalid';r=await self.client.post('/admin/api/logout',headers=h);self.assertEqual(r.status,403)

@@ -29,6 +29,15 @@ class OperationTests(unittest.IsolatedAsyncioTestCase):
         self.c.plugin.return_value={'activated':False}
         with self.assertRaises(Problem):await self.c.operations.run(self.s,GROUP,{'action':'essence'})
         self.c.call.assert_not_awaited()
+    async def test_review_is_specific_current_only_and_audited(self):
+        self.c.call.return_value={'review':{'ok':True}}
+        await self.c.operations.review(self.s,{'action':'confirm','scope':'1:2','id':12,'version':'test'})
+        args=self.c.call.call_args.args
+        self.assertEqual(args[1:3],('POST',EXT+GROUP+'/console/review'));self.assertEqual(args[3]['period'],'current')
+        self.assertEqual(self.c.db.execute('SELECT COUNT(*) FROM audit').fetchone()[0],1)
+        for p in ({'action':'confirm','period':'S0'},{'action':'shell'}):
+            with self.assertRaises(Problem):await self.c.operations.review(self.s,p)
+        self.assertEqual(self.c.call.await_count,1)
     async def test_refresh_is_background_deduplicated_and_honest_partial(self):
         gate=asyncio.Event()
         async def refresh():await gate.wait();return {'sourceHealth':{'ok':4,'total':7}}

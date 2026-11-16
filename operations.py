@@ -28,6 +28,17 @@ class Operations:
         return self.radar
     def jobs(self,name):
         return [dict(r) for r in self.c.db.execute('SELECT id,plugin,action,status,phase,started,finished FROM operations WHERE plugin=? ORDER BY started DESC LIMIT 10',(name,))]
+    async def review(self,session,payload):
+        plugin=await self.c.plugin(session,GROUP,force=True)
+        if not plugin['activated']:raise self.Problem('请先启用群数据插件')
+        if payload.get('period') not in (None,'current'):raise self.Problem('封存赛季只读')
+        action=payload.get('action')
+        if action not in ('list','get','image','confirm','ignore'):raise self.Problem('不支持这个复核操作')
+        response=await self.c.call(session,'POST',EXT+GROUP+'/console/review',{**payload,'period':'current'})
+        data=response['review']
+        if action in ('confirm','ignore'):
+            self.c.audit(session['user'],'人工确认结算' if action=='confirm' else '人工忽略图片',str(payload.get('scope'))+' #'+str(payload.get('id')))
+        return data
     async def status(self,session,name):
         plugin=await self.c.plugin(session,name)
         if not plugin['activated']:return {'supported':name in (GROUP,BILI,RADAR),'inactive':True}

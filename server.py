@@ -1,5 +1,6 @@
 """Independent authenticated console and existing report gateway. No global bot patches."""
 import asyncio
+import base64
 import csv
 import hashlib
 import io
@@ -25,7 +26,7 @@ SECRET=re.compile(r'password|passwd|secret|token|api_key|apikey|sessdata|cookie|
 PROTECTED={'replay_web_port','replay_web_host','replay_public_url','replay_backend','replay_runtime','state_dir','credentials_file','ocr_python'}
 EXCLUDED={'astrbot_plugin_inventory'}
 COOKIE='huihui_admin'
-VERSION='0.2.0'
+VERSION='0.3.0'
 
 
 class Problem(Exception):
@@ -318,6 +319,24 @@ def create_app(console=None):
         body=await request.json()
         if not isinstance(body,dict):raise Problem('请求格式不正确')
         return web.json_response(await c.operations.run(request['session'],request.match_info['name'],body))
+    async def review_list(request):
+        return web.json_response(await c.operations.review(request['session'],{'action':'list','scope':request.query.get('scope',''),'filter':request.query.get('filter','pending')}))
+    async def review_get(request):
+        try:ident=int(request.match_info['ident'])
+        except ValueError:raise Problem('图片编号不正确')
+        payload={'id':ident,'scope':request.query.get('scope',''),'action':'image' if request.match_info.get('image') else 'get'}
+        data=await c.operations.review(request['session'],payload)
+        if payload['action']=='image':
+            if data.get('mime') not in ('image/png','image/jpeg','image/webp','image/gif'):raise Problem('图片格式不支持')
+            try:body=base64.b64decode(data['image'],validate=True)
+            except (ValueError,KeyError):raise Problem('图片未能加载')
+            if len(body)>12*1024*1024:raise Problem('图片过大')
+            return web.Response(body=body,content_type=data['mime'],headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+        return web.json_response(data)
+    async def review_apply(request):
+        body=await request.json()
+        if not isinstance(body,dict) or body.get('action') not in ('confirm','ignore'):raise Problem('请求格式不正确')
+        return web.json_response(await c.operations.review(request['session'],body))
     async def report(request):
         token=request.match_info['token']
         if not re.fullmatch('[0-9a-f]{40}',token):raise web.HTTPNotFound()
@@ -329,13 +348,14 @@ def create_app(console=None):
     async def index(request):return web.FileResponse(ROOT/'static/index.html')
     async def asset(request):
         name=request.match_info['name']
-        if name not in ('app.js','style.css','operations.js','operations.css'):raise web.HTTPNotFound()
+        if name not in ('app.js','style.css','operations.js','operations.css','review.js','review.css'):raise web.HTTPNotFound()
         return web.FileResponse(ROOT/'static'/name)
     async def redirect(request):raise web.HTTPFound('/admin/')
     app.add_routes([web.get('/',redirect),web.get('/admin',redirect),web.get('/admin/',index),web.get('/admin/assets/{name}',asset),web.get('/health',health),web.get('/r/{token}',report),web.get('/r/{token}/',report),
         web.post('/admin/api/login',login),web.get('/admin/api/session',session),web.post('/admin/api/logout',logout),web.get('/admin/api/overview',overview),web.get('/admin/api/plugins',plugins),
         web.get('/admin/api/plugins/{name}/config',config),web.put('/admin/api/plugins/{name}/config',save),web.patch('/admin/api/plugins/{name}/enabled',enabled),web.post('/admin/api/plugins/{name}/reload',reload_plugin),
         web.get('/admin/api/plugins/{name}/operations',operation_status),web.post('/admin/api/plugins/{name}/operations',operation_run),
+        web.get('/admin/api/group-review',review_list),web.get('/admin/api/group-review/{ident}',review_get),web.get('/admin/api/group-review/{ident}/{image:image}',review_get),web.post('/admin/api/group-review',review_apply),
         web.get('/admin/api/datasets',datasets),web.get('/admin/api/data/{kind}',dataset),web.get('/admin/api/export/{kind}',export),web.get('/admin/api/audit',audit),web.get('/admin/api/backups',backups),web.post('/admin/api/backups',backup),web.post('/admin/api/backups/{ident}/restore',restore),
         web.get('/admin/api/personas',personas),web.put('/admin/api/personas/{ident}',persona_save),web.get('/admin/api/providers',providers),web.get('/admin/api/sessions',sessions),web.delete('/admin/api/sessions/{ident}',revoke)])
     return app
