@@ -160,7 +160,7 @@ class GroupDataBridgeTests(unittest.IsolatedAsyncioTestCase):
    await p.ai_limit_request(e,req)
    self.assertEqual([t.name for t in req.func_tool.tools],['group_data']);self.assertIn('群数据',req.system_prompt)
    self.assertIn('综合榜 三麻 S0',req.system_prompt);self.assertIn('评分 清风难胡 三麻 S0',req.system_prompt)
-   self.assertIn('满10场正式入榜',req.system_prompt)
+   self.assertIn('满30场正式入榜',req.system_prompt);self.assertIn('S0保持旧口径',req.system_prompt)
  async def test_current_turn_images_are_preserved_and_group_scope_still_applies(self):
   import astrbot.api.message_components as Comp
   from astrbot_plugin_mahjong_helper.ai_entry import eligible,ai_provider_allowed
