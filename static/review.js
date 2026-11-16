@@ -1,6 +1,12 @@
 'use strict';
 let reviewState={scope:'',items:[],detail:null,filter:'pending',load:0,dirty:false,busy:false};
 const REVIEW_STATUS={review:'待复核',local_error:'识别异常',download_error:'读取失败',error:'识别异常',accepted:'已入库',ignored:'已忽略',new:'待识别',llm_pending:'待识别'};
+async function renderReviewCenter(id){
+  const data=await api('/plugins/astrbot_plugin_group_data/operations');if(id!==S.loadId)return;
+  if(data.inactive){$('#content').innerHTML=`<section class="panel">${empty('群数据插件已停用')}<button class="secondary" data-plugin="astrbot_plugin_group_data">打开群数据设置</button></section>`;return}
+  const groups=data.groups||[],total=groups.reduce((n,g)=>n+g.review+g.errors,0);
+  $('#content').innerHTML=`<section class="review-center"><div class="review-center-heading"><div class="review-center-title"><span class="review-center-icon">${icon('check')}</span><div><h2>群数据 · 人工复核</h2><p>选择群组，打开结算原图核对。</p></div></div><div class="review-center-total"><strong>${total}</strong><span>待处理图片</span></div></div><div class="review-group-grid">${groups.map(g=>`<section class="review-group-card"><div class="review-group-title"><div><small>${esc(g.period)}</small><h3>群 ${esc(g.gid)}</h3></div><span class="badge">${g.enabled?'自动更新已开启':'自动更新已暂停'}</span></div><div class="review-group-counts"><div><strong>${g.review}</strong><span>待人工核对</span></div><div><strong>${g.errors}</strong><span>读取 / 识别异常</span></div><div><strong>${g.games}</strong><span>已确认对局</span></div></div><button class="primary review-group-start" data-review-scope="${esc(g.scope)}">开始人工复核 ${icon('back')}</button><div class="review-group-footer"><span>最近入库 ${preciseStamp(g.last_import)}</span><button class="quiet-action" data-plugin="astrbot_plugin_group_data">同步与设置</button></div></section>`).join('')||empty('尚未接入群数据，请先在群数据插件中配置群组。')}</div></section>`;
+}
 function reviewURL(id,image=false){return '/admin/api/group-review/'+id+(image?'/image':'')+'?scope='+encodeURIComponent(reviewState.scope)}
 async function reviewDiscard(){return !reviewState.dirty||await confirmAction('放弃未提交的修改？','已填写的内容还没有入库。','放弃修改')}
 async function openManualReview(scope){
@@ -8,7 +14,7 @@ async function openManualReview(scope){
   if(!dialog){dialog=document.createElement('dialog');dialog.id='manual-review';document.body.append(dialog);dialog.addEventListener('cancel',async e=>{e.preventDefault();if(!reviewState.busy&&await reviewDiscard())dialog.close()})}
   reviewState={scope,items:[],detail:null,filter:'pending',load:reviewState.load+1,dirty:false,busy:false};
   dialog.innerHTML=`<header class="review-header"><div><span class="review-kicker">群 ${esc(scope.split(':').at(-1))}</span><h2>人工复核 <span id="review-period"></span></h2></div><button class="secondary" data-review="close">关闭</button></header><div class="review-layout"><aside class="review-queue"><div class="review-queue-head"><select id="review-filter" aria-label="复核范围"><option value="pending">待复核与异常</option><option value="all">当前赛季全部</option></select><button class="icon-button" data-review="refresh" aria-label="刷新复核列表">↻</button></div><p id="review-count" class="muted"></p><div id="review-list"></div></aside><section id="review-content" aria-live="polite"><div class="review-empty"><span class="spinner"></span> 正在读取待复核图片</div></section></div>`;
-  document.documentElement.classList.add('review-open');dialog.onclose=()=>document.documentElement.classList.remove('review-open');dialog.showModal();await refreshReview();
+  document.documentElement.classList.add('review-open');dialog.onclose=()=>{document.documentElement.classList.remove('review-open');if(S.route==='review')renderReviewCenter(S.loadId).catch(e=>toast(e.message))};dialog.showModal();await refreshReview();
 }
 async function refreshReview(preferred=null){
   const generation=++reviewState.load;
@@ -44,4 +50,4 @@ async function saveReview(action){
  }catch(e){$('#review-error').textContent=e.message;form.querySelectorAll('button').forEach(b=>b.disabled=false)}finally{reviewState.busy=false}
 }
 document.addEventListener('submit',e=>{if(e.target.id==='review-form'){e.preventDefault();saveReview('confirm')}});
-document.addEventListener('click',async e=>{const b=e.target.closest('[data-review],[data-review-id]');if(!b||reviewState.busy)return;const a=b.dataset.review;if(a==='close'){if(await reviewDiscard())$('#manual-review').close()}else if(a==='refresh'){if(await reviewDiscard()){reviewState.dirty=false;await refreshReview(reviewState.detail?.id)}}else if(a==='ignore')await saveReview('ignore');else if(b.dataset.reviewId&&await reviewDiscard())await selectReview(Number(b.dataset.reviewId))});
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-review],[data-review-id],[data-review-scope]');if(!b||reviewState.busy)return;if(b.dataset.reviewScope){await openManualReview(b.dataset.reviewScope);return}const a=b.dataset.review;if(a==='close'){if(await reviewDiscard())$('#manual-review').close()}else if(a==='refresh'){if(await reviewDiscard()){reviewState.dirty=false;await refreshReview(reviewState.detail?.id)}}else if(a==='ignore')await saveReview('ignore');else if(b.dataset.reviewId&&await reviewDiscard())await selectReview(Number(b.dataset.reviewId))});
