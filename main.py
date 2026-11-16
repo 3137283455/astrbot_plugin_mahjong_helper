@@ -137,7 +137,11 @@ class GroupDataPlugin(Star):
             except (ValueError,KeyError,OSError):
                 logger.warning('群数据飞书配置无效，已暂停在线同步；本地命令正常保留')
         logger.info('群数据已加载：只录入完整雀魂终局结算截图')
+        from .console_api import ConsoleActions
+        self.console_actions=ConsoleActions(self)
+        self.console_actions.register()
     async def terminate(self):
+        if getattr(self,'console_actions',None):self.console_actions.close()
         tasks=[*self.tasks,*self.jobs]
         for task in tasks:task.cancel()
         for task in tasks:
