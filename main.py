@@ -239,6 +239,10 @@ class MahjongHelperPlugin(Star):
             "保留完整网址，不把中文说明拼入网址路径；无需调用战绩或娱乐工具。"
         )
         req.system_prompt += '\n'+ROOM_INSTRUCTIONS
+        perk_meta = getattr(self.context, 'get_registered_star', lambda _: None)('astrbot_plugin_perkradar')
+        if perk_meta is not None and perk_meta.activated:
+            req.system_prompt += ('\n【优惠雷达】优惠、软件折扣、Epic免费游戏使用perkradar_query，query填来源、分类、搜索和页码。'
+                                  '明确订阅、取消订阅、手动刷新使用perkradar_manage，管理员权限由插件验证；工具会直接发卡片与链接，不重复执行或编造领取结果。')
         music_plugin = self._music_plugin()
         if music_plugin is not None:
             req.system_prompt += "\n" + music_plugin.music_context_text(event)

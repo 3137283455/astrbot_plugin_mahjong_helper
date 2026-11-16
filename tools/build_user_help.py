@@ -8,7 +8,7 @@ from PIL import Image,ImageDraw,ImageFont
 ROOT=Path(__file__).resolve().parents[1]
 W=2000;M=58;GAP=32;CW=(W-M*2-GAP)//2
 PAPER='#F5EFE3';INK='#202126';ORANGE='#EC5936';MUTED='#66635F';LINE='#D8CFC0';WHITE='#FFFCF6';GOLD='#F4C65B'
-EDITION='2026.11.06'
+EDITION='2026.11.16'
 REPLAY_GUIDE=[
  [('cmd','/复盘 链接 开局南家'),('small','指定开局东 / 南 / 西 / 北家，分析单场。'),
   ('cmd','/复盘 最近 昵称或UID 5'),('small','最近1～10场，按实际席位分析并生成趋势。'),
@@ -148,7 +148,7 @@ class Poster:
 
 
 def render(path,catalog_path=None):
- c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(5600);d=p.d
+ c=load_catalog(catalog_path);total=sum(len(c[k]) for k in ('text','image','video','audio'));p=Poster(6100);d=p.d
  # Editorial cover with a drawn magic burst: type stays crisp at original size.
  p.pill(M,38,'HUIHUI / 功能导航',WHITE,INK,26)
  p.text(M,100,'慧慧',108,True,width=650);p.text(M+280,146,'今天想做点什么？',49,True,width=1000)
@@ -163,7 +163,7 @@ def render(path,catalog_path=None):
  p.text(M+28,324,'群聊：@慧慧 + 你的需求',36,True,WHITE,width=900)
  p.text(1060,326,'私聊：直接说；常规命令可直接发',30,True,WHITE,width=850)
  p.text(M+28,389,'例如：来道何切题 / 播放第二首 / 看看四麻被飞榜 / 给我功能菜单',28,color='#E6D9C8',width=1800)
- commands=['/群数据','/雀','/复盘','/何切','/符数','/歌单','/B站','/娱乐','/资讯']
+ commands=['/群数据','/雀','/复盘','/何切','/符数','/歌单','/B站','/娱乐','/资讯','/优惠']
  qw=(W-2*M-(len(commands)-1)*16)/len(commands)
  for i,s in enumerate(commands):
   x=M+i*(qw+16);d.rectangle((x,479,x+qw,544),fill=WHITE,outline=INK,width=2);p.text(x+24,488,s,34,True,width=qw-40)
@@ -187,6 +187,12 @@ def render(path,catalog_path=None):
  p.text(M+27,y+80,'热榜 · 早报 · 科技 · 天气 · 翻译 · 趣味；群聊先@慧慧，私聊直接用。',30,width=1800)
  p.text(M+27,y+132,'/抖音热搜　 /天气 上海　 /翻译 hello world　 /资讯 工具',31,True,width=1800)
  p.text(M+27,y+178,'也能说「看看抖音热搜」「查上海天气」；完整项目看 /资讯 图片菜单。',27,color=MUTED,width=1800)
+ y+=250
+ d.rectangle((M,y,W-M,y+218),fill='#DCEAE5',outline=INK,width=2)
+ p.text(M+27,y+18,'优惠雷达  /优惠',41,True,width=1500)
+ p.text(M+27,y+80,'/优惠 Epic　 /优惠 游戏　 /优惠 搜索 云服务器　 /优惠 第2页',30,True,width=1800)
+ p.text(M+27,y+132,'限免、折扣与软件线索；图片卡片附可点击原文链接。',29,width=1800)
+ p.text(M+27,y+178,'/优惠 状态；群管理员可用 /优惠 订阅 游戏，默认不推送。',27,color=MUTED,width=1800)
  y+=250
  # Entertainment names come from a sanitized snapshot of the actual enabled catalog.
  p.text(M,y+3,'07',54,True,ORANGE,width=100);p.text(M+118,y+12,'娱乐百宝箱',43,True,width=500)
@@ -233,6 +239,7 @@ def write_manual(path,catalog_path=None):
  for column in REPLAY_GUIDE:
   lines += [('- `'+line+'`') if kind=='cmd' else '- '+line for kind,line in column]
  lines+=['','单场和批量结果均私聊发送合并转发，内含卡片与总览网址。网页可查看逐巡入口、分局和重点决策，并复制原始牌谱。一致率不等于胜率，分歧不一定是失误。','']
+ lines+=['## 优惠雷达','','`/优惠` 看最新线索，`/优惠 Epic`、`/优惠 游戏` 筛选，`/优惠 搜索 云服务器` 搜标题，`/优惠 第2页` 翻页。卡片和原文链接在同一合并转发中。','','`/优惠 状态` 看抓取时间和来源；群管理员可用 `/优惠 订阅 游戏`、`/优惠 取消订阅 游戏` 和 `/优惠 刷新`。默认不推送，不补发历史。群聊也可@慧慧自然语言查询。','']
  for item in MODULES:
   lines += ['## '+item['title'],'',item['subtitle'],'']+[('- `'+line+'`') if kind=='cmd' else '- '+line for kind,line in item['lines']]
   if item['example']:lines += ['',item['example']]
